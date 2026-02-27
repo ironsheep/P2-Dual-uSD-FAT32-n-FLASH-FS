@@ -1,9 +1,10 @@
 # Reference drivers (read-only copies, not part of the unified driver build)
 REF-FLASH-uSD/
 
-# Compiled binaries
+# Compiled binaries and objects
 *.binary
 *.bin
+*.obj
 
 # Build artifacts
 *.lst
@@ -18,5 +19,17 @@ Thumbs.db
 *.swp
 *.bak
 
-# Logs
-tools/logs/
+# Manual backup files
+*.backup_*
+
+# Logs (all locations)
+logs/
+
+# Staging files (cleanup deferred until driver is working)
+src/phase3_flash_methods.spin2
+
+# Claude Code
+CLAUDE.md
+.claude/
+.todo-mcp/
+tasks/

@@ -226,6 +226,7 @@ CON '' error codes
   E_FLASH_SHORT_TRANSFER   = -111  ' Too few bytes read or written
   E_FLASH_BAD_FILE_LENGTH  = -112  ' File length given is negative or zero
   E_FLASH_BAD_SEEK_ARG     = -113  ' Invalid seek argument
+  E_FLASH_FILE_EXISTS      = -114  ' Flash file already exists (rename/create_file target)
 
   ' ═══════════════════════════════════════════════════════════════════════════
   ' Unified Device Error Codes
@@ -251,7 +252,7 @@ CON '' V3 multi-file handle configuration
   HF_DIRTY  = $80               ' Handle's buffer has pending writes (OR'd with mode)
 
 CON '' worker cog stack size
-  STACK_SIZE = 128              ' 128 longs = 512 bytes (original)
+  STACK_SIZE = 256              ' 256 longs = 1024 bytes (increased for Flash mount scan)
   STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 
@@ -272,6 +273,55 @@ CON '' CRC-16-CCITT configuration (using P2 GETCRC instruction)
 
 CON '' CRC retry configuration
   MAX_READ_CRC_RETRIES = 3       ' Number of read retries on CRC mismatch (industry standard)
+
+CON '' Flash filesystem geometry and constants
+  ' Block geometry (16MB Flash chip, first 512KB reserved for boot image)
+  FIRST_BLOCK      = $080                           ' Physical address of first FS block
+  LAST_BLOCK       = $FFF                           ' Physical address of last FS block
+  FL_BLOCKS        = LAST_BLOCK - FIRST_BLOCK + 1   ' 3968 blocks available
+  BLOCK_SIZE       = $1000                           ' 4KB block size
+  BLOCK_SIZE_EXP   = encod BLOCK_SIZE
+
+  ' Block internal offsets
+  ADDR_HEAD_FN_CRC = $004                           ' Offset: filename CRC in head block
+  ADDR_HEAD_SONAME = $008                           ' Offset: first filename byte in head block
+  ADDR_HEAD_DATA   = $088                           ' Offset: first data byte in head block
+  ADDR_BODY_DATA   = $004                           ' Offset: first data byte in body block
+
+  ' Filename storage
+  FL_FILENAME_SIZE = $088 - $008                    ' 128 bytes (127 chars + null)
+
+  ' Translation table sizes (derived from FL_BLOCKS)
+  ID_TO_BLOCKS_SZ  = (FL_BLOCKS * 12 + 15) / 16   ' 12-bit fields in WORD array
+  FL_FLAGS_SIZE    = (FL_BLOCKS * 1 + 7) / 8       ' 1-bit fields in BYTE array
+  FL_STATES_SIZE   = (FL_BLOCKS * 2 + 7) / 8       ' 2-bit fields in BYTE array
+
+  ' Block states (2-bit, stored in fl_BlockStates)
+  B_FREE = %00                                      ' Block is not in use
+  B_TEMP = %01                                      ' Block is being put to use (temp during mount)
+  B_HEAD = %10                                      ' Block is head of a file (contains filename)
+  B_BODY = %11                                      ' Block is body of a file (data continuation)
+
+  ' Flash handle status flags (stored in fl_hStatus)
+  FL_H_READ    = %0001                              ' Existing file is being read
+  FL_H_WRITE   = %0010                              ' New file is being written
+  FL_H_FORK    = %0100                              ' Existing file is being rewritten/appended
+  FL_H_MODIFY  = %1000                              ' Existing file is being modified
+  FL_H_APPEND  = FL_H_WRITE | FL_H_FORK
+  FL_H_READWRITE = FL_H_WRITE | FL_H_MODIFY
+  FL_H_READ_WRITE = FL_H_READ | FL_H_WRITE
+
+  ' Flash handle sentinel and special values
+  FL_NOT_VALID = -30                                ' Uninitialized handle marker
+  FL_NOT_ENABLED = -1                               ' Feature not enabled (e.g., seeking)
+  FL_FILENAME_SIZE_EXP = 7                          ' encod 128 (for shift-based offset calc)
+
+  ' Flash seek whence constants
+  #0, SK_Unknown, SK_FILE_START, SK_CURRENT_POSN
+
+  ' Data capacity per block type
+  BYTES_IN_HEAD_BLOCK = 3956                        ' Head block: 4096 - 140 bytes overhead
+  BYTES_IN_BODY_BLOCK = 4088                        ' Body block: 4096 - 8 bytes overhead
 
 CON '' SD card command codes and tokens for multi-block operations
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -385,6 +435,7 @@ DAT '' singleton control - SHARED across all object instances
   pb_param3     LONG    0               ' Parameter 3
   pb_data0      LONG    0               ' Result data 0 (handle, count, etc.)
   pb_data1      LONG    0               ' Result data 1
+  pb_data2      LONG    0               ' Result data 2 (third return value, e.g., stats)
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' WORKER COG STACK
@@ -450,6 +501,7 @@ DAT '' singleton control - SHARED across all object instances
   card_mfr_id   LONG    0               ' Manufacturer ID from CID (byte 0)
   card_max_speed_hz LONG 0              ' Maximum speed from CSD TRAN_SPEED (Hz)
   card_is_slow  LONG    0               ' Flag: 1 = card requires conservative timing (e.g., PNY)
+  saved_acmd41_arg LONG 0              ' ACMD41 argument saved from initial init (for reinitCard)
   card_read_timeout_ms  LONG  100       ' Read timeout in ms (from CSD or spec default)
   card_write_timeout_ms LONG  500       ' Write timeout in ms (from CSD or spec default)
 
@@ -525,6 +577,50 @@ DAT '' singleton control - SHARED across all object instances
   ' ═══════════════════════════════════════════════════════════════════════════
   h_buf         BYTE    0[512 * MAX_OPEN_FILES]   ' Per-handle sector buffers
   h_buf_sector  LONG    0[MAX_OPEN_FILES]         ' Sector currently in each buffer (-1 = invalid)
+
+  ' ═══════════════════════════════════════════════════════════════════════════
+  ' FLASH FILESYSTEM STATE (Phase 2)
+  ' Translation tables, handle state, and block buffers for Flash device
+  ' ═══════════════════════════════════════════════════════════════════════════
+
+  ' SPI bus device tracking
+  current_spi_device  LONG  -1                    ' Currently configured SPI device (-1=none, 0=SD, 1=Flash)
+
+  ' Translation tables (~7.2 KB total)
+  fl_IDToBlocks    WORD    0[ID_TO_BLOCKS_SZ]     ' 12-bit block address per ID
+  fl_IDToBlock     LONG    0                       ' field pointer for 12-bit variables
+  fl_IDValids      BYTE    0[FL_FLAGS_SIZE]        ' 1-bit valid flag per ID
+  fl_IDValid       LONG    0                       ' field pointer for 1-bit variables
+  fl_BlockStates   BYTE    0[FL_STATES_SIZE]       ' 2-bit state per block
+  fl_BlockState    LONG    0                       ' field pointer for 2-bit variables
+
+  ' Flash handle state (parallel arrays, indexed by unified handle)
+  fl_hStatus       BYTE    0[MAX_OPEN_FILES]       ' FL_H_READ, FL_H_WRITE, etc.
+  fl_hHeadBlockID  WORD    FL_NOT_VALID[MAX_OPEN_FILES]
+  fl_hChainBlockID WORD    0[MAX_OPEN_FILES]
+  fl_hChainBlockAddr WORD  0[MAX_OPEN_FILES]
+  fl_hChainLifeCycle BYTE  0[MAX_OPEN_FILES]
+  fl_hModified     BYTE    0[MAX_OPEN_FILES]
+  fl_hEndPtr       WORD    0[MAX_OPEN_FILES]
+  fl_hSeekPtr      LONG    -1[MAX_OPEN_FILES]      ' NOT_ENABLED = -1
+  fl_hSeekFileOffset LONG  0[MAX_OPEN_FILES]
+  fl_hCircularLength LONG  0[MAX_OPEN_FILES]
+  fl_hFilename     BYTE    0[MAX_OPEN_FILES * FL_FILENAME_SIZE]
+
+  ' Per-handle 4KB block buffers
+  fl_hBlockBuff    BYTE    0[MAX_OPEN_FILES * BLOCK_SIZE]
+
+  ' Temporary block buffer (mount scanning, block moves)
+  fl_tmpBlockBuff  BYTE    0[BLOCK_SIZE]
+
+  ' Flash debug flag
+  fl_showRTdebug   LONG    false
+
+  ' Flash error code (worker cog only - no per-cog indexing needed)
+  fl_errorCode     LONG    0
+
+  ' Flash serial number buffer (DAT for reliable wrfast target)
+  fl_sn_buf        LONG    0[2]
 
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
@@ -978,6 +1074,92 @@ PRI fs_worker() | cur_cmd
 
       CMD_SET_VOL_LABEL:
         pb_status := do_set_vol_label(pb_param0)
+
+      CMD_FLASH_MOUNT:
+        pb_status := do_flash_mount()
+
+      CMD_SERIAL_NUMBER:
+        pb_data0, pb_data1 := do_flash_serial_number()
+        pb_status := SUCCESS
+
+      CMD_FLASH_OPEN:
+        switch_to_flash()
+        pb_data0 := fl_open(pb_param0, pb_param1)
+        switch_to_sd()
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FLASH_OPEN_CIRC:
+        switch_to_flash()
+        pb_data0 := fl_open_circular(pb_param0, pb_param1, pb_param2)
+        switch_to_sd()
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FLASH_CLOSE:
+        switch_to_flash()
+        pb_status := fl_close(pb_param0)
+        switch_to_sd()
+
+      CMD_FLASH_READ:
+        switch_to_flash()
+        pb_data0 := fl_read(pb_param0, pb_param1, pb_param2)
+        switch_to_sd()
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FLASH_WRITE:
+        switch_to_flash()
+        pb_data0 := fl_write(pb_param0, pb_param1, pb_param2)
+        switch_to_sd()
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FLASH_SEEK:
+        switch_to_flash()
+        pb_data0 := fl_seek(pb_param0, pb_param1, pb_param2)
+        switch_to_sd()
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FLASH_FLUSH:
+        switch_to_flash()
+        pb_status := fl_flush(pb_param0)
+        switch_to_sd()
+
+      CMD_FLASH_DELETE:
+        switch_to_flash()
+        pb_status := fl_delete(pb_param0)
+        switch_to_sd()
+
+      CMD_FLASH_RENAME:
+        switch_to_flash()
+        pb_status := fl_rename(pb_param0, pb_param1)
+        switch_to_sd()
+
+      CMD_FLASH_EXISTS:
+        switch_to_flash()
+        pb_data0 := fl_exists(pb_param0) ? 1 : 0
+        switch_to_sd()
+        pb_status := SUCCESS
+
+      CMD_FLASH_CREATE_FILE:
+        switch_to_flash()
+        pb_status := fl_create_file(pb_param0, pb_param1, pb_param2)
+        switch_to_sd()
+
+      CMD_FLASH_FILE_SIZE:
+        switch_to_flash()
+        pb_data0 := fl_file_size(pb_param0)
+        switch_to_sd()
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FLASH_STATS:
+        switch_to_flash()
+        pb_data0, pb_data1, pb_data2 := fl_stats()
+        switch_to_sd()
+        pb_status := SUCCESS
+
+      CMD_FLASH_DIRECTORY:
+        switch_to_flash()
+        pb_data0 := fl_directory(pb_param0, pb_param1, pb_param2)
+        switch_to_sd()
+        pb_status := SUCCESS
 
       other:
         debug("  [fs_worker] Unknown command: ", udec_(cur_cmd))
@@ -2748,6 +2930,1654 @@ PRI do_readdir(entry_num) : result | idx, char, attrib
   return E_FILE_NOT_FOUND
 
 CON '' ═══════════════════════════════════════════════════════════════════════════
+    '' FLASH SPI ENGINE AND MOUNT LOGIC (Phase 2)
+    '' All methods run in the worker cog context (called from fs_worker dispatch)
+    '' ═══════════════════════════════════════════════════════════════════════════
+
+PRI switch_to_flash()
+' Reconfigure SPI bus for Flash device (Mode 3, MOSI/MISO as GPIO bit-bang).
+' Fully clears SD smart pin modes so Flash bit-bang GPIO works cleanly.
+' Flash SPI methods (fl_command etc.) handle their own SCK/CS setup per command.
+
+  if current_spi_device == DEV_FLASH
+    return
+
+  ' Deselect SD CS (HIGH = deselected) before clearing smart pins
+  pinh(cs)
+
+  ' Fully clear all SD smart pin modes (PINCLEAR = DIR=0 + WRPIN=0).
+  ' Flash SPI uses raw GPIO (drvc/testp) for MOSI/MISO. If P_SYNC_TX or
+  ' P_SYNC_RX modes remain active, they interfere with GPIO operations.
+  pinclear(cs)
+  pinclear(sck)
+  pinclear(mosi)
+  pinclear(miso)
+
+  current_spi_device := DEV_FLASH
+  debug("  [switch_to_flash] SPI bus switched to Flash mode")
+
+PRI switch_to_sd() : ok
+' Reconfigure SPI bus for SD device after Flash operations.
+' P60 (SD CS) is reused as Flash SCK, so during Flash operations the SD card
+' sees its CS rapidly toggling, which corrupts the card's SPI state machine.
+' A full re-initialization (CMD0/CMD8/ACMD41/CMD58) is required to recover.
+'
+' @returns ok - TRUE if SD card successfully re-initialized, FALSE on failure
+
+  if current_spi_device == DEV_SD
+    ok := TRUE
+    return
+
+  debug("  [switch_to_sd] Starting SD recovery sequence...")
+
+  ' Float Flash pins to release any smart pin state
+  pinfloat(flash_cs_pin)
+  pinfloat(flash_sck_pin)
+
+  ' Re-initialize the SD card (recovery from corrupted SPI state)
+  ok := reinitCard()
+  if ok
+    current_spi_device := DEV_SD
+    debug("  [switch_to_sd] SD card recovered successfully")
+  else
+    debug("  [switch_to_sd] ERROR: SD card recovery failed!")
+
+PRI reinitCard() : ok | resp, t, saved_freq
+' Minimal SD card re-initialization after Flash operations.
+' Performs the essential steps from initCard() without redundant ones:
+' - Skips power-on delay (card already powered)
+' - Skips identifyCard() (card type already cached)
+' - Skips setOptimalSpeed() (speed already cached in spi_freq)
+' - Reuses saved_acmd41_arg from initial mount
+'
+' Sequence: GPIO recovery flush -> initSPIPins -> slow clock -> CMD0 -> CMD8
+'           -> ACMD41 -> CMD58 -> restore fast clock
+'
+' @returns ok - TRUE on success, FALSE on failure
+' @local resp - Command response
+' @local t - Timeout counter
+' @local saved_freq - Saved SPI frequency to restore after init
+
+  debug("    [reinitCard] Starting minimal SD re-init...")
+  saved_freq := spi_freq
+  sec_in_buf := -1                                                                 ' Invalidate sector cache
+  dir_sec_in_buf := -1                                                             ' Invalidate dir sector cache
+  fat_sec_in_buf := -1                                                             ' Invalidate FAT sector cache
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 1: GPIO recovery flush (4096 clocks with CS HIGH)
+  ' Must happen BEFORE smart pin setup — uses raw GPIO.
+  ' The SD card may be stuck mid-transfer; flush clears it.
+  '
+  ' CRITICAL: Must fully reset smart pins first! pinfloat()
+  ' only clears DIR, not the wrpin mode register. If smart
+  ' pin modes remain active, pinh/pinl produce smart pin
+  ' behavior (high-speed transitions) instead of clean GPIO.
+  ' PINCLEAR does both: DIR=0 and WRPIN(pin,0) — the standard
+  ' way to stop smart pin operation before reprogramming.
+  ' ──────────────────────────────────────────────────────────
+  pinclear(cs)
+  pinclear(sck)
+  pinclear(mosi)
+  pinclear(miso)
+
+  pinh(cs)                                                                         ' CS HIGH = deselected
+  pinh(mosi)                                                                       ' MOSI HIGH (card expects high during idle)
+  pinl(sck)                                                                        ' SCK LOW (SPI mode 0 idle)
+  pinf(miso)                                                                       ' MISO as floating input
+
+  repeat 4096                                                                      ' Flush a full 512-byte sector worth
+    pinh(sck)
+    waitus(10)
+    pinl(sck)
+    waitus(10)
+  debug("    [reinitCard] GPIO recovery flush complete (4096 clocks)")
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 2: Initialize smart pins at slow clock (400 kHz)
+  ' ──────────────────────────────────────────────────────────
+  initSPIPins()
+  setSPISpeed(400_000)
+  waitus(100)
+
+  ' Send dummy clocks via smart pins
+  repeat 10
+    sp_transfer_8($FF)
+  debug("    [reinitCard] Smart pins ready at 400 kHz")
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 3: CMD0 - GO_IDLE_STATE
+  ' ──────────────────────────────────────────────────────────
+  resp := 0
+  repeat 5
+    resp := cmd(0, 0)
+    if resp == $01
+      quit
+    waitms(10)
+
+  if resp <> $01
+    debug("    [reinitCard] FAIL: CMD0 expected $01, got $", uhex_(resp))
+    return false
+
+  debug("    [reinitCard] CMD0 OK")
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 4: CMD8 - SEND_IF_COND
+  ' ──────────────────────────────────────────────────────────
+  resp := cmd(8, $000001AA)
+
+  if resp == 0
+    ' v1.x card — shouldn't happen for 128GB but handle it
+    saved_acmd41_arg := $00000000
+  elseif (resp & $FFF) == $1AA
+    saved_acmd41_arg := $40000000
+  debug("    [reinitCard] CMD8 done, acmd41_arg=$", uhex_long_(saved_acmd41_arg))
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 5: ACMD41 - SD_SEND_OP_COND (loop until ready)
+  ' ──────────────────────────────────────────────────────────
+  t := getct() + clkfreq * 2                                                       ' 2 second timeout
+
+  repeat
+    resp := cmd(55, 0)
+    if resp > $01
+      waitms(10)
+    else
+      resp := cmd(41, saved_acmd41_arg)
+      if resp == $00
+        quit
+
+    if getct() - t > 0
+      debug("    [reinitCard] FAIL: ACMD41 timeout")
+      return false
+    waitms(10)
+
+  debug("    [reinitCard] ACMD41 complete - card ready")
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 6: CMD58 - READ_OCR (restore HCS addressing)
+  ' ──────────────────────────────────────────────────────────
+  resp := cmd(58, 0)
+  ocr_value := resp
+
+  if (resp >> 30) & 1
+    hcs := 0                                                                       ' SDHC/SDXC: block addressing
+  else
+    hcs := 9                                                                       ' SDSC: byte addressing
+
+  debug("    [reinitCard] CMD58 done, hcs=", udec_(hcs))
+
+  ' ──────────────────────────────────────────────────────────
+  ' STEP 7: Restore original SPI speed
+  ' ──────────────────────────────────────────────────────────
+  if saved_freq > 0
+    setSPISpeed(saved_freq)
+  else
+    setSPISpeed(25_000_000)                                                        ' Fallback to 25 MHz
+
+  ' Stabilize at new clock rate
+  pinh(cs)
+  repeat 8
+    sp_transfer_8($FF)
+
+  debug("    [reinitCard] Re-init complete, speed restored to ", udec_(spi_freq / 1000), " kHz")
+  return true
+
+PRI fl_command(command, count) | _sclk, _cs, _miso
+' Send Flash SPI command - sets up SCK/CS pins and sends command bytes.
+' Port of flash_fs.spin2 flash_command() with variable pin numbers.
+' SCK is configured for Mode 3 (P_TRANSITION inverted, clock idles HIGH).
+'
+' @param command - Command byte(s) packed into LONG (reversed before send)
+' @param count - Number of bytes to send (1-4)
+
+  _sclk := flash_sck_pin
+  _cs := flash_cs_pin
+  _miso := miso
+  org
+        fltl      _miso                           ' MISO to input
+        fltl      _sclk                           ' Reset SCK smart pin
+        wrpin     ##%001000000_01_00101_0, _sclk   ' P_TRANSITION inverted (Mode 3)
+        wrpin     ##%001000000_00_00000_0, _cs      ' CS pin mode (transition, no invert)
+        wxpin     #4, _sclk                        ' 4 clocks per transition
+        drvl      _cs                              ' CS deselect (matches original driver)
+        waitx     #14                              ' Guard time (~50ns at 350 MHz)
+        drvh      _cs                              ' CS select (matches original driver)
+        movbyts   command, #%%1230                 ' Reverse address byte order for SPI
+  end
+  fl_send(@command, count)
+
+PRI fl_send(p_buffer, count) | tx_byte, _sclk, _mosi
+' Write bytes to Flash chip via SPI bit-bang.
+' Port of flash_fs.spin2 flash_send() with variable pin numbers.
+'
+' @param p_buffer - Hub address of bytes to send
+' @param count - Number of bytes to send
+
+  _sclk := flash_sck_pin
+  _mosi := mosi
+  org
+        rdfast    #0, p_buffer                    ' Start fast read from hub
+
+.byte   rfbyte    tx_byte                         ' Read byte to send
+        shl       tx_byte, #24 + 1       wc       ' MSB-justify and get D7 into C
+
+        rep       @.r, #1                          ' Protect from interrupts
+        fltl      _sclk                            ' Reset smart pin CK
+        drvl      _sclk                            ' Start smart pin CK
+        drvc      _mosi                            ' Output D7
+        wypin     #16, _sclk                       ' Begin 16 clock transitions (8 bits)
+        rep       @.r, #7                          ' Repeat for D6..D0
+        shl       tx_byte, #1             wc       ' Get next data bit
+        drvc      _mosi                            ' Output data bit
+        waitx     #2                               ' Delay for 8 clocks/bit
+.r
+        djnz      count, #.byte                    ' Loop if another byte
+
+        drvl      _mosi                            ' MOSI low when done
+
+  end
+
+PRI fl_receive(p_buffer, count) | rx_byte, _sclk, _cs, _miso
+' Read bytes from Flash chip via SPI bit-bang.
+' Port of flash_fs.spin2 flash_receive() with variable pin numbers.
+' Terminates command by deselecting CS at end.
+'
+' @param p_buffer - Hub address to store received bytes
+' @param count - Number of bytes to receive
+
+  _sclk := flash_sck_pin
+  _cs := flash_cs_pin
+  _miso := miso
+  org
+        wrfast    #0, p_buffer                    ' Start fast write to hub
+
+.byte   rep       @.r, #1                          ' Protect from interrupts
+        fltl      _sclk                            ' Reset smart pin CK
+        drvl      _sclk                            ' Start smart pin CK
+        wypin     #16, _sclk                       ' Begin 16 clock transitions (8 bits)
+        waitx     #7                               ' Align TESTP to before 2nd clock fall
+        rep       @.r, #8                          ' Repeat for 8 bits
+        waitx     #2                               ' Delay for 8 clocks/bit
+        testp     _miso                  wc        ' Input data bit
+        rcl       rx_byte, #1                      ' Save data bit
+.r
+        wfbyte    rx_byte                          ' Write received byte to hub
+        djnz      count, #.byte                    ' Loop if another byte
+
+        drvl      _cs                              ' CS deselect (terminates command)
+        fltl      _sclk                            ' Reset smart pin
+
+  end
+
+PRI fl_wait() | statusBits
+' Wait for Flash chip to become ready (BUSY bit clear).
+' Polls status register via command $05.
+
+  repeat
+    fl_command($05, 1)
+    fl_receive(@statusBits, 1)
+  while statusBits.[0]
+
+PRI fl_read_block_id(block_id, p_buffer, firstByte, lastByte)
+' Read bytes from Flash block by ID (translates via translation table).
+'
+' @param block_id - Block ID to look up
+' @param p_buffer - Hub address to store data
+' @param firstByte - First byte offset within block
+' @param lastByte - Last byte offset within block
+
+  fl_read_block_addr(field[fl_IDToBlock][block_id], p_buffer, firstByte, lastByte)
+
+PRI fl_read_block_addr(block_address, p_buffer, firstByte, lastByte)
+' Read bytes from Flash block by physical address.
+'
+' @param block_address - Block offset within filesystem (0 to FL_BLOCKS-1)
+' @param p_buffer - Hub address to store data
+' @param firstByte - First byte offset within block (0 to $FFF)
+' @param lastByte - Last byte offset within block
+
+  fl_command($03 | (FIRST_BLOCK + block_address) << 20 | firstByte << 8, 4)
+  fl_receive(p_buffer, lastByte - firstByte + 1)
+
+PRI fl_program_block(block_address, p_buffer, cycle_bits) | pageIndex
+' Program a full 4KB block: erase + 16 page writes.
+' Installs lifecycle bits and CRC before programming.
+'
+' @param block_address - Block offset within filesystem
+' @param p_buffer - Hub address of 4KB data to write
+' @param cycle_bits - Lifecycle bit pattern (3-bit)
+
+  fl_command($06, 1)                                                              ' Enable write
+  fl_command($20 | (FIRST_BLOCK + block_address) << 20, 4)                        ' Erase 4KB block
+
+  BYTE[p_buffer].[7..5] := cycle_bits                                             ' Install lifecycle for CRC
+  LONG[p_buffer + $FFC] := fl_block_crc(p_buffer)                                 ' Compute and install CRC
+  BYTE[p_buffer].[7..5]~~                                                         ' Remove lifecycle (:= %111, inactive)
+
+  fl_wait()                                                                       ' Wait for erase (~45ms)
+
+  repeat 16 with pageIndex                                                        ' Program 16 pages (256 bytes each)
+    fl_command($06, 1)                                                            ' Enable write
+    fl_command($02 | (FIRST_BLOCK + block_address) << 20 | pageIndex << 16, 4)    ' Program page
+    fl_send(p_buffer + pageIndex << 8, 256)                                       ' Send 256 bytes
+    fl_wait()                                                                     ' Wait for program (~400us)
+
+PRI fl_activate_block(block_address, cycle_bits)
+' Activate a programmed block by writing lifecycle pattern.
+'
+' @param block_address - Block offset within filesystem
+' @param cycle_bits - Lifecycle bit pattern
+
+  fl_program_bit(block_address, cycle_bits << 5 | %00011111)
+
+PRI fl_cancel_block(block_address)
+' Cancel a block by clearing all lifecycle bits.
+'
+' @param block_address - Block offset within filesystem
+
+  fl_program_bit(block_address, %00011111)
+
+PRI fl_program_bit(block_address, bit_pattern)
+' Write bit pattern to first byte of block (lifecycle bits).
+' Most atomic Flash filesystem operation.
+'
+' @param block_address - Block offset within filesystem
+' @param bit_pattern - Value to write to first byte
+
+  fl_command($06, 1)                                                              ' Enable write
+  fl_command($02 | (FIRST_BLOCK + block_address) << 20, 4)                        ' Program address
+  fl_send(@bit_pattern, 1)                                                        ' Send byte
+  fl_wait()                                                                       ' Wait for completion
+
+PRI fl_next_active_cycle(cycle_in) : cycle_out
+' Calculate next lifecycle pattern (3 -> 5 -> 6 -> 3 -> 5 -> 6 -> ...).
+'
+' @param cycle_in - Current lifecycle pattern
+' @returns cycle_out - Next lifecycle pattern
+
+  cycle_out := (cycle_in * %001_001) >> 1 & %111
+
+PRI fl_block_crc(p_block_buffer) : crc
+' Calculate CRC for a 4KB Flash block using P2 hardware GETCRC.
+'
+' @param p_block_buffer - Address of 4KB block buffer
+' @returns crc - 32-bit CRC value
+
+  return getcrc(p_block_buffer, $AD0424F3 rev 31, BLOCK_SIZE - 4)
+
+PRI fl_activate_updated_block(block_address, pBuff) | nextCycleBits
+' Activate an updated block with the next lifecycle pattern.
+' Used by rename, rewrite_block, froncate_file, close_no_lock.
+' Port of flash_fs.spin2 activate_updated_block().
+'
+' @param block_address - Block address to activate
+' @param pBuff - Pointer to block buffer to program
+
+  nextCycleBits := fl_next_active_cycle(LONG[pBuff].[7..5])
+  fl_program_block(block_address, pBuff, nextCycleBits)
+  fl_activate_block(block_address, nextCycleBits)
+
+PRI fl_check_block_fix_dupe_id(thisBlockAddress) | otherBlockAddress, thisCycleBits, otherCycleBits, thisBlockID
+' Check block for valid lifecycle and CRC, resolve duplicate IDs.
+' During mount M1 pass: recovers from incomplete block switchover due to power loss.
+' Port of flash_fs.spin2 check_block_fix_dupe_id().
+'
+' @param thisBlockAddress - Block offset within filesystem
+
+  fl_read_block_addr(thisBlockAddress, @thisCycleBits, $000, $000)                ' Read first byte
+
+  ifnot lookdown(thisCycleBits.[7..5]: %011, %101, %110)                          ' Valid lifecycle?
+    return                                                                        ' No - block is canceled/inactive, stays B_FREE
+
+  fl_read_block_addr(thisBlockAddress, @fl_tmpBlockBuff, $000, $FFF)              ' Read entire block
+
+  if LONG[@fl_tmpBlockBuff + $FFC] <> fl_block_crc(@fl_tmpBlockBuff)              ' CRC valid?
+    fl_cancel_block(thisBlockAddress)                                             ' No - cancel block
+    return                                                                        ' Status stays B_FREE
+
+  thisBlockID := LONG[@fl_tmpBlockBuff].[19..8]                                   ' Good block, get its ID
+
+  ifnot field[fl_IDValid][thisBlockID]~~                                          ' Set ID flag; was it already set?
+    field[fl_IDToBlock][thisBlockID] := thisBlockAddress                           ' First block with this ID
+    field[fl_BlockState][thisBlockAddress] := B_TEMP
+    return
+
+  ' Duplicate ID found - resolve by keeping the newer block
+  otherBlockAddress := field[fl_IDToBlock][thisBlockID]
+  fl_read_block_addr(otherBlockAddress, @otherCycleBits, $000, $000)
+
+  if lookdown(thisCycleBits.[7..5] << 3 | otherCycleBits.[7..5]: %011_110, %101_011, %110_101)
+    ' This block is newer - keep this, cancel other
+    field[fl_IDToBlock][thisBlockID] := thisBlockAddress
+    field[fl_BlockState][thisBlockAddress] := B_TEMP
+    field[fl_BlockState][otherBlockAddress] := B_FREE
+    fl_cancel_block(otherBlockAddress)
+  else
+    ' Other block is newer - cancel this one
+    fl_cancel_block(thisBlockAddress)
+
+PRI fl_trace_file_set_flags(block_address, set) : valid | signature, block_id
+' Trace file chain setting block states to B_HEAD/B_BODY (or back to B_TEMP on error).
+' Port of flash_fs.spin2 trace_file_set_flags().
+'
+' @param block_address - Starting block address (head block)
+' @param set - TRUE to set B_HEAD/B_BODY, FALSE to restore B_TEMP
+' @returns valid - TRUE if file chain is complete and valid
+
+  valid := false
+  fl_read_block_addr(block_address, @signature, $000, $003)                       ' Read first LONG
+  field[fl_BlockState][block_address] := set ? B_HEAD : B_TEMP                    ' Set head block state
+
+  repeat FL_BLOCKS                                                                ' Limit to prevent infinite loop
+    ifnot signature.[0]                                                           ' Last block? File is complete
+      return true
+    block_id := signature.[31..20]                                                ' Get next block ID
+    ifnot field[fl_IDValid][block_id]                                             ' ID invalid?
+      return                                                                      ' Error - return false
+    block_address := field[fl_IDToBlock][block_id]                                ' Get address of next block
+    fl_read_block_addr(block_address, @signature, $000, $003)                     ' Read first LONG
+    ifnot signature.[1]                                                           ' Head block in chain? Error!
+      return                                                                      ' Return false
+    field[fl_BlockState][block_address] := set ? B_BODY : B_TEMP                  ' Set body block state
+
+PRI do_flash_mount() : status | block_address, blockTypeBits, signature
+' Mount Flash filesystem - scans all blocks and initializes translation tables.
+' Port of flash_fs.spin2 mount() adapted for worker cog context.
+' Three-pass scan: M1=fix duplicates, M2=trace files, M3=clean dead blocks.
+'
+' @returns status - SUCCESS or error code
+
+  debug("  [do_flash_mount] Starting Flash mount scan...")
+
+  ' Clear Flash handle state
+  bytefill(@fl_hStatus, 0, MAX_OPEN_FILES)
+
+  ' Clear translation tables
+  bytefill(@fl_IDToBlocks, 0, ID_TO_BLOCKS_SZ * 2)                               ' WORD array
+  bytefill(@fl_IDValids, 0, FL_FLAGS_SIZE)
+  bytefill(@fl_BlockStates, 0, FL_STATES_SIZE)
+
+  ' Set field pointers for bit-field access
+  fl_IDToBlock  := ^@fl_IDToBlocks.[11..0]                                        ' 12-bit field pointer
+  fl_IDValid    := ^@fl_IDValids.[0]                                              ' 1-bit field pointer
+  fl_BlockState := ^@fl_BlockStates.[1..0]                                        ' 2-bit field pointer
+
+  status := SUCCESS
+
+  ' Switch to Flash SPI mode
+  switch_to_flash()
+
+  ' M1 pass: Check each block and fix duplicate IDs
+  debug("  [do_flash_mount] M1: Scanning ", udec_(FL_BLOCKS), " blocks for duplicates...")
+  repeat FL_BLOCKS with block_address
+    fl_check_block_fix_dupe_id(block_address)
+
+  ' M2 pass: Trace head blocks, set B_HEAD/B_BODY flags
+  debug("  [do_flash_mount] M2: Locating files...")
+  repeat FL_BLOCKS with block_address
+    if field[fl_BlockState][block_address] == B_TEMP                              ' Valid block?
+      fl_read_block_addr(block_address, @blockTypeBits, $000, $000)               ' Read first byte
+      ifnot blockTypeBits.[1]                                                     ' Head block?
+        ifnot fl_trace_file_set_flags(block_address, true)                        ' Trace file chain
+          fl_trace_file_set_flags(block_address, false)                           ' Error: retrace to B_TEMP
+
+  ' M3 pass: Cancel remaining B_TEMP blocks (dead/orphaned)
+  debug("  [do_flash_mount] M3: Cleaning dead blocks...")
+  repeat FL_BLOCKS with block_address
+    if field[fl_BlockState][block_address] == B_TEMP
+      fl_read_block_addr(block_address, @signature, $000, $003)                   ' Read first LONG
+      field[fl_IDValid][signature.[19..8]]~                                       ' Cancel ID flag
+      field[fl_BlockState][block_address] := B_FREE                               ' Return to free
+      fl_cancel_block(block_address)                                              ' Cancel on chip
+      status := E_FLASH_BAD_BLOCKS
+
+  ' Switch back to SD mode (default bus state)
+  switch_to_sd()
+
+  ' Bad blocks found but cleaned is informational, not fatal
+  if status == E_FLASH_BAD_BLOCKS
+    debug("  [do_flash_mount] WARNING: Dead blocks were cleaned during mount")
+    status := SUCCESS
+
+  debug("  [do_flash_mount] Flash mount complete")
+  return status
+
+PRI do_flash_serial_number() : sn_hi, sn_lo
+' Read Flash chip 64-bit JEDEC unique ID (command $4B).
+' Matches original flash_fs.spin2 serial_number() pattern.
+' Sequence: $4B cmd + 4 dummy bytes + 8 ID bytes.
+' Uses DAT buffer (fl_sn_buf) for wrfast target to avoid
+' potential stack address issues with inline PASM2 FIFO writes.
+'
+' @returns sn_hi - High 32 bits of unique ID
+' @returns sn_lo - Low 32 bits of unique ID
+
+  switch_to_flash()
+  fl_command($4B, 1)                                                              ' Read Unique ID command
+  fl_send($00, 4)                                                                 ' 4 dummy bytes
+  fl_receive(@fl_sn_buf, 8)                                                       ' 8 ID bytes into DAT buffer
+
+  ' Copy from DAT buffer and reverse byte order (Big Endian to Little Endian)
+  sn_hi := fl_sn_buf[0]
+  sn_lo := fl_sn_buf[1]
+  org
+    movbyts   sn_hi, #%%0123
+    movbyts   sn_lo, #%%0123
+  end
+
+  switch_to_sd()
+  debug("  [do_flash_serial_number] ID: $", uhex_long_(sn_hi), "_", uhex_long_(sn_lo))
+
+CON '' ═══════════════════════════════════════════════════════════════════════════
+    '' PHASE 3: FLASH FILE OPERATIONS (worker cog internal methods)
+    '' Ported from flash_fs.spin2 with fl_ prefix, adapted for unified driver.
+    '' All methods run in worker cog — no locks, no mount checks (dispatch handles).
+    '' ═══════════════════════════════════════════════════════════════════════════
+
+' ─── Step 3: Non-SPI Helpers ────────────────────────────────────────────────
+
+PRI fl_set_error(code) : error_code
+' Set Flash error code and return the same code (for chained returns).
+'
+' @param code - Error code to store
+' @returns error_code - The same error code passed in
+
+  fl_errorCode := code
+  return code
+
+PRI fl_filename_crc(p_filename) : filenameCRC
+' Return the CRC19 value calculated for the filename zstring.
+' Port of flash_fs.spin2 filename_crc().
+'
+' @param p_filename - address of a zstring containing the filename
+' @returns filenameCRC - the calculated CRC value
+
+  filenameCRC := getcrc(p_filename, $B5827 rev 19, strsize(p_filename))
+
+PRI fl_filename_pointer(handle) : p_filename
+' Return pointer to Flash filename for this handle.
+' Port of flash_fs.spin2 filename_pointer().
+'
+' @param handle - a handle to an open file
+' @returns p_filename - address of filename zstring
+
+  return @fl_hFilename + handle << FL_FILENAME_SIZE_EXP
+
+PRI fl_buffer_pointer(handle) : p_buffer
+' Return pointer to the 4KB block buffer for this handle.
+' Port of flash_fs.spin2 buffer_pointer().
+'
+' @param handle - a handle to an open file
+' @returns p_buffer - address of the 4KB buffer
+
+  return @fl_hBlockBuff + handle << BLOCK_SIZE_EXP
+
+PRI fl_ensure_handle_mode(handle, open_mode_bits) : status
+' Determine if handle is open with desired Flash mode.
+' Port of flash_fs.spin2 ensure_handle_mode().
+'
+' @param handle - handle to check
+' @param open_mode_bits - combination of FL_H_READ, FL_H_WRITE, etc.
+' @returns status - SUCCESS if mode matches, error code otherwise
+
+  if handle < 0 or handle > MAX_OPEN_FILES - 1
+    status := E_FLASH_BAD_HANDLE
+  elseif fl_hStatus[handle] & open_mode_bits
+    status := SUCCESS
+  else
+    status := E_FLASH_FILE_MODE
+
+PRI fl_new_handle(p_filename) : handle
+' Allocate a unified handle and configure it for Flash use.
+' Adapted from flash_fs.spin2 new_handle() for unified handle pool.
+'
+' @param p_filename - address of filename zstring
+' @returns handle - handle index or E_FLASH_NO_HANDLE
+
+  handle := allocateHandle()
+  if handle < 0
+    return fl_set_error(E_FLASH_NO_HANDLE)
+
+  ' Mark as Flash device handle with read flag (caller overrides fl_hStatus)
+  h_device[handle] := DEV_FLASH
+  h_flags[handle] := HF_READ
+
+  ' Copy filename into Flash filename buffer
+  bytefill(@fl_hFilename + handle * FL_FILENAME_SIZE, 0, FL_FILENAME_SIZE)
+  strcopy(@fl_hFilename + handle * FL_FILENAME_SIZE, p_filename, FL_FILENAME_SIZE - 1)
+
+PRI fl_free_handle(handle)
+' Release a Flash handle back to the unified pool.
+' Clears Flash-specific state and calls freeHandle().
+'
+' @param handle - handle to release
+
+  fl_hStatus[handle] := 0
+  fl_hHeadBlockID[handle] := FL_NOT_VALID
+  fl_hChainBlockID[handle] := 0
+  fl_hChainBlockAddr[handle] := 0
+  fl_hChainLifeCycle[handle] := 0
+  fl_hModified[handle] := 0
+  fl_hEndPtr[handle] := 0
+  fl_hSeekPtr[handle] := FL_NOT_ENABLED
+  fl_hSeekFileOffset[handle] := 0
+  fl_hCircularLength[handle] := 0
+  freeHandle(handle)
+
+PRI fl_build_head_block(pBuff, p_filename, head_block_id)
+' Initialize empty block with control information for a new file.
+' Port of flash_fs.spin2 build_head_block().
+'
+' @param pBuff - address of block buffer in RAM
+' @param p_filename - address of filename zstring
+' @param head_block_id - the head block ID for this new file
+
+  bytefill(pBuff, $FF, BLOCK_SIZE)
+  long[pBuff].[1..0] := %00                                                    ' set head/last
+  long[pBuff].[19..8] := head_block_id                                         ' set head block ID
+  long[pBuff][1].[11..0] := $000                                               ' clear data offset
+  long[pBuff][1].[31..12] := fl_filename_crc(p_filename)                       ' set filename CRC
+  bytefill(pBuff + $008, $E5, FL_FILENAME_SIZE)                                ' erase filename portion
+  strcopy(pBuff + $008, p_filename, FL_FILENAME_SIZE - 1)                      ' set filename
+
+PRI fl_is_file_open(p_filename, open_mode_bits) : is_open | handle
+' Return true if named file is open in the specified mode.
+' Port of flash_fs.spin2 is_file_open().
+'
+' @param p_filename - address of filename zstring
+' @param open_mode_bits - combination of FL_H_READ, FL_H_WRITE, etc.
+' @returns is_open - TRUE if file is open, FALSE otherwise
+
+  repeat MAX_OPEN_FILES with handle
+    if fl_hStatus[handle] & open_mode_bits
+      if strcomp(@fl_hFilename + handle * FL_FILENAME_SIZE, p_filename)
+        return true
+
+PRI fl_exists_no_lock(p_filename) : bExists
+' Determine if named file exists (internal, no lock needed in worker cog).
+' Port of flash_fs.spin2 exists_no_lock().
+'
+' @param p_filename - address of filename zstring
+' @returns bExists - TRUE if file exists
+
+  bExists := fl_get_file_head_signature(p_filename) ? true : false
+
+PRI fl_blocks_free() : count | block_address
+' Return count of free blocks in Flash filesystem.
+' Port of flash_fs.spin2 blocks_free().
+'
+' @returns count - number of B_FREE blocks
+
+  repeat FL_BLOCKS with block_address
+    ifnot field[fl_BlockState][block_address]
+      count++
+
+PRI fl_available_blocks() : bAvail | blk8Idx
+' Return true if there are any available block IDs.
+' Port of flash_fs.spin2 available_blocks().
+'
+' @returns bAvail - TRUE if blocks are available for write
+
+  bAvail := false
+  repeat FL_FLAGS_SIZE with blk8Idx
+    if BYTE[@fl_IDValids][blk8Idx] <> $FF
+      bAvail := true
+      quit
+
+PRI fl_next_available_block_id() : block_id | possible_block_id
+' Get next available block ID.
+' Port of flash_fs.spin2 next_available_block_id().
+'
+' @returns block_id - next free ID, or E_FLASH_DRIVE_FULL
+
+  block_id := E_FLASH_DRIVE_FULL
+  repeat FL_BLOCKS with possible_block_id
+    ifnot field[fl_IDValid][possible_block_id]~~
+      block_id := possible_block_id
+      quit
+
+  if block_id < 0
+    fl_set_error(block_id)
+
+PRI fl_start_write(handle, open_mode, head_block_id, head_cycle) | block_address
+' Configure file handle for FL_H_WRITE or FL_H_APPEND.
+' Port of flash_fs.spin2 start_write().
+'
+' @param handle - handle to configure
+' @param open_mode - desired open mode
+' @param head_block_id - head block ID for the file
+' @param head_cycle - lifecycle bits for head block
+
+  fl_build_head_block(fl_buffer_pointer(handle), fl_filename_pointer(handle), head_block_id)
+
+  fl_hStatus[handle] := open_mode
+  fl_hHeadBlockID[handle] := head_block_id
+  fl_hChainBlockID[handle] := head_block_id
+  fl_hChainLifeCycle[handle] := head_cycle
+  fl_hEndPtr[handle] := $088
+
+PRI fl_is_old_format_file_head(block_address, pBlockBuffer) : oldFormatStatus | fnmCrc32, possOldCRC
+' Check if block is an old-format (CRC32) file head.
+' Port of flash_fs.spin2 is_old_format_file_head().
+'
+' @param block_address - address of block to check
+' @param pBlockBuffer - buffer to receive filename data
+' @returns oldFormatStatus - TRUE if old format
+
+  fl_read_block_addr(block_address, @possOldCRC, $004, $007)
+  fl_read_block_addr(block_address, pBlockBuffer, $008, $087)
+  fnmCrc32 := getcrc(pBlockBuffer, $AD0424F3 rev 31, strsize(pBlockBuffer) + 1)
+  oldFormatStatus := possOldCRC == fnmCrc32
+
+' ─── Step 4: Block-Chain Read Helpers ───────────────────────────────────────
+
+PRI fl_get_file_head_signature(p_filename) : foundSignature | tmpFilenameCRC, block_address, signature[2], bIsOldFmt
+' Look up file by name and return block state bits of file's head block.
+' Port of flash_fs.spin2 get_file_head_signature().
+'
+' @param p_filename - address of filename zstring
+' @returns foundSignature - first long of head block (non-zero=found), 0 if not found
+
+  tmpFilenameCRC := fl_filename_crc(p_filename)
+
+  repeat FL_BLOCKS with block_address
+    if field[fl_BlockState][block_address] == B_HEAD
+      fl_read_block_addr(block_address, @signature, $000, $007)
+      if signature[1].[31..12] == tmpFilenameCRC
+        fl_read_block_addr(block_address, @fl_tmpBlockBuff, $008, $087)
+        if strcomp(p_filename, @fl_tmpBlockBuff)
+          foundSignature := signature
+          quit
+      else
+        bIsOldFmt := fl_is_old_format_file_head(block_address, @fl_tmpBlockBuff)
+        if bIsOldFmt
+          if strcomp(p_filename, @fl_tmpBlockBuff)
+            foundSignature := signature
+            quit
+
+  if foundSignature <> 0
+    foundSignature.[2] := bIsOldFmt ? 0 : 1
+
+PRI fl_count_file_bytes(block_address) : bytes_used, bytes_free, block_count | signature
+' Return information about a file: bytes used, bytes free, block count.
+' Port of flash_fs.spin2 count_file_bytes().
+'
+' @param block_address - address of first block of file
+' @returns bytes_used - bytes written to file
+' @returns bytes_free - bytes allocated but not written (in last block)
+' @returns block_count - number of blocks allocated
+
+  if block_address <> FL_NOT_VALID
+    repeat
+      fl_read_block_addr(block_address, @signature, $000, $003)
+      block_count++
+      case signature.[1..0]
+        %00:                                                                    ' head/last
+          bytes_used := signature.[31..20] - $088
+          bytes_free := $FFC - signature.[31..20]
+          return
+        %01:                                                                    ' head/more
+          bytes_used := $FFC - $088
+        %10:                                                                    ' body/last
+          bytes_used += signature.[31..20] - $004
+          bytes_free := $FFC - signature.[31..20]
+          return
+        %11:                                                                    ' body/more
+          bytes_used += $FFC - $004
+      block_address := field[fl_IDToBlock][signature.[31..20]]
+
+PRI fl_count_file_bytes_id(block_id) : byteCount
+' Return file size in bytes given head block ID.
+' Port of flash_fs.spin2 count_file_bytes_id().
+'
+' @param block_id - head block ID
+' @returns byteCount - file size in bytes
+
+  _, _, byteCount := fl_locate_file_byte(block_id, $FFFFFF)
+
+PRI fl_locate_file_byte(block_id, file_position) : rID, rBlockOfs, rLocation | dataOffset, signature, currOfs, srtOfs, endOfs, fnmCrc32, bIsOldFmt
+' Locate position within file's block chain.
+' Port of flash_fs.spin2 locate_file_byte().
+'
+' @param block_id - head block ID of file
+' @param file_position - byte offset from beginning of file
+' @returns rID - block ID containing desired location
+' @returns rBlockOfs - offset into block
+' @returns rLocation - location within entire file
+
+  file_position := file_position #> 0 <# $FFFFFF
+
+  bIsOldFmt := fl_is_old_format_file_head(field[fl_IDToBlock][block_id], @fl_tmpBlockBuff)
+  if not bIsOldFmt
+    fl_read_block_id(block_id, @dataOffset, $004, $005)
+    currOfs -= dataOffset.[11..0]
+
+  repeat
+    fl_read_block_id(block_id, @signature, $000, $003)
+    srtOfs := signature.[1] ? $004 : $088
+    endOfs := signature.[0] ? $FFC : signature.[31..20]
+    if file_position >= currOfs and file_position < currOfs + endOfs - srtOfs
+      return block_id, file_position - currOfs + srtOfs, file_position
+    currOfs += endOfs - srtOfs
+    ifnot signature.[0]
+      return block_id, endOfs, currOfs
+    block_id := signature.[31..20]
+
+PRI fl_start_modify(handle, open_mode, head_block_id, file_position, bFileExists) | block_id, pBuff
+' Configure file handle for FL_H_APPEND or FL_H_READWRITE.
+' Port of flash_fs.spin2 start_modify().
+'
+' @param handle - handle to configure
+' @param open_mode - desired open mode
+' @param head_block_id - head block ID
+' @param file_position - position to start at
+' @param bFileExists - TRUE if file already exists
+
+  pBuff := fl_buffer_pointer(handle)
+  if bFileExists
+    block_id, fl_hEndPtr[handle], fl_hSeekFileOffset[handle] := fl_locate_file_byte(head_block_id, file_position)
+    fl_read_block_id(block_id, pBuff, $000, $FFF)
+    if open_mode == FL_H_READWRITE
+      fl_hSeekPtr[handle] := fl_hEndPtr[handle]
+  else
+    fl_hSeekPtr[handle] := fl_hEndPtr[handle] := $088
+    fl_hSeekFileOffset[handle] := 0
+
+  fl_hStatus[handle] := open_mode
+  fl_hHeadBlockID[handle] := head_block_id
+  fl_hChainBlockID[handle] := block_id
+  fl_hChainLifeCycle[handle] := fl_next_active_cycle(long[pBuff].[7..5])
+
+PRI fl_seek_no_locks(handle, file_position) | pBuff, block_id, endPtr, fileOffset
+' Seek file to new position (internal, no lock).
+' Port of flash_fs.spin2 seek_no_locks().
+'
+' @param handle - handle to open file
+' @param file_position - desired file position
+
+  pBuff := fl_buffer_pointer(handle)
+  block_id, endPtr, fileOffset := fl_locate_file_byte(fl_hHeadBlockID[handle], file_position)
+  if fl_hStatus[handle] & FL_H_MODIFY
+    if block_id <> long[pBuff].[19..8]
+      if fl_hModified[handle]~
+        fl_rewrite_block(handle)
+
+  fl_hSeekFileOffset[handle] := fileOffset
+  fl_hSeekPtr[handle] := fl_hEndPtr[handle] := endPtr
+  fl_read_block_id(block_id, pBuff, $000, $FFF)
+
+' ─── Step 5: Write Helpers ──────────────────────────────────────────────────
+
+PRI fl_next_block_address() : block_address | blockFreeCount, freeBlockAddress, freeIndex, next_cycle_bits
+' Return address of next block to write to (with wear-leveling).
+' Port of flash_fs.spin2 next_block_address().
+'
+' @returns block_address - block address, or E_FLASH_DRIVE_FULL
+
+  ifnot blockFreeCount := fl_blocks_free()
+    return fl_set_error(E_FLASH_DRIVE_FULL)
+
+  repeat
+    block_address := abs getrnd() // FL_BLOCKS
+  until field[fl_BlockState][block_address] <> B_TEMP
+
+  if field[fl_BlockState][block_address] == B_FREE
+    field[fl_BlockState][block_address] := B_TEMP
+    return
+
+  ' Block is HEAD or BODY — must evict it
+  freeIndex := abs getrnd() // blockFreeCount
+  repeat FL_BLOCKS with freeBlockAddress
+    ifnot field[fl_BlockState][freeBlockAddress]
+      ifnot freeIndex--
+        quit
+
+  fl_read_block_addr(block_address, @fl_tmpBlockBuff, $000, $FFF)
+  next_cycle_bits := fl_next_active_cycle(LONG[@fl_tmpBlockBuff].[7..5])
+  fl_program_block(freeBlockAddress, @fl_tmpBlockBuff, next_cycle_bits)
+  fl_activate_block(freeBlockAddress, next_cycle_bits)
+  fl_cancel_block(block_address)
+
+  field[fl_IDToBlock][LONG[@fl_tmpBlockBuff].[19..8]] := freeBlockAddress
+  field[fl_BlockState][freeBlockAddress] := field[fl_BlockState][block_address]\B_TEMP
+
+PRI fl_write_block(handle, NextID_EndPtr) | pBuff, block_id, block_address
+' Write current block in buffer to next available block address.
+' Port of flash_fs.spin2 write_block().
+'
+' @param handle - handle to file open for write
+' @param NextID_EndPtr - next block ID or end-of-data pointer
+
+  pBuff := fl_buffer_pointer(handle)
+  long[pBuff].[31..20] := NextID_EndPtr
+  block_id := long[pBuff].[19..8]
+
+  block_address := fl_next_block_address()
+
+  if fl_showRTdebug
+    debug("* fl_wr_block() ", uhex_word_(block_address), " id=", udec_(block_id), " nxt=", uhex_word_(NextID_EndPtr))
+
+  if block_id == fl_hChainBlockID[handle]
+    fl_program_block(block_address, pBuff, fl_hChainLifeCycle[handle])
+    fl_hChainBlockAddr[handle] := block_address
+  else
+    fl_program_block(block_address, pBuff, %011)
+    fl_activate_block(block_address, %011)
+    field[fl_BlockState][block_address] := B_BODY
+    field[fl_IDToBlock][block_id] := block_address
+
+PRI fl_rewrite_block(handle) | pBuff, block_id, block_address, oldBlockAddress
+' Write block over existing with new lifecycle (make-before-break).
+' Port of flash_fs.spin2 rewrite_block().
+'
+' @param handle - handle to file open for read/modify/write
+
+  pBuff := fl_buffer_pointer(handle)
+  block_id := long[pBuff].[19..8]
+
+  block_address := fl_next_block_address()
+  fl_activate_updated_block(block_address, pBuff)
+
+  oldBlockAddress := field[fl_IDToBlock][block_id]\block_address
+  fl_cancel_block(oldBlockAddress)
+
+  field[fl_BlockState][block_address] := field[fl_BlockState][oldBlockAddress]\B_FREE
+
+PRI fl_delete_chain_from_id(block_id, EndID, delete_mode, KeepFirstIDValid) | block_address, signature
+' Remove selected part of a file chain.
+' Port of flash_fs.spin2 delete_chain_from_id().
+'
+' @param block_id - starting block ID
+' @param EndID - ending block ID
+' @param delete_mode - 0=to last, 1=through EndID, 2=before EndID
+' @param KeepFirstIDValid - TRUE to keep first block ID valid
+
+  block_address := field[fl_IDToBlock][block_id]
+  if fl_showRTdebug
+    debug("* fl_delChnFmID() [", uhex_word_(block_address), "] ", udec_(block_id), " end=", udec_(EndID), " mode=", udec_(delete_mode))
+
+  repeat
+    ifnot KeepFirstIDValid~
+      field[fl_IDValid][block_id]~
+    block_address := field[fl_IDToBlock][block_id]
+    field[fl_BlockState][block_address] := B_FREE
+    fl_cancel_block(block_address)
+    fl_read_block_addr(block_address, @signature, $000, $003)
+    block_id := signature.[31..20]
+  while lookupz(delete_mode: signature.[0], ...
+    signature.[19..8] <> EndID, ...
+    block_id <> EndID)
+
+PRI fl_froncate_file(head_block_id, limit_in_bytes) | size_in_bytes, block_address, new_head_block_id, block_offset, body_signature, delete_mode, prior_block_id, data_offset
+' Remove leading block(s) from file exceeding circular size limit.
+' Port of flash_fs.spin2 froncate_file().
+'
+' @param head_block_id - block ID of file
+' @param limit_in_bytes - file size limit in bytes
+
+  size_in_bytes := fl_count_file_bytes_id(head_block_id)
+
+  if size_in_bytes > limit_in_bytes
+
+    block_address := fl_next_block_address()
+
+    new_head_block_id, block_offset, _ := fl_locate_file_byte(head_block_id, size_in_bytes - limit_in_bytes)
+    if fl_showRTdebug
+      debug("* fl_froncate(id=", udec_(head_block_id), ", ", udec_(limit_in_bytes), ") ", udec_(size_in_bytes), " new=", udec_(new_head_block_id), " ofs=", uhex_word_(block_offset))
+
+    if block_offset > $88
+      fl_read_block_id(new_head_block_id, @body_signature, $000, $003)
+      fl_read_block_id(new_head_block_id, @fl_tmpBlockBuff + $88, $088, $FFF)
+      data_offset := block_offset - $088
+    else
+      prior_block_id := head_block_id
+      repeat
+        fl_read_block_id(prior_block_id, @body_signature, $000, $003)
+        if body_signature.[0] == 1
+          if body_signature.[31..20] <> new_head_block_id
+            prior_block_id := body_signature.[31..20]
+          else
+            quit
+        else
+          quit
+      if fl_showRTdebug
+        debug("* fl_froncate AWAKEN PRIOR HEAD ", udec_(prior_block_id))
+      fl_read_block_id(prior_block_id, @body_signature, $000, $003)
+      fl_read_block_id(prior_block_id, @fl_tmpBlockBuff + $88, $088, $FFF)
+      data_offset := block_offset + 3956 - 4
+
+    fl_read_block_id(head_block_id, @fl_tmpBlockBuff, $000, $087)
+    LONG[@fl_tmpBlockBuff].[0] := body_signature.[0]
+    LONG[@fl_tmpBlockBuff].[31..20] := body_signature.[31..20]
+    LONG[@fl_tmpBlockBuff][1].[11..0] := data_offset
+    delete_mode := 1
+
+    fl_activate_updated_block(block_address, @fl_tmpBlockBuff)
+
+    fl_delete_chain_from_id(head_block_id, body_signature.[19..8], delete_mode, True)
+
+    field[fl_IDToBlock][head_block_id] := block_address
+    field[fl_BlockState][block_address] := B_HEAD
+
+' ─── Step 6: Core I/O Engine ───────────────────────────────────────────────
+
+PRI fl_rd_byte_no_locks(handle) : byte_value | pBuff, signature, isSeeking, endPtr
+' Read next byte from Flash file.
+' Port of flash_fs.spin2 rd_byte_no_locks().
+'
+' @param handle - handle to file open for read
+' @returns byte_value - byte [0-255] or negative error code
+
+  isSeeking := (fl_hSeekPtr[handle] <> FL_NOT_ENABLED) ? true : false
+  endPtr := isSeeking ? fl_hSeekPtr[handle] : fl_hEndPtr[handle]
+
+  pBuff := fl_buffer_pointer(handle)
+  signature := LONG[pBuff]
+
+  case fl_hStatus[handle]
+    FL_H_READ, FL_H_READWRITE:
+      ifnot signature.[0]
+        if endPtr == LONG[pBuff].[31..20]
+          return fl_set_error(E_END_OF_FILE)
+      else
+        if endPtr == $FFC
+          if fl_hStatus[handle] & FL_H_MODIFY
+            if fl_hModified[handle]~
+              fl_rewrite_block(handle)
+          fl_read_block_addr(field[fl_IDToBlock][signature.[31..20]], pBuff, $000, $FFF)
+          endPtr := $004
+
+    other:
+      return fl_set_error(E_FLASH_FILE_MODE)
+
+  byte_value := BYTE[pBuff][endPtr++]
+  if isSeeking
+    fl_hSeekPtr[handle] := endPtr
+    fl_hSeekFileOffset[handle]++
+  else
+    fl_hEndPtr[handle] := endPtr
+
+PRI fl_wr_byte_no_locks(handle, byte_value) : status | pBuff, nextBlockID, isSeeking, endPtr
+' Write a byte to a Flash file open for write.
+' Port of flash_fs.spin2 wr_byte_no_locks().
+'
+' @param handle - handle to file open for write
+' @param byte_value - value to write
+' @returns status - SUCCESS or error code
+
+  isSeeking := (fl_hSeekPtr[handle] <> FL_NOT_ENABLED) ? true : false
+  endPtr := isSeeking ? fl_hSeekPtr[handle] : fl_hEndPtr[handle]
+
+  pBuff := fl_buffer_pointer(handle)
+  status := SUCCESS
+
+  case fl_hStatus[handle]
+    FL_H_WRITE, FL_H_APPEND:
+      if endPtr == $FFC
+        long[pBuff].[0]~~
+        nextBlockID := fl_next_available_block_id()
+        fl_write_block(handle, nextBlockID)
+        bytefill(pBuff, $FF, BLOCK_SIZE)
+        long[pBuff].[0]~
+        long[pBuff].[19..8] := nextBlockID
+        endPtr := $004
+
+    FL_H_READWRITE:
+      if endPtr == $FFC
+        if fl_hModified[handle]~
+          fl_rewrite_block(handle)
+        fl_read_block_id(long[pBuff].[31..20], pBuff, $000, $FFF)
+        endPtr := $004
+
+    other:
+      status := E_FLASH_FILE_MODE
+
+  if status == SUCCESS
+    fl_hModified[handle]~~
+    byte[pBuff][endPtr++] := byte_value
+    if isSeeking
+      fl_hSeekPtr[handle] := endPtr
+      fl_hSeekFileOffset[handle]++
+    else
+      fl_hEndPtr[handle] := endPtr
+
+PRI fl_close_no_lock(handle) : status | open_mode, chain_block_address, head_block_id, chain_block_id, chainState
+' Close an open Flash file (internal, no lock).
+' Port of flash_fs.spin2 close_no_lock().
+'
+' @param handle - handle to close
+' @returns status - SUCCESS or error code
+
+  fl_errorCode := SUCCESS
+
+  if fl_hModified[handle]
+    open_mode := fl_hStatus[handle]
+    case open_mode
+      FL_H_WRITE, FL_H_APPEND:
+        fl_write_block(handle, fl_hEndPtr[handle])
+
+        head_block_id := fl_hHeadBlockID[handle]
+        chain_block_id := fl_hChainBlockID[handle]
+        chain_block_address := fl_hChainBlockAddr[handle]
+        chainState := chain_block_id == head_block_id ? B_HEAD : B_BODY
+
+        fl_activate_block(chain_block_address, fl_hChainLifeCycle[handle])
+
+        if open_mode & FL_H_FORK
+          fl_delete_chain_from_id(chain_block_id, 0, 0, True)
+
+        field[fl_BlockState][chain_block_address] := chainState
+        field[fl_IDToBlock][chain_block_id] := chain_block_address
+
+        if fl_hCircularLength[handle]
+          fl_froncate_file(head_block_id, fl_hCircularLength[handle])
+
+      FL_H_READWRITE:
+        if fl_hModified[handle]~
+          fl_rewrite_block(handle)
+
+  fl_hEndPtr[handle] := 0
+  fl_hSeekPtr[handle] := FL_NOT_ENABLED
+  fl_hSeekFileOffset[handle] := 0
+  fl_hChainBlockID[handle] := 0
+  fl_hChainBlockAddr[handle] := 0
+  fl_hChainLifeCycle[handle] := 0
+  fl_hModified[handle]~
+
+PRI fl_finish_open_read(p_filename, max_file_length) : handle | signature, block_id, lenInBytes, offsetInBytes, bNeedSeek
+' Open a Flash file for reading.
+' Port of flash_fs.spin2 finish_open_read().
+'
+' @param p_filename - address of filename zstring
+' @param max_file_length - max circular length (0 for normal)
+' @returns handle - handle or negative error code
+
+  ifnot signature := fl_get_file_head_signature(p_filename)
+    return fl_set_error(E_FILE_NOT_FOUND)
+
+  bNeedSeek := true
+  handle := fl_new_handle(p_filename)
+  if handle < 0
+    return handle
+  fl_hCircularLength[handle] := max_file_length
+  fl_hStatus[handle] := FL_H_READ
+  block_id := signature.[19..8]
+  fl_hHeadBlockID[handle] := block_id
+
+  if max_file_length > 0 and signature.[2] == 0
+    lenInBytes := fl_count_file_bytes_id(block_id)
+    if fl_showRTdebug
+      debug("*** OLD format circular read! ", udec_(lenInBytes), " max=", udec_(max_file_length))
+    if lenInBytes > max_file_length
+      bNeedSeek := false
+      offsetInBytes := lenInBytes - max_file_length
+      block_id, fl_hEndPtr[handle], _ := fl_locate_file_byte(block_id, offsetInBytes)
+      fl_read_block_id(block_id, fl_buffer_pointer(handle), $000, $FFF)
+  if bNeedSeek
+    fl_seek_no_locks(handle, 0)
+
+PRI fl_finish_open_write(p_filename, max_file_length) : handle | signature, ptr
+' Open a Flash file for writing (overwrites existing).
+' Port of flash_fs.spin2 finish_open_write().
+'
+' @param p_filename - address of filename zstring
+' @param max_file_length - max circular length (0 for normal)
+' @returns handle - handle or negative error code
+
+  handle := fl_new_handle(p_filename)
+  if handle < 0
+    return handle
+  fl_hCircularLength[handle] := max_file_length
+
+  if signature := fl_get_file_head_signature(p_filename)
+    fl_start_write(handle, FL_H_APPEND, signature.[19..8], fl_next_active_cycle(signature.[7..5]))
+  else
+    fl_start_write(handle, FL_H_WRITE, fl_next_available_block_id(), %011)
+
+PRI fl_finish_open_append(p_filename, max_file_length) : handle | signature, end_block_address, endPtr, bytes_used, ptr
+' Open a Flash file for append (file must exist).
+' Port of flash_fs.spin2 finish_open_append().
+'
+' @param p_filename - address of filename zstring
+' @param max_file_length - max circular length (0 for normal)
+' @returns handle - handle or negative error code
+
+  handle := fl_new_handle(p_filename)
+  if handle < 0
+    return handle
+  fl_hCircularLength[handle] := max_file_length
+
+  if signature := fl_get_file_head_signature(p_filename)
+    fl_start_modify(handle, FL_H_APPEND, signature.[19..8], $FFFFFF, true)
+  else
+    fl_start_write(handle, FL_H_WRITE, fl_next_available_block_id(), %011)
+
+PRI fl_finish_open_readwrite(p_filename) : handle | signature, head_block_id
+' Open an existing Flash file for read/modify/write.
+' Port of flash_fs.spin2 finish_open_readwrite().
+'
+' @param p_filename - address of filename zstring
+' @returns handle - handle or negative error code
+
+  handle := fl_new_handle(p_filename)
+  if handle < 0
+    return handle
+
+  if signature := fl_get_file_head_signature(p_filename)
+    fl_start_modify(handle, FL_H_READWRITE, signature.[19..8], 0, true)
+  else
+    head_block_id := fl_next_available_block_id()
+    fl_build_head_block(fl_buffer_pointer(handle), fl_filename_pointer(handle), head_block_id)
+    fl_start_modify(handle, FL_H_READWRITE, head_block_id, 0, false)
+
+' ─── Step 7: Top-Level Flash Operations ────────────────────────────────────
+
+PRI fl_open(p_filename, mode) : handle | findings, bFileExists
+' Open Flash file in mode.
+' Port of flash_fs.spin2 open() — no mount check, no lock.
+'
+' @param p_filename - address of filename zstring
+' @param mode - FILEMODE_READ, FILEMODE_WRITE, FILEMODE_APPEND, etc.
+' @returns handle - handle or negative error code
+
+  fl_errorCode := SUCCESS
+  handle := FL_NOT_VALID
+
+  case mode
+    "r", "R":
+    "a", "A", "w", "W", FILEMODE_READ_EXTENDED, FILEMODE_WRITE_EXTENDED:
+      ifnot fl_blocks_free()
+        return fl_set_error(E_FLASH_DRIVE_FULL)
+    other: return fl_set_error(E_FLASH_FILE_MODE)
+
+  bFileExists := fl_exists_no_lock(p_filename)
+
+  case mode
+    "r", "R", FILEMODE_READ_EXTENDED:
+      ifnot bFileExists
+        return fl_set_error(E_FILE_NOT_FOUND)
+
+  if handle == FL_NOT_VALID and fl_is_file_open(p_filename, FL_H_READ_WRITE)
+    return fl_set_error(E_FLASH_FILE_OPEN)
+
+  if fl_errorCode <> SUCCESS
+    return fl_errorCode
+
+  case mode
+    "r", "R"  : handle := fl_finish_open_read(p_filename, 0)
+    "w", "W"  : handle := fl_finish_open_write(p_filename, 0)
+    "a", "A"  :
+      if bFileExists
+        handle := fl_finish_open_append(p_filename, 0)
+      else
+        handle := fl_finish_open_write(p_filename, 0)
+    FILEMODE_READ_EXTENDED : handle := fl_finish_open_readwrite(p_filename)
+    FILEMODE_WRITE_EXTENDED: handle := fl_finish_open_readwrite(p_filename)
+
+  if handle < 0
+    fl_set_error(handle)
+
+PRI fl_open_circular(p_filename, mode, max_file_length) : handle | bFileExists
+' Open Flash circular file.
+' Port of flash_fs.spin2 open_circular() — no mount check, no lock.
+'
+' @param p_filename - address of filename zstring
+' @param mode - "r"/"R" or "a"/"A"
+' @param max_file_length - max file size in bytes
+' @returns handle - handle or negative error code
+
+  if max_file_length < 1
+    return fl_set_error(E_FLASH_BAD_FILE_LENGTH)
+
+  case mode
+    "r", "R":
+    "a", "A":
+    other: return fl_set_error(E_FLASH_FILE_MODE)
+
+  fl_errorCode := SUCCESS
+  handle := FL_NOT_VALID
+
+  bFileExists := fl_exists_no_lock(p_filename)
+
+  case mode
+    "r", "R":
+      ifnot bFileExists
+        return fl_set_error(E_FILE_NOT_FOUND)
+    "a", "A":
+      ifnot fl_blocks_free()
+        return fl_set_error(E_FLASH_DRIVE_FULL)
+
+  if handle == FL_NOT_VALID and fl_is_file_open(p_filename, FL_H_READ_WRITE)
+    return fl_set_error(E_FLASH_FILE_OPEN)
+
+  if fl_errorCode <> SUCCESS
+    return fl_errorCode
+
+  case mode
+    "a", "A":
+      if bFileExists
+        handle := fl_finish_open_append(p_filename, max_file_length)
+      else
+        handle := fl_finish_open_write(p_filename, max_file_length)
+    "r", "R": handle := fl_finish_open_read(p_filename, max_file_length)
+
+  if handle < 0
+    fl_set_error(handle)
+
+PRI fl_close(handle) : status
+' Close a Flash file handle.
+' Port of flash_fs.spin2 close() — no mount check, no lock.
+'
+' @param handle - handle to close
+' @returns status - SUCCESS or error code
+
+  if handle < 0 or handle > MAX_OPEN_FILES - 1
+    return fl_set_error(E_FLASH_BAD_HANDLE)
+
+  status := fl_close_no_lock(handle)
+  fl_hCircularLength[handle] := 0
+  fl_hHeadBlockID[handle] := FL_NOT_VALID
+  fl_hStatus[handle] := 0
+
+  ' Release unified handle
+  fl_free_handle(handle)
+
+PRI fl_flush(handle) : status
+' Flush pending Flash writes (close then reopen in append).
+' Port of flash_fs.spin2 flush() — no mount check, no lock.
+'
+' @param handle - handle to flush
+' @returns status - SUCCESS or error code
+
+  if handle < 0 or handle > MAX_OPEN_FILES - 1
+    return fl_set_error(E_FLASH_BAD_HANDLE)
+
+  fl_errorCode := SUCCESS
+
+  case fl_hStatus[handle]
+    FL_H_WRITE, FL_H_APPEND:
+      fl_close_no_lock(handle)
+      fl_start_modify(handle, FL_H_APPEND, fl_hHeadBlockID[handle], $FFFFFF, true)
+
+    FL_H_READWRITE:
+      if fl_hModified[handle]
+        fl_rewrite_block(handle)
+
+    other:
+      fl_set_error(E_FLASH_FILE_MODE)
+
+  fl_hModified[handle]~
+
+  return fl_errorCode
+
+PRI fl_read(handle, p_buffer, count) : bytes_read | byteIndex, readValue, checkValue
+' Read bytes from a Flash file.
+' Port of flash_fs.spin2 read() — no mount check, no lock.
+'
+' @param handle - handle to file open for reading
+' @param p_buffer - destination buffer
+' @param count - max bytes to read
+' @returns bytes_read - bytes actually read
+
+  fl_errorCode := SUCCESS
+
+  if (checkValue := fl_ensure_handle_mode(handle, FL_H_READ | FL_H_MODIFY)) < 0
+    fl_set_error(checkValue)
+    bytes_read := 0
+  else
+    bytes_read := 0
+    repeat count with byteIndex
+      if (readValue := fl_rd_byte_no_locks(handle)) < 0
+        fl_set_error(readValue)
+        quit
+      else
+        BYTE[p_buffer][byteIndex] := readValue
+        bytes_read++
+
+PRI fl_write(handle, p_buffer, count) : bytes_written | checkValue, byteIndex, wr_value, wr_status
+' Write bytes to a Flash file.
+' Port of flash_fs.spin2 write() — no mount check, no lock.
+'
+' @param handle - handle to file open for writing
+' @param p_buffer - source buffer
+' @param count - bytes to write
+' @returns bytes_written - bytes actually written
+
+  fl_errorCode := SUCCESS
+
+  if (checkValue := fl_ensure_handle_mode(handle, FL_H_WRITE)) < 0
+    bytes_written := fl_set_error(checkValue)
+  else
+    bytes_written := 0
+    repeat count with byteIndex
+      wr_value := BYTE[p_buffer][byteIndex]
+      if (wr_status := fl_wr_byte_no_locks(handle, wr_value)) < 0
+        fl_set_error(wr_status)
+        if bytes_written == 0
+          bytes_written := fl_errorCode
+        quit
+      else
+        bytes_written++
+
+PRI fl_seek(handle, position, whence) : end_position | file_length, file_position, block_id, pBuff
+' Seek within a Flash file.
+' Port of flash_fs.spin2 seek() — no mount check, no lock.
+'
+' @param handle - handle to open file
+' @param position - byte position or offset
+' @param whence - SK_FILE_START or SK_CURRENT_POSN
+' @returns end_position - resulting position or negative error code
+
+  if handle < 0 or handle > MAX_OPEN_FILES - 1
+    return fl_set_error(E_FLASH_BAD_HANDLE)
+  if whence <> SK_FILE_START and whence <> SK_CURRENT_POSN
+    return fl_set_error(E_FLASH_BAD_SEEK_ARG)
+  if whence == SK_FILE_START and position < 0
+    return fl_set_error(E_FLASH_FILE_SEEK)
+
+  case fl_hStatus[handle]
+    FL_H_READ:
+    FL_H_READWRITE:
+    other:
+      return fl_set_error(E_FLASH_FILE_MODE)
+
+  fl_errorCode := SUCCESS
+
+  if whence == SK_FILE_START
+    file_position := position
+  else
+    file_position := fl_hSeekPtr[handle] <> FL_NOT_ENABLED ? fl_hSeekFileOffset[handle] : fl_hEndPtr[handle]
+    file_position += position
+
+  file_length, _, _ := fl_count_file_bytes(field[fl_IDToBlock][fl_hHeadBlockID[handle]])
+
+  if file_length > 0 and position == POSX
+    file_position := file_length
+
+  if file_length < 0
+    end_position := fl_set_error(file_length)
+  elseif fl_hCircularLength[handle] > 0 and (file_position < 0 or file_position > fl_hCircularLength[handle])
+    end_position := fl_set_error(E_FLASH_FILE_SEEK)
+  elseif file_position >= 0 and file_position <= file_length
+    fl_seek_no_locks(handle, file_position)
+    end_position := file_position
+  else
+    end_position := fl_set_error(E_FLASH_FILE_SEEK)
+
+PRI fl_delete(p_filename) : status | signature
+' Delete a Flash file.
+' Port of flash_fs.spin2 delete() — no mount check, no lock.
+'
+' @param p_filename - address of filename zstring
+' @returns status - SUCCESS or error code
+
+  status := fl_errorCode := SUCCESS
+
+  if fl_is_file_open(p_filename, FL_H_READ_WRITE)
+    return fl_set_error(E_FLASH_FILE_OPEN)
+
+  ifnot signature := fl_get_file_head_signature(p_filename)
+    return fl_set_error(E_FILE_NOT_FOUND)
+
+  fl_delete_chain_from_id(signature.[19..8], 0, 0, False)
+
+PRI fl_rename(p_cur_filename, p_new_filename) : status | signature, new_block_address, cur_block_address, next_cycle_bits
+' Rename a Flash file.
+' Port of flash_fs.spin2 rename() — no mount check, no lock.
+'
+' @param p_cur_filename - current filename
+' @param p_new_filename - new filename
+' @returns status - SUCCESS or error code
+
+  fl_errorCode := SUCCESS
+
+  if fl_is_file_open(p_cur_filename, FL_H_READ_WRITE)
+    return fl_set_error(E_FLASH_FILE_OPEN)
+
+  if fl_is_file_open(p_new_filename, FL_H_READ_WRITE)
+    return fl_set_error(E_FLASH_FILE_OPEN)
+
+  ifnot fl_available_blocks()
+    return fl_set_error(E_FLASH_DRIVE_FULL)
+
+  if fl_get_file_head_signature(p_new_filename)
+    return fl_set_error(E_FLASH_FILE_EXISTS)
+
+  ifnot signature := fl_get_file_head_signature(p_cur_filename)
+    return fl_set_error(E_FILE_NOT_FOUND)
+
+  new_block_address := fl_next_block_address()
+  cur_block_address := field[fl_IDToBlock][signature.[19..8]]
+
+  fl_read_block_addr(cur_block_address, @fl_tmpBlockBuff, $000, $FFF)
+  LONG[@fl_tmpBlockBuff][1].[31..12] := fl_filename_crc(p_new_filename)
+  bytefill(@fl_tmpBlockBuff + $008, $E5, FL_FILENAME_SIZE)
+  strcopy(@fl_tmpBlockBuff + $008, p_new_filename, FL_FILENAME_SIZE - 1)
+  fl_activate_updated_block(new_block_address, @fl_tmpBlockBuff)
+  fl_cancel_block(cur_block_address)
+
+  field[fl_IDToBlock][signature.[19..8]] := new_block_address
+  field[fl_BlockState][new_block_address] := B_HEAD
+  field[fl_BlockState][cur_block_address] := B_FREE
+
+PRI fl_exists(p_filename) : bExists
+' Check if Flash file exists.
+' Port of flash_fs.spin2 exists() — no mount check, no lock.
+'
+' @param p_filename - address of filename zstring
+' @returns bExists - TRUE if file exists
+
+  fl_errorCode := SUCCESS
+  bExists := fl_exists_no_lock(p_filename)
+
+PRI fl_file_size(p_filename) : size_in_bytes | signature
+' Get Flash file size by name.
+' Port of flash_fs.spin2 file_size() — no mount check, no lock.
+'
+' @param p_filename - address of filename zstring
+' @returns size_in_bytes - file size or negative error code
+
+  fl_errorCode := SUCCESS
+
+  if signature := fl_get_file_head_signature(p_filename)
+    size_in_bytes, _, _ := fl_count_file_bytes(field[fl_IDToBlock][signature.[19..8]])
+  else
+    size_in_bytes := fl_set_error(E_FILE_NOT_FOUND)
+
+PRI fl_stats() : used_blocks, free_blocks, file_count | block_address
+' Get Flash filesystem statistics.
+' Port of flash_fs.spin2 stats() — no mount check, no lock.
+'
+' @returns used_blocks - blocks in use
+' @returns free_blocks - free blocks
+' @returns file_count - number of files
+
+  fl_errorCode := SUCCESS
+
+  used_blocks := 0
+  free_blocks := 0
+  file_count := 0
+
+  repeat FL_BLOCKS with block_address
+    case field[fl_BlockState][block_address]
+      B_FREE: free_blocks++
+      B_TEMP: used_blocks++
+      B_HEAD: used_blocks++
+              file_count++
+      B_BODY: used_blocks++
+
+PRI fl_directory(p_block_id, p_filename, p_file_size) : status | blockID, block_address, signature
+' Get next Flash file entry for directory iteration.
+' Port of flash_fs.spin2 directory() — no mount check, no lock.
+'
+' @param p_block_id - pointer to current block ID (auto-advanced)
+' @param p_filename - pointer to 128-byte filename buffer
+' @param p_file_size - pointer to LONG receiving file size
+' @returns status - SUCCESS
+
+  fl_errorCode := SUCCESS
+
+  BYTE[p_filename][0] := 0
+
+  repeat while LONG[p_block_id] < FL_BLOCKS
+    blockID := LONG[p_block_id]++
+    if field[fl_IDValid][blockID]
+      block_address := field[fl_IDToBlock][blockID]
+      if field[fl_BlockState][block_address] == B_HEAD
+        fl_read_block_addr(block_address, p_filename, $008, $088)
+        LONG[p_file_size], _, _ := fl_count_file_bytes(block_address)
+        quit
+
+PRI fl_create_file(p_filename, fill_value, byte_count) : status | signature, head_block_id, block_id, block_address, notHead, dataOffset, isLast, currOffset, NextID_EndPtr
+' Create pre-allocated Flash file filled with specified value.
+' Port of flash_fs.spin2 create_file() — no mount check, no lock.
+'
+' @param p_filename - address of filename zstring
+' @param fill_value - initial byte value
+' @param byte_count - desired file length in bytes
+' @returns status - SUCCESS or error code
+
+  fl_errorCode := SUCCESS
+
+  if fl_is_file_open(p_filename, FL_H_READ_WRITE)
+    return fl_set_error(E_FLASH_FILE_OPEN)
+
+  ifnot fl_available_blocks()
+    return fl_set_error(E_FLASH_DRIVE_FULL)
+
+  if signature := fl_get_file_head_signature(p_filename)
+    return fl_set_error(E_FLASH_FILE_EXISTS)
+
+  block_id := head_block_id := fl_next_available_block_id()
+
+  repeat
+    block_address := fl_next_block_address()
+    ifnot notHead
+      fl_build_head_block(@fl_tmpBlockBuff, p_filename, 0)
+      dataOffset := $088
+    else
+      dataOffset := $004
+    bytefill(@fl_tmpBlockBuff + dataOffset, fill_value, BLOCK_SIZE - dataOffset)
+    if isLast := byte_count <= (currOffset += $FFC - dataOffset)
+      NextID_EndPtr := byte_count - currOffset + $FFC
+    else
+      NextID_EndPtr := fl_next_available_block_id()
+    LONG[@fl_tmpBlockBuff].[0] := !isLast
+    LONG[@fl_tmpBlockBuff].[1] := notHead
+    LONG[@fl_tmpBlockBuff].[19..8] := block_id
+    LONG[@fl_tmpBlockBuff].[31..20] := NextID_EndPtr
+    fl_program_block(block_address, @fl_tmpBlockBuff, %011)
+    if notHead
+      fl_activate_block(block_address, %011)
+    field[fl_IDToBlock][block_id] := block_address
+    field[fl_BlockState][block_address] := notHead ? B_BODY : B_HEAD
+    block_id := NextID_EndPtr
+    notHead := true
+  until isLast
+
+  fl_activate_block(field[fl_IDToBlock][head_block_id], %011)
+CON '' ═══════════════════════════════════════════════════════════════════════════
     '' PUBLIC API - Multi-cog safe via worker cog
     '' All operations are serialized through send_command()
     '' ═══════════════════════════════════════════════════════════════════════════
@@ -2785,16 +4615,21 @@ PUB mount(dev) : result
         if dev == DEV_SD
           return false
 
-  ' Mount Flash if requested (Phase 2+ stub)
+  ' Mount Flash if requested
   if dev == DEV_FLASH or dev == DEV_BOTH
     if flash_mounted
       debug("  [mount] Flash already mounted")
     else
-      debug("  [mount] Flash mount not yet implemented (Phase 2)")
-      set_error(E_NOT_MOUNTED)
-      if dev == DEV_FLASH
-        return false
-      ' DEV_BOTH: Flash failure is non-fatal if SD succeeded
+      result := send_command(CMD_FLASH_MOUNT, 0, 0, 0, 0)
+      if result == SUCCESS
+        flash_mounted := TRUE
+        debug("  [mount] Flash mount successful")
+      else
+        debug("  [mount] Flash mount failed with error ", sdec_(result))
+        set_error(result)
+        if dev == DEV_FLASH
+          return false
+        ' DEV_BOTH: Flash failure is non-fatal if SD succeeded
 
   ' Return TRUE if all requested devices are mounted
   case dev
@@ -3927,9 +5762,11 @@ PUB unmount(dev) : result
 
   if dev == DEV_FLASH or dev == DEV_BOTH
     if flash_mounted
-      ' Phase 2+ stub: flash unmount
+      ' Clear Flash handle state
+      bytefill(@fl_hStatus, 0, MAX_OPEN_FILES)
+      wordfill(@fl_hHeadBlockID, FL_NOT_VALID, MAX_OPEN_FILES)
       flash_mounted := FALSE
-      debug("  [unmount] Flash unmounted (stub)")
+      debug("  [unmount] Flash unmounted")
 
   return true
 
@@ -3953,11 +5790,19 @@ PUB openFileRead(dev, p_path) : handle
 '' Multiple files can be open simultaneously with independent positions.
 '' Use closeFileHandle() when done.
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
 
-  send_command(CMD_OPEN_READ, p_path, 0, 0, 0)
-  handle := pb_data0
+  case dev
+    DEV_SD:
+      send_command(CMD_OPEN_READ, p_path, 0, 0, 0)
+      handle := pb_data0
+    DEV_FLASH:
+      send_command(CMD_FLASH_OPEN, p_path, FILEMODE_READ, 0, 0)
+      handle := pb_data0
+    other:
+      return set_error(E_BAD_DEVICE)
   if handle >= 0
     debug("  [openFileRead] Opened handle ", udec_(handle))
   else
@@ -3967,14 +5812,22 @@ PUB openFileRead(dev, p_path) : handle
 
 PUB openFileWrite(dev, p_path) : handle
 '' Open file for writing/append (V3 multi-file) - opens for appending.
-'' Position is set to end of file. Only one write handle per file allowed.
+'' SD: opens for append. Flash: opens for write (overwrites).
 '' Use closeFileHandle() when done to flush data.
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
 
-  send_command(CMD_OPEN_WRITE, p_path, 0, 0, 0)
-  handle := pb_data0
+  case dev
+    DEV_SD:
+      send_command(CMD_OPEN_WRITE, p_path, 0, 0, 0)
+      handle := pb_data0
+    DEV_FLASH:
+      send_command(CMD_FLASH_OPEN, p_path, FILEMODE_WRITE, 0, 0)
+      handle := pb_data0
+    other:
+      return set_error(E_BAD_DEVICE)
   if handle >= 0
     debug("  [openFileWrite] Opened handle ", udec_(handle))
   else
@@ -3984,14 +5837,22 @@ PUB openFileWrite(dev, p_path) : handle
 
 PUB createFileNew(dev, p_path) : handle
 '' Create new file for writing (V3 multi-file) - creates and opens for writing.
-'' Returns error if file exists.
+'' SD: returns error if file exists. Flash: opens for write (overwrites if exists).
 '' Use closeFileHandle() when done to flush data and finalize size.
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
 
-  send_command(CMD_CREATE, p_path, 0, 0, 0)
-  handle := pb_data0
+  case dev
+    DEV_SD:
+      send_command(CMD_CREATE, p_path, 0, 0, 0)
+      handle := pb_data0
+    DEV_FLASH:
+      send_command(CMD_FLASH_OPEN, p_path, FILEMODE_WRITE, 0, 0)
+      handle := pb_data0
+    other:
+      return set_error(E_BAD_DEVICE)
   if handle >= 0
     debug("  [createFileNew] Created handle ", udec_(handle))
   else
@@ -3999,21 +5860,27 @@ PUB createFileNew(dev, p_path) : handle
     set_error(handle)
   return handle
 
-PUB closeFileHandle(handle) : result
+PUB closeFileHandle(handle) : status
 '' Close file handle (V3 multi-file) - closes handle, flushing pending writes.
 '' For write handles, updates directory with final file size.
 '' After close, handle is invalid and slot is available for reuse.
 ''
 '' @param handle - File handle to close
-'' @returns result - SUCCESS (0) on success, negative error code on failure
+'' @returns status - SUCCESS (0) on success, negative error code on failure
 
-  result := send_command(CMD_CLOSE_H, handle, 0, 0, 0)
-  if result == SUCCESS
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    status := send_command(CMD_FLASH_CLOSE, handle, 0, 0, 0)
+  else
+    status := send_command(CMD_CLOSE_H, handle, 0, 0, 0)
+  if status == SUCCESS
     debug("  [closeFileHandle] Closed handle ", udec_(handle))
   else
-    debug("  [closeFileHandle] Failed: ", sdec_(result))
-    set_error(result)
-  return result
+    debug("  [closeFileHandle] Failed: ", sdec_(status))
+    set_error(status)
+  return status
 
 PUB readHandle(handle, p_buffer, count) : bytes_read
 '' Read from file handle (V3 multi-file) - reads up to count bytes into buffer.
@@ -4025,7 +5892,13 @@ PUB readHandle(handle, p_buffer, count) : bytes_read
 '' @param count - Maximum bytes to read
 '' @returns bytes_read - Bytes actually read (0 at EOF), negative on error
 
-  send_command(CMD_READ_H, handle, p_buffer, count, 0)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FLASH_READ, handle, p_buffer, count, 0)
+  else
+    send_command(CMD_READ_H, handle, p_buffer, count, 0)
   bytes_read := pb_data0
   if bytes_read < 0
     debug("  [readHandle] Failed: ", sdec_(bytes_read))
@@ -4042,26 +5915,39 @@ PUB writeHandle(handle, p_buffer, count) : bytes_written
 '' @param count - Bytes to write
 '' @returns bytes_written - Bytes actually written, negative on error
 
-  send_command(CMD_WRITE_H, handle, p_buffer, count, 0)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FLASH_WRITE, handle, p_buffer, count, 0)
+  else
+    send_command(CMD_WRITE_H, handle, p_buffer, count, 0)
   bytes_written := pb_data0
   if bytes_written < 0
     debug("  [writeHandle] Failed: ", sdec_(bytes_written))
     set_error(bytes_written)
   return bytes_written
 
-PUB seekHandle(handle, position) : result
+PUB seekHandle(handle, position) : status
 '' Seek to position in file (V3 multi-file) - seeks to absolute byte position.
 '' Position must be <= file size (cannot seek past EOF).
 ''
 '' @param handle - Valid file handle
 '' @param position - Absolute byte position to seek to
-'' @returns result - SUCCESS (0) on success, negative error code on failure
+'' @returns status - SUCCESS (0) on success, negative error code on failure
 
-  result := send_command(CMD_SEEK_H, handle, position, 0, 0)
-  if result <> SUCCESS
-    debug("  [seekHandle] Failed: ", sdec_(result))
-    set_error(result)
-  return result
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FLASH_SEEK, handle, position, SK_FILE_START, 0)
+    status := pb_data0 < 0 ? pb_data0 : SUCCESS
+  else
+    status := send_command(CMD_SEEK_H, handle, position, 0, 0)
+  if status <> SUCCESS
+    debug("  [seekHandle] Failed: ", sdec_(status))
+    set_error(status)
+  return status
 
 PUB tellHandle(handle) : position
 '' Get current position (V3 multi-file) - returns current byte position in file.
@@ -4069,26 +5955,47 @@ PUB tellHandle(handle) : position
 '' @param handle - Valid file handle
 '' @returns position - Current position (0-based), negative on error
 
-  send_command(CMD_TELL_H, handle, 0, 0, 0)
-  if pb_status == SUCCESS
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FLASH_SEEK, handle, 0, SK_CURRENT_POSN, 0)
     position := pb_data0
   else
-    position := pb_status
-    set_error(position)
+    send_command(CMD_TELL_H, handle, 0, 0, 0)
+    if pb_status == SUCCESS
+      position := pb_data0
+    else
+      position := pb_status
+      set_error(position)
   return position
 
-PUB eofHandle(handle) : is_eof
+PUB eofHandle(handle) : is_eof | cur_pos, fsize
 '' Check if at end of file (V3 multi-file) - returns TRUE if at or past EOF.
 ''
 '' @param handle - Valid file handle
 '' @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
 
-  send_command(CMD_EOF_H, handle, 0, 0, 0)
-  if pb_status == SUCCESS
-    is_eof := pb_data0 <> 0
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    ' Flash EOF: compare current seek position to file size
+    cur_pos := tellHandle(handle)
+    fsize := fileSizeHandle(handle)
+    if cur_pos < 0
+      is_eof := cur_pos
+    elseif fsize < 0
+      is_eof := fsize
+    else
+      is_eof := cur_pos >= fsize
   else
-    is_eof := pb_status
-    set_error(is_eof)
+    send_command(CMD_EOF_H, handle, 0, 0, 0)
+    if pb_status == SUCCESS
+      is_eof := pb_data0 <> 0
+    else
+      is_eof := pb_status
+      set_error(is_eof)
   return is_eof
 
 PUB fileSizeHandle(handle) : size
@@ -4098,26 +6005,40 @@ PUB fileSizeHandle(handle) : size
 '' @param handle - Valid file handle
 '' @returns size - File size in bytes, negative on error
 
-  send_command(CMD_FILESIZE_H, handle, 0, 0, 0)
-  if pb_status == SUCCESS
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    ' Flash: seek to end (POSX) returns file length
+    send_command(CMD_FLASH_SEEK, handle, POSX, SK_FILE_START, 0)
     size := pb_data0
   else
-    size := pb_status
-    set_error(size)
+    send_command(CMD_FILESIZE_H, handle, 0, 0, 0)
+    if pb_status == SUCCESS
+      size := pb_data0
+    else
+      size := pb_status
+      set_error(size)
   return size
 
-PUB syncHandle(handle) : result
+PUB syncHandle(handle) : status
 '' Flush handle to disk (V3 multi-file) - flushes pending writes and updates directory.
 '' File remains open for further operations.
 ''
 '' @param handle - Valid file handle
-'' @returns result - SUCCESS (0) on success, negative error code on failure
+'' @returns status - SUCCESS (0) on success, negative error code on failure
 
-  result := send_command(CMD_SYNC_H, handle, 0, 0, 0)
-  if result <> SUCCESS
-    debug("  [syncHandle] Failed: ", sdec_(result))
-    set_error(result)
-  return result
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    status := send_command(CMD_FLASH_FLUSH, handle, 0, 0, 0)
+  else
+    status := send_command(CMD_SYNC_H, handle, 0, 0, 0)
+  if status <> SUCCESS
+    debug("  [syncHandle] Failed: ", sdec_(status))
+    set_error(status)
+  return status
 
 PUB syncAllHandles() : result
 '' Flush all handles to disk (V3 multi-file) - flushes all open write handles.
@@ -4189,31 +6110,47 @@ PRI countFreeClusters() : count | fat_idx, entry
     fat_idx += 4
   fat_sec_in_buf := -1                                                          '  invalidate FAT buffer
 
-PUB deleteFile(dev, name_ptr) : result
+PUB deleteFile(dev, name_ptr) : deleted | status
 '' Delete file (multi-cog safe) - deletes file from current directory.
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated filename string
-'' @returns result - TRUE on success, FALSE if not found or protected
+'' @returns deleted - TRUE on success, FALSE if not found or protected
 
-  result := send_command(CMD_DELETE, name_ptr, 0, 0, 0)
-  if result == SUCCESS
+  case dev
+    DEV_SD:
+      status := send_command(CMD_DELETE, name_ptr, 0, 0, 0)
+    DEV_FLASH:
+      status := send_command(CMD_FLASH_DELETE, name_ptr, 0, 0, 0)
+    other:
+      set_error(E_BAD_DEVICE)
+      return false
+  if status == SUCCESS
     return true
   else
-    set_error(result)
+    set_error(status)
     return false
 
-PUB rename(dev, old_name, new_name) : result
+PUB rename(dev, old_name, new_name) : renamed | status
 '' Rename file or directory (multi-cog safe).
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param old_name - Pointer to current name string
 '' @param new_name - Pointer to new name string
-'' @returns result - TRUE on success, FALSE if source not found or dest exists
+'' @returns renamed - TRUE on success, FALSE if source not found or dest exists
 
-  result := send_command(CMD_RENAME, old_name, new_name, 0, 0)
-  if result == SUCCESS
+  case dev
+    DEV_SD:
+      status := send_command(CMD_RENAME, old_name, new_name, 0, 0)
+    DEV_FLASH:
+      status := send_command(CMD_FLASH_RENAME, old_name, new_name, 0, 0)
+    other:
+      set_error(E_BAD_DEVICE)
+      return false
+  if status == SUCCESS
     return true
   else
-    set_error(result)
+    set_error(status)
     return false
 
 PUB moveFile(dev, name_ptr, dest_folder) : result
@@ -4230,12 +6167,12 @@ PUB moveFile(dev, name_ptr, dest_folder) : result
     set_error(result)
     return false
 
-PUB freeSpace(dev) : result
+PUB freeSpace(dev) : free_count
 '' Get free space (multi-cog safe).
-'' SD: returns free sectors. Flash: returns free blocks (Phase 2+).
+'' SD: returns free sectors. Flash: returns free blocks.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
-'' @returns result - Number of free sectors/blocks, 0 on error
+'' @returns free_count - Number of free sectors/blocks, 0 on error
 
   case dev
     DEV_SD:
@@ -4244,8 +6181,10 @@ PUB freeSpace(dev) : result
       else
         return 0
     DEV_FLASH:
-      ' Phase 2+ stub
-      return 0
+      if send_command(CMD_FLASH_STATS, 0, 0, 0, 0) == SUCCESS
+        return pb_data1                                                             ' free_blocks from fl_stats()
+      else
+        return 0
     other:
       return 0
 
@@ -4372,10 +6311,10 @@ CON '' ════════════════════════�
     '' UNIFIED DEVICE-LEVEL METHODS (ADR-9)
     '' ═══════════════════════════════════════════════════════════════════════════
 
-PUB serial_number(dev) : sn_hi, sn_lo
+PUB serial_number(dev) : sn_hi, sn_lo | status
 '' Get device serial number.
 '' SD: returns 32-bit CID serial (sn_hi=0, sn_lo=serial). Requires SD_INCLUDE_REGISTERS.
-'' Flash: returns 64-bit JEDEC unique ID (Phase 2+).
+'' Flash: returns 64-bit JEDEC unique ID.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @returns sn_hi - High 32 bits (Flash only; 0 for SD)
@@ -4387,9 +6326,19 @@ PUB serial_number(dev) : sn_hi, sn_lo
       sn_hi := 0
       sn_lo := 0
     DEV_FLASH:
-      ' Phase 2+ stub
-      sn_hi := 0
-      sn_lo := 0
+      if not flash_mounted
+        set_error(E_DEVICE_NOT_MOUNTED)
+        sn_hi := 0
+        sn_lo := 0
+      else
+        status := send_command(CMD_SERIAL_NUMBER, 0, 0, 0, 0)
+        if status == SUCCESS
+          sn_hi := pb_data0
+          sn_lo := pb_data1
+        else
+          set_error(status)
+          sn_hi := 0
+          sn_lo := 0
     other:
       sn_hi := 0
       sn_lo := 0
@@ -4432,32 +6381,34 @@ PUB stats(dev) : used, free_ct, file_count
       used := 0
       file_count := 0
     DEV_FLASH:
-      ' Phase 2+ stub
-      used := 0
-      free_ct := 0
-      file_count := 0
+      if send_command(CMD_FLASH_STATS, 0, 0, 0, 0) == SUCCESS
+        used := pb_data0
+        free_ct := pb_data1
+        file_count := pb_data2
     other:
       used := 0
       free_ct := 0
       file_count := 0
 
-PUB exists(dev, p_filename) : result
+PUB exists(dev, p_filename) : found
 '' Check if file exists on device.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
-'' @returns result - TRUE if file exists
+'' @returns found - TRUE if file exists
 
   case dev
     DEV_SD:
       ' For SD, attempt to open for read and close — if succeeds, file exists
       ' TODO: more efficient implementation using searchDirectory
-      result := false
+      found := false
     DEV_FLASH:
-      ' Phase 2+ stub
-      result := false
+      if send_command(CMD_FLASH_EXISTS, p_filename, 0, 0, 0) == SUCCESS
+        found := pb_data0 <> 0
+      else
+        found := false
     other:
-      result := false
+      found := false
 
 PUB file_size(dev, p_filename) : size
 '' Get file size by name (without opening).
@@ -4472,15 +6423,17 @@ PUB file_size(dev, p_filename) : size
       ' Not directly supported for SD (use openFileRead + fileSizeHandle)
       size := E_NOT_SUPPORTED
     DEV_FLASH:
-      ' Phase 2+ stub
-      size := E_NOT_MOUNTED
+      if send_command(CMD_FLASH_FILE_SIZE, p_filename, 0, 0, 0) == SUCCESS
+        size := pb_data0
+      else
+        size := pb_status
     other:
       size := E_BAD_DEVICE
 
 CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' FLASH-SPECIFIC API STUBS (Phase 2+)
-    '' These methods will be implemented when Flash SPI is ported to worker cog.
-    '' For now they return E_NOT_MOUNTED / E_DEVICE_NOT_MOUNTED.
+    '' FLASH-STYLE API (Phase 3)
+    '' Mode-based open, circular files, create_file, close, flush.
+    '' SD operations mapped to SD handle commands where applicable.
     '' ═══════════════════════════════════════════════════════════════════════════
 
 PUB open(dev, p_filename, mode) : handle
@@ -4504,8 +6457,11 @@ PUB open(dev, p_filename, mode) : handle
           set_error(E_NOT_SUPPORTED)
           return E_NOT_SUPPORTED
     DEV_FLASH:
-      set_error(E_NOT_MOUNTED)
-      return E_NOT_MOUNTED
+      send_command(CMD_FLASH_OPEN, p_filename, mode, 0, 0)
+      handle := pb_data0
+      if handle < 0
+        set_error(handle)
+      return handle
     other:
       set_error(E_BAD_DEVICE)
       return E_BAD_DEVICE
@@ -4522,8 +6478,11 @@ PUB open_circular(dev, p_filename, mode, max_file_length) : handle
   if dev <> DEV_FLASH
     set_error(E_NOT_SUPPORTED)
     return E_NOT_SUPPORTED
-  set_error(E_NOT_MOUNTED)
-  return E_NOT_MOUNTED
+  send_command(CMD_FLASH_OPEN_CIRC, p_filename, mode, max_file_length, 0)
+  handle := pb_data0
+  if handle < 0
+    set_error(handle)
+  return handle
 
 PUB create_file(dev, p_filename, fill_value, byte_count) : status
 '' Pre-allocate Flash file (Flash-specific, Phase 2+).
@@ -4537,8 +6496,10 @@ PUB create_file(dev, p_filename, fill_value, byte_count) : status
   if dev <> DEV_FLASH
     set_error(E_NOT_SUPPORTED)
     return E_NOT_SUPPORTED
-  set_error(E_NOT_MOUNTED)
-  return E_NOT_MOUNTED
+  status := send_command(CMD_FLASH_CREATE_FILE, p_filename, fill_value, byte_count, 0)
+  if status <> SUCCESS
+    set_error(status)
+  return status
 
 PUB close(handle) : status
 '' Close file handle (alias for closeFileHandle).
@@ -4610,8 +6571,18 @@ PUB string_for_error(code) : p_str
     E_INVALID_HANDLE:        return @s_invalid_handle
     E_FILE_ALREADY_OPEN:     return @s_file_already_open
     E_NOT_A_DIR_HANDLE:      return @s_not_a_dir_handle
+    E_FLASH_BAD_HANDLE:      return @s_flash_bad_handle
+    E_FLASH_NO_HANDLE:       return @s_flash_no_handle
     E_FLASH_DRIVE_FULL:      return @s_flash_drive_full
+    E_FLASH_FILE_WRITING:    return @s_flash_file_writing
+    E_FLASH_FILE_READING:    return @s_flash_file_reading
+    E_FLASH_FILE_OPEN:       return @s_flash_file_open
     E_FLASH_FILE_MODE:       return @s_flash_file_mode
+    E_FLASH_FILE_SEEK:       return @s_flash_file_seek
+    E_FLASH_BAD_BLOCKS:      return @s_flash_bad_blocks
+    E_FLASH_BAD_FILE_LENGTH: return @s_flash_bad_file_len
+    E_FLASH_BAD_SEEK_ARG:    return @s_flash_bad_seek_arg
+    E_FLASH_FILE_EXISTS:     return @s_flash_file_exists
     E_BAD_DEVICE:            return @s_bad_device
     E_DEVICE_NOT_MOUNTED:    return @s_device_not_mounted
     E_NOT_SUPPORTED:         return @s_not_supported
@@ -4642,8 +6613,18 @@ DAT '' error strings for string_for_error()
   s_invalid_handle    BYTE  "Invalid handle", 0
   s_file_already_open BYTE  "File already open", 0
   s_not_a_dir_handle  BYTE  "Not a directory handle", 0
+  s_flash_bad_handle  BYTE  "Flash bad handle", 0
+  s_flash_no_handle   BYTE  "Flash no handle available", 0
   s_flash_drive_full  BYTE  "Flash drive full", 0
+  s_flash_file_writing BYTE "Flash file open for writing", 0
+  s_flash_file_reading BYTE "Flash file open for reading", 0
+  s_flash_file_open   BYTE  "Flash file is open", 0
   s_flash_file_mode   BYTE  "Flash file mode error", 0
+  s_flash_file_seek   BYTE  "Flash seek past end", 0
+  s_flash_bad_blocks  BYTE  "Flash bad blocks removed", 0
+  s_flash_bad_file_len BYTE "Flash bad file length", 0
+  s_flash_bad_seek_arg BYTE "Flash bad seek argument", 0
+  s_flash_file_exists BYTE  "Flash file already exists", 0
   s_bad_device        BYTE  "Bad device", 0
   s_device_not_mounted BYTE "Device not mounted", 0
   s_not_supported     BYTE  "Not supported", 0
@@ -5457,6 +7438,9 @@ PRI initCard() : result | t, resp, card_version, acmd41_arg
     debug("    [initCard] Treating as Ver 1.x card")
     card_version := 1
     acmd41_arg := $00000000
+
+  ' Save acmd41_arg for reinitCard() use
+  saved_acmd41_arg := acmd41_arg
 
   ' ============================================
   ' STEP 6: ACMD41 - SD_SEND_OP_COND (loop until ready)

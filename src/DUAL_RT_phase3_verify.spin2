@@ -1,0 +1,355 @@
+'' =================================================================================================
+''
+''   File....... DUAL_RT_phase3_verify.spin2
+''   Purpose.... Phase 3 verification: exercise dual_fs.spin2 Flash file operations
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 26 FEB 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+'' Enable debug diagnostics
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+
+OBJ
+    fs    : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+sd_testfile     BYTE    "SDTEST3.TXT", 0
+sd_testdata     BYTE    "SD Phase 3 regression data", 0
+
+fl_testfile     BYTE    "FLTEST1", 0
+fl_testfile2    BYTE    "FLTEST2", 0
+fl_renamed      BYTE    "FLRNAME", 0
+fl_testdata     BYTE    "Hello from Flash Phase 3!", 0
+fl_appenddata   BYTE    " Appended!", 0
+
+readBuffer      BYTE    0[512]
+readBuf_guard   BYTE    0[16]
+
+PUB go() | workerCog, ok, status, bExists, bDeleted, bRenamed, bIntact, handle, bytesRead, bytesWritten, fSize, freeBlocks, used, freeCt, fileCt, sdFreeSpace
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS Phase 3 Verification Tests")
+    debug("  (Flash file operations)")
+    debug("==============================================")
+
+    ' ----------------------------------
+    ' TEST GROUP 1: SD regression — init and mount still work
+    ' ----------------------------------
+    utils.startTestGroup(@"SD regression: init and mount")
+
+    utils.startTest(@"init() with valid pins")
+    workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateRange(workerCog, @"init() returns cog ID", 0, 7)
+
+    utils.startTest(@"mount(DEV_BOTH)")
+    ok := fs.mount(fs.DEV_BOTH)
+    utils.evaluateBool(ok, @"mount(DEV_BOTH)", true)
+
+    utils.startTest(@"mounted(DEV_SD) after mount")
+    ok := fs.mounted(fs.DEV_SD)
+    utils.evaluateBool(ok, @"mounted(DEV_SD)", true)
+
+    utils.startTest(@"mounted(DEV_FLASH) after mount")
+    ok := fs.mounted(fs.DEV_FLASH)
+    utils.evaluateBool(ok, @"mounted(DEV_FLASH)", true)
+
+    ' Save SD free space for later regression check
+    sdFreeSpace := fs.freeSpace(fs.DEV_SD)
+    debug(" ")
+    debug("  SD freeSpace: ", udec_(sdFreeSpace), " sectors")
+
+    ' SD write/read round-trip
+    fs.deleteFile(fs.DEV_SD, @sd_testfile)
+
+    utils.startTest(@"SD createFileNew + write + close")
+    handle := fs.createFileNew(fs.DEV_SD, @sd_testfile)
+    utils.evaluateRange(handle, @"createFileNew(SD) handle", 0, 5)
+    if handle >= 0
+      bytesWritten := fs.writeHandle(handle, @sd_testdata, strsize(@sd_testdata))
+      fs.closeFileHandle(handle)
+      utils.evaluateSingleValue(bytesWritten, @"writeHandle bytes", strsize(@sd_testdata))
+
+    ' ----------------------------------
+    ' TEST GROUP 2: Flash mount verified
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash mount")
+
+    utils.startTest(@"mounted(DEV_FLASH)")
+    ok := fs.mounted(fs.DEV_FLASH)
+    utils.evaluateBool(ok, @"mounted(DEV_FLASH)", true)
+
+    utils.startTest(@"freeSpace(DEV_FLASH) > 0")
+    freeBlocks := fs.freeSpace(fs.DEV_FLASH)
+    utils.evaluateRange(freeBlocks, @"freeSpace(DEV_FLASH)", 1, $7FFF_FFFF)
+    debug(" ")
+    debug("  Flash freeSpace: ", udec_(freeBlocks), " blocks")
+
+    ' ----------------------------------
+    ' TEST GROUP 3: Flash exists + file_size
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash exists and file_size")
+
+    ' Clean up any prior test files
+    fs.deleteFile(fs.DEV_FLASH, @fl_testfile)
+    fs.deleteFile(fs.DEV_FLASH, @fl_testfile2)
+    fs.deleteFile(fs.DEV_FLASH, @fl_renamed)
+
+    utils.startTest(@"exists(FLASH, nonexistent) = false")
+    bExists := fs.exists(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateBool(bExists, @"exists(nonexistent)", false)
+
+    utils.startTest(@"file_size(FLASH, nonexistent) < 0")
+    fSize := fs.file_size(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateBool(fSize < 0, @"file_size(nonexistent) err", true)
+
+    utils.startTest(@"create_file(FLASH, 100 bytes)")
+    status := fs.create_file(fs.DEV_FLASH, @fl_testfile2, $00, 100)
+    utils.evaluateSingleValue(status, @"create_file()", fs.SUCCESS)
+
+    utils.startTest(@"exists(FLASH, created file) = true")
+    bExists := fs.exists(fs.DEV_FLASH, @fl_testfile2)
+    utils.evaluateBool(bExists, @"exists(created)", true)
+
+    ' ----------------------------------
+    ' TEST GROUP 4: Flash write/read round-trip
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash write/read round-trip")
+
+    utils.startTest(@"open(FLASH, WRITE)")
+    handle := fs.open(fs.DEV_FLASH, @fl_testfile, fs.FILEMODE_WRITE)
+    utils.evaluateRange(handle, @"open(WRITE) handle", 0, 5)
+
+    if handle >= 0
+      utils.startTest(@"writeHandle(FLASH) test data")
+      bytesWritten := fs.writeHandle(handle, @fl_testdata, strsize(@fl_testdata))
+      utils.evaluateSingleValue(bytesWritten, @"writeHandle bytes", strsize(@fl_testdata))
+
+      utils.startTest(@"closeFileHandle(FLASH) after write")
+      status := fs.closeFileHandle(handle)
+      utils.evaluateSingleValue(status, @"closeFileHandle()", fs.SUCCESS)
+
+    utils.startTest(@"exists(FLASH) after write")
+    bExists := fs.exists(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateBool(bExists, @"exists after write", true)
+
+    utils.startTest(@"file_size(FLASH) matches")
+    fSize := fs.file_size(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateSingleValue(fSize, @"file_size", strsize(@fl_testdata))
+
+    utils.startTest(@"open(FLASH, READ)")
+    handle := fs.open(fs.DEV_FLASH, @fl_testfile, fs.FILEMODE_READ)
+    utils.evaluateRange(handle, @"open(READ) handle", 0, 5)
+
+    if handle >= 0
+      utils.startTest(@"readHandle(FLASH) returns data")
+      utils.initGuard(@readBuf_guard)
+      bytefill(@readBuffer, 0, 512)
+      bytesRead := fs.readHandle(handle, @readBuffer, 512)
+      utils.checkGuard(@readBuf_guard, @"readBuf guard")
+      utils.evaluateSingleValue(bytesRead, @"readHandle bytes", strsize(@fl_testdata))
+
+      utils.startTest(@"Flash data matches written")
+      utils.evaluateBufferMatch(@readBuffer, @fl_testdata, strsize(@fl_testdata), @"flash read vs written")
+
+      utils.startTest(@"closeFileHandle(FLASH) after read")
+      status := fs.closeFileHandle(handle)
+      utils.evaluateSingleValue(status, @"closeFileHandle()", fs.SUCCESS)
+
+    ' ----------------------------------
+    ' TEST GROUP 5: Flash append
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash append")
+
+    utils.startTest(@"open(FLASH, APPEND)")
+    handle := fs.open(fs.DEV_FLASH, @fl_testfile, fs.FILEMODE_APPEND)
+    utils.evaluateRange(handle, @"open(APPEND) handle", 0, 5)
+
+    if handle >= 0
+      utils.startTest(@"writeHandle(FLASH) append data")
+      bytesWritten := fs.writeHandle(handle, @fl_appenddata, strsize(@fl_appenddata))
+      utils.evaluateSingleValue(bytesWritten, @"writeHandle append", strsize(@fl_appenddata))
+
+      utils.startTest(@"closeFileHandle(FLASH) after append")
+      status := fs.closeFileHandle(handle)
+      utils.evaluateSingleValue(status, @"closeFileHandle()", fs.SUCCESS)
+
+    utils.startTest(@"file_size(FLASH) after append")
+    fSize := fs.file_size(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateSingleValue(fSize, @"file_size after append", strsize(@fl_testdata) + strsize(@fl_appenddata))
+
+    ' ----------------------------------
+    ' TEST GROUP 6: Flash seek
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash seek")
+
+    utils.startTest(@"open(FLASH, READ) for seek test")
+    handle := fs.open(fs.DEV_FLASH, @fl_testfile, fs.FILEMODE_READ)
+    utils.evaluateRange(handle, @"open(READ) handle", 0, 5)
+
+    if handle >= 0
+      utils.startTest(@"seekHandle(FLASH) to offset 6")
+      status := fs.seekHandle(handle, 6)
+      utils.evaluateSingleValue(status, @"seekHandle()", fs.SUCCESS)
+
+      utils.startTest(@"readHandle(FLASH) after seek")
+      bytefill(@readBuffer, 0, 512)
+      bytesRead := fs.readHandle(handle, @readBuffer, 4)
+      utils.evaluateSingleValue(bytesRead, @"readHandle after seek", 4)
+
+      ' "Hello from Flash Phase 3!" — offset 6 = "from"
+      utils.startTest(@"Data at seek position correct")
+      utils.evaluateBufferMatch(@readBuffer, @fl_testdata + 6, 4, @"seek data match")
+
+      utils.startTest(@"closeFileHandle(FLASH) after seek")
+      status := fs.closeFileHandle(handle)
+      utils.evaluateSingleValue(status, @"closeFileHandle()", fs.SUCCESS)
+
+    ' ----------------------------------
+    ' TEST GROUP 7: Flash delete
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash delete")
+
+    utils.startTest(@"deleteFile(FLASH)")
+    bDeleted := fs.deleteFile(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateBool(bDeleted, @"deleteFile()", true)
+
+    utils.startTest(@"exists(FLASH) after delete = false")
+    bExists := fs.exists(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateBool(bExists, @"exists after delete", false)
+
+    utils.startTest(@"file_size(FLASH) after delete < 0")
+    fSize := fs.file_size(fs.DEV_FLASH, @fl_testfile)
+    utils.evaluateBool(fSize < 0, @"file_size after delete", true)
+
+    ' ----------------------------------
+    ' TEST GROUP 8: Flash rename
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash rename")
+
+    ' fl_testfile2 still exists from create_file above
+    utils.startTest(@"rename(FLASH, FLTEST2 -> FLRNAME)")
+    bRenamed := fs.rename(fs.DEV_FLASH, @fl_testfile2, @fl_renamed)
+    utils.evaluateBool(bRenamed, @"rename()", true)
+
+    utils.startTest(@"exists(FLASH, old name) = false")
+    bExists := fs.exists(fs.DEV_FLASH, @fl_testfile2)
+    utils.evaluateBool(bExists, @"exists(old name)", false)
+
+    utils.startTest(@"exists(FLASH, new name) = true")
+    bExists := fs.exists(fs.DEV_FLASH, @fl_renamed)
+    utils.evaluateBool(bExists, @"exists(new name)", true)
+
+    ' Clean up renamed file
+    fs.deleteFile(fs.DEV_FLASH, @fl_renamed)
+
+    ' ----------------------------------
+    ' TEST GROUP 9: Flash stats
+    ' ----------------------------------
+    utils.startTestGroup(@"Flash stats")
+
+    used, freeCt, fileCt := fs.stats(fs.DEV_FLASH)
+    debug(" ")
+    debug("  Flash stats: used=", udec_(used), " free=", udec_(freeCt), " files=", udec_(fileCt))
+
+    utils.startTest(@"stats() returns non-negative used")
+    utils.evaluateRange(used, @"stats used", 0, $7FFF_FFFF)
+
+    utils.startTest(@"stats() returns non-negative free")
+    utils.evaluateRange(freeCt, @"stats free", 0, $7FFF_FFFF)
+
+    ' ----------------------------------
+    ' TEST GROUP 10: SD regression after Flash ops
+    ' ----------------------------------
+    utils.startTestGroup(@"SD regression after Flash ops")
+
+    utils.startTest(@"freeSpace(DEV_SD) still valid")
+    sdFreeSpace := fs.freeSpace(fs.DEV_SD)
+    utils.evaluateRange(sdFreeSpace, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
+
+    utils.startTest(@"openFileRead(SD) still works")
+    handle := fs.openFileRead(fs.DEV_SD, @sd_testfile)
+    utils.evaluateRange(handle, @"openFileRead(SD) handle", 0, 5)
+
+    if handle >= 0
+      utils.startTest(@"readHandle(SD) after Flash ops")
+      bytefill(@readBuffer, 0, 512)
+      bytesRead := fs.readHandle(handle, @readBuffer, 512)
+      utils.evaluateSingleValue(bytesRead, @"readHandle(SD) bytes", strsize(@sd_testdata))
+
+      utils.startTest(@"SD data matches after Flash ops")
+      utils.evaluateBufferMatch(@readBuffer, @sd_testdata, strsize(@sd_testdata), @"SD read vs written")
+
+      fs.closeFileHandle(handle)
+
+    ' Clean up SD test file
+    fs.deleteFile(fs.DEV_SD, @sd_testfile)
+
+    ' ----------------------------------
+    ' TEST GROUP 11: Stack guard
+    ' ----------------------------------
+    utils.startTestGroup(@"Worker cog health")
+
+    utils.startTest(@"checkStackGuard() intact")
+    bIntact := fs.checkStackGuard()
+    utils.evaluateBool(bIntact, @"stack guard intact", true)
+
+    ' Final cleanup
+    fs.unmount(fs.DEV_BOTH)
+    fs.stop()
+
+    ' ----------------------------------
+    ' Summary
+    ' ----------------------------------
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Phase 3 Verification Tests Complete")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
