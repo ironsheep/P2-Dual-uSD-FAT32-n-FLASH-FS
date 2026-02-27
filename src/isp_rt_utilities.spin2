@@ -1,0 +1,521 @@
+'' =================================================================================================
+''
+''   File....... isp_rt_utilities.spin2
+''   Purpose.... This object provides commonly used regression test parts for SD card driver tests
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 16 JAN 2026
+''
+'' =================================================================================================
+
+CON
+
+  TEST_SIGNATURE = $12345678
+
+  GUARD_SIZE    = 16          ' Guard bytes after each buffer
+  GUARD_BYTE    = $CC         ' Sentinel value (distinct from $00, $FF, $AA, $55)
+
+  ' P2 Edge module SD slot pins
+  SD_CS   = 60
+  SD_MOSI = 59
+  SD_MISO = 58
+  SD_SCK  = 61
+
+  ' External SD header (base pin 16)
+  'SD_CS   = 20
+  'SD_MOSI = 19
+  'SD_MISO = 18
+  'SD_SCK  = 21
+
+VAR { test stats vars }
+
+  LONG    numberTests
+  LONG    subTestPer
+  LONG    passCount
+  LONG    failCount
+  LONG    passCountSub
+  LONG    failCountSub
+
+  LONG    varSignature
+
+  byte    filename[128]
+
+PUB null()
+'' This is not an application
+''
+'' (Invoke mount() to use the SD filesystem)
+
+PRI initIfNotAlready()
+' Initialize test counters if not already done
+'
+' Checks signature to ensure one-time initialization
+
+    if varSignature <> TEST_SIGNATURE
+        numberTests := 0
+        subTestPer := 1
+        passCount := 0
+        failCount := 0
+        passCountSub := 0
+        failCountSub := 0
+        varSignature := TEST_SIGNATURE
+        debug("* init VAR")
+
+PUB startTestGroup(pDescription)
+'' Start a new test group with heading
+''
+'' @param pDescription - pointer to description string
+
+    initIfNotAlready()
+    showSubTestResults()
+
+    debug(" ")  ' blank line
+    debug(" ")  ' blank line
+    debug(" ------------------------------------------------------------")
+    debug("* Test Group: ", zstr_(pDescription))
+
+PUB startTest(pDescription) | ecGot, ecExpected, passScaled, failScaled, total
+'' Start a new test with description
+''
+'' @param pDescription - pointer to test description string
+
+    initIfNotAlready()
+    showSubTestResults()
+
+    numberTests++
+    '  now show new test info
+    debug(" ")  ' blank line
+    debug("* Test #", udec_(numberTests), ": ", zstr_(pDescription))
+
+
+PUB showSubTestResults() | passScaled, failScaled, total, pPassFail
+'' Display accumulated sub-test results and reset counters
+
+    if failCountSub <> 0 or passCountSub <> 0
+        total := (passCountSub + failCountSub) / subTestPer
+        passScaled := passCountSub / subTestPer
+        failScaled := total - passScaled
+        debug("  Sub-Test Results: count=", udec_(total), ", Pass: ", udec_(passScaled), ", Fail: ", udec_(failScaled))
+        if failScaled < 0
+          debug("  Sub-Test (", udec(passCountSub, failCountSub), ")")
+
+        if failCountSub <> 0
+            failCount++
+        else
+            passCount++
+        pPassFail := failCountSub <> 0 ? @"FAIL" : @"pass"
+        debug("   -> ", zstr_(pPassFail))
+        passCountSub := 0
+        failCountSub := 0
+
+
+PUB ShowTestEndCounts() | pMsg
+'' Display final summary of all tests with pass/fail counts
+
+    showSubTestResults()  ' flush any pending sub-tests
+
+    debug(" ")  ' blank line
+    debug(" ============================================================")
+    debug("* ", udec_(numberTests), " Tests - Pass: ", udec_(passCount), ", Fail: ", udec_(failCount))
+    if numberTests <> passCount + failCount
+      pMsg := (numberTests > passCount + failCount) ? @"missing" : @"extra"
+      debug("*  BAD TEST COUNTS: ", udec_(numberTests), " <> ", udec_(passCount + failCount), " (", zstr_(pMsg), " ", udec_(abs(numberTests - (passCount + failCount))), " tests)")
+    debug(" ============================================================")
+
+
+PUB setCheckCountPerTest(countTests)
+'' Set the number of subtests per record/group
+''
+'' @param countTests - the number of checks per item tested
+
+    subTestPer := countTests
+
+PUB evaluateSubValue(result, pMessage, expectedResult) | bPassed, pPassFail
+'' Evaluate a sub-test value (for multiple checks within a test)
+''
+'' @param result - the actual result value
+'' @param pMessage - pointer to description string
+'' @param expectedResult - the expected value
+
+    bPassed := result == expectedResult
+    pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
+    ifnot bPassed
+        failCountSub++
+    else
+        passCountSub++
+    ifnot bPassed               ' only show result on failure
+        debug("  Sub-Test: ", zstr_(pMessage))
+        debug("  Value: ", sdec_long_(result), " (expected ", sdec_long_(expectedResult), ")")
+        debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateSubValueHex(result, pMessage, expectedResult) | bPassed, pPassFail
+'' Evaluate a sub-test value in hex format
+''
+'' @param result - the actual result value
+'' @param pMessage - pointer to description string
+'' @param expectedResult - the expected value
+
+    bPassed := result == expectedResult
+    pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
+    ifnot bPassed
+        failCountSub++
+    else
+        passCountSub++
+    ifnot bPassed               ' only show result on failure
+        debug("  Sub-Test: ", zstr_(pMessage))
+        debug("  Value: $", uhex_long_(result), " (expected $", uhex_long_(expectedResult), ")")
+        debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateSubBool(result, pMessage, expectedResult) | bPassed, pPassFail
+'' Evaluate a sub-test boolean value
+''
+'' @param result - the actual boolean result
+'' @param pMessage - pointer to description string
+'' @param expectedResult - the expected boolean value
+
+    bPassed := (result <> 0) == (expectedResult <> 0)
+    pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
+    ifnot bPassed
+        failCountSub++
+    else
+        passCountSub++
+    ifnot bPassed               ' only show result on failure
+        debug("  Sub-Test: ", zstr_(pMessage))
+        debug("  Value: ", udec_(result <> 0), " (expected ", udec_(expectedResult <> 0), ")")
+        debug("   -> ", zstr_(pPassFail))
+
+
+PUB evaluateBool(result, pMessage, expectedResult) | bPassed, pPassFail
+'' Evaluate a boolean result (true/false)
+''
+'' @param result - the actual boolean result
+'' @param pMessage - pointer to description string
+'' @param expectedResult - the expected boolean value
+
+    bPassed := (result <> 0) == (expectedResult <> 0)
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": ", udec_(result <> 0), " (expected ", udec_(expectedResult <> 0), ")")
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": ", udec_(result <> 0))
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+
+PUB recordPass()
+'' Record a pass for a test that doesn't use evaluate functions
+''
+'' Use after startTest() when the test verifies success implicitly
+
+    initIfNotAlready()
+    passCount++
+    debug("   -> pass")
+
+PUB recordFail()
+'' Record a fail for a test that doesn't use evaluate functions
+
+    initIfNotAlready()
+    failCount++
+    debug("   -> FAIL")
+
+
+PUB evaluateSingleValue(result, pMessage, expectedResult) | bPassed, pPassFail
+'' Evaluate a single test result value
+''
+'' @param result - the actual result value
+'' @param pMessage - pointer to description string
+'' @param expectedResult - the expected value
+
+    bPassed := result == expectedResult
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(result), " (expected ", sdec_long_(expectedResult), ")")
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(result))
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateSingleValueHex(result, pMessage, expectedResult) | bPassed, pPassFail
+'' Evaluate a single test result value in hex
+''
+'' @param result - the actual result value
+'' @param pMessage - pointer to description string
+'' @param expectedResult - the expected value
+
+    bPassed := result == expectedResult
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": $", uhex_long_(result), " (expected $", uhex_long_(expectedResult), ")")
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": $", uhex_long_(result))
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateRange(result, pMessage, minExpected, maxExpected) | bPassed, pPassFail
+'' Evaluate that result is within a range
+''
+'' @param result - the actual result value
+'' @param pMessage - pointer to description string
+'' @param minExpected - minimum acceptable value
+'' @param maxExpected - maximum acceptable value
+
+    bPassed := result >= minExpected and result <= maxExpected
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(result), " (expected ", sdec_long_(minExpected), " to ", sdec_long_(maxExpected), ")")
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(result))
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateNotZero(result, pMessage) | bPassed, pPassFail
+'' Evaluate that result is not zero
+''
+'' @param result - the actual result value
+'' @param pMessage - pointer to description string
+
+    bPassed := result <> 0
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(result), " (expected non-zero)")
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(result))
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateStringMatch(pResult, pMessage, pExpected) | bPassed, pPassFail
+'' Evaluate that two strings match
+''
+'' @param pResult - pointer to actual result string
+'' @param pMessage - pointer to description string
+'' @param pExpected - pointer to expected string
+
+    bPassed := strcomp(pResult, pExpected)
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": [", zstr_(pResult), "] (expected [", zstr_(pExpected), "])")
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": [", zstr_(pResult), "]")
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateBufferMatch(pBuffer1, pBuffer2, length, pMessage) | bPassed, pPassFail, idx, mismatchIdx
+'' Evaluate that two buffers match
+''
+'' @param pBuffer1 - pointer to first buffer
+'' @param pBuffer2 - pointer to second buffer
+'' @param length - number of bytes to compare
+'' @param pMessage - pointer to description string
+
+    bPassed := true
+    mismatchIdx := -1
+    repeat idx from 0 to length - 1
+        if BYTE[pBuffer1][idx] <> BYTE[pBuffer2][idx]
+            bPassed := false
+            mismatchIdx := idx
+            quit
+    pPassFail := !bPassed ? @"FAIL" : @"pass"
+    ifnot bPassed
+        debug("  ", zstr_(pMessage), ": mismatch at offset ", udec_(mismatchIdx))
+        debug("    Got: $", uhex_(BYTE[pBuffer1][mismatchIdx]), " Expected: $", uhex_(BYTE[pBuffer2][mismatchIdx]))
+        failCount++
+    else
+        debug("  ", zstr_(pMessage), ": ", udec_(length), " bytes match")
+        passCount++
+    debug("   -> ", zstr_(pPassFail))
+
+
+PUB showError(pCaller, bResult)
+'' Display an error message based on result
+''
+'' @param pCaller - pointer to caller name string
+'' @param bResult - boolean result (false shows error)
+
+    if bResult == false
+        debug("ERROR: ", zstr_(pCaller), " failed!")
+    else
+        debug("OK: ", zstr_(pCaller), " succeeded")
+
+
+' -------
+' Memory dump utilities
+
+PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, rowLen, pCurrByte, lastRowByteCount, bytesSoFar, offset
+'' Dump memory contents in hex format
+''
+'' @param pMessage - pointer to heading message (or 0 for none)
+'' @param pBytes - pointer to memory to dump
+'' @param lenBytes - number of bytes to dump
+
+    if pMessage
+        debug("** ", zstr_(pMessage), ":")
+
+    offset := 0
+    rowCount := lenBytes / 16
+    lastRowByteCount := lenBytes - (rowCount * 16)
+    pCurrByte := pBytes
+    bytesSoFar := 0
+
+    ' emit full lines
+    if rowCount > 0
+        repeat rowCount
+            dbgMemDumpRow(pCurrByte, 16, offset)
+            offset += 16
+            pCurrByte += 16
+            bytesSoFar += 16
+
+    if  bytesSoFar < lenBytes
+        ' emit last line
+        dbgMemDumpRow(pCurrByte, lastRowByteCount, offset)
+
+PRI dbgMemDumpRow(pBytes, lenBytes, offset)
+' Emit a single row of memory dump (address followed by bytes)
+'
+' @param pBytes - pointer to bytes to display
+' @param lenBytes - number of bytes in this row
+' @param offset - offset value to display
+
+    debug(" ", uhex_long_(offset), ": ", uhex_byte_array_(pBytes, lenBytes))
+
+
+' -------
+' Test data generation utilities
+
+PUB fillBufferWithPattern(pBuffer, length, startValue) | idx
+'' Fill buffer with incrementing pattern
+''
+'' @param pBuffer - pointer to buffer to fill
+'' @param length - number of bytes to fill
+'' @param startValue - starting value for pattern
+
+    repeat idx from 0 to length - 1
+        BYTE[pBuffer][idx] := (startValue + idx) & $FF
+
+PUB fillBufferWithValue(pBuffer, length, value) | idx
+'' Fill buffer with constant value
+''
+'' @param pBuffer - pointer to buffer to fill
+'' @param length - number of bytes to fill
+'' @param value - constant value to fill with
+
+    bytefill(pBuffer, value, length)
+
+PUB fillBufferWithRandom(pBuffer, length) | idx
+'' Fill buffer with random values
+''
+'' @param pBuffer - pointer to buffer to fill
+'' @param length - number of bytes to fill
+
+    repeat idx from 0 to length - 1
+        BYTE[pBuffer][idx] := getrnd() & $FF
+
+PUB verifyBufferPattern(pBuffer, length, startValue) : bMatch | idx, expected
+'' Verify buffer contains incrementing pattern
+''
+'' @param pBuffer - pointer to buffer to verify
+'' @param length - number of bytes to verify
+'' @param startValue - starting value for expected pattern
+'' @returns bMatch - true if pattern matches
+
+    bMatch := true
+    repeat idx from 0 to length - 1
+        expected := (startValue + idx) & $FF
+        if BYTE[pBuffer][idx] <> expected
+            bMatch := false
+            debug("  Pattern mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(expected))
+            quit
+
+PUB verifyBufferValue(pBuffer, length, value) : bMatch | idx
+'' Verify buffer contains constant value
+''
+'' @param pBuffer - pointer to buffer to verify
+'' @param length - number of bytes to verify
+'' @param value - expected constant value
+'' @returns bMatch - true if all bytes match
+
+    bMatch := true
+    repeat idx from 0 to length - 1
+        if BYTE[pBuffer][idx] <> value
+            bMatch := false
+            debug("  Value mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(value))
+            quit
+
+
+' -------
+' Buffer overflow guard utilities
+
+PUB initGuard(pGuardStart)
+'' Fill guard zone with sentinel bytes
+''
+'' @param pGuardStart - pointer to start of guard zone (immediately after buffer)
+''
+'' Call BEFORE driver operation to initialize the guard zone.
+
+    bytefill(pGuardStart, GUARD_BYTE, GUARD_SIZE)
+
+PUB checkGuard(pGuardStart, pMessage) : bIntact | idx
+'' Verify all guard bytes are intact
+''
+'' @param pGuardStart - pointer to start of guard zone
+'' @param pMessage - pointer to description string for failure reporting
+'' @returns bIntact - true if all guard bytes are $CC
+''
+'' Call AFTER driver operation. Reports offset and corrupt value on failure.
+'' Silent on pass - does NOT affect test counters.
+
+    bIntact := true
+    repeat idx from 0 to GUARD_SIZE - 1
+        if BYTE[pGuardStart][idx] <> GUARD_BYTE
+            bIntact := false
+            debug("  GUARD VIOLATION: ", zstr_(pMessage), " at offset ", udec_(idx), ": $", uhex_byte_(BYTE[pGuardStart][idx]), " (expected $CC)")
+            quit
+    ifnot bIntact
+        debug("   -> GUARD FAIL")
+
+PUB initAndCheckGuard(pGuardStart, pMessage) : bIntact
+'' Combined check + re-init for use inside loops
+''
+'' @param pGuardStart - pointer to start of guard zone
+'' @param pMessage - pointer to description string for failure reporting
+'' @returns bIntact - true if all guard bytes were $CC before re-init
+''
+'' Checks guard, then re-initializes for next iteration.
+
+    bIntact := checkGuard(pGuardStart, pMessage)
+    initGuard(pGuardStart)
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
