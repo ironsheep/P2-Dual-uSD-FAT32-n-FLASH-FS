@@ -1,0 +1,156 @@
+'' =================================================================================================
+''   File....... DFS_example_basic.spin2
+''   Purpose.... Basic dual filesystem example: mount, write, read on both devices
+''   Author..... Stephen M Moraco
+''               Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 28 FEB 2026
+''   Updated.... 28 FEB 2026
+'' =================================================================================================
+''
+''  This example demonstrates basic dual filesystem operations:
+''    1. Initialize and mount both SD and Flash devices
+''    2. Create and write a text file on each device
+''    3. Read back files and display contents via debug
+''    4. Show filesystem stats for both devices
+''    5. Clean up and unmount
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    ' SD card pins - P2 Edge Module default
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+OBJ
+
+    dfs : "dual_fs"
+
+DAT
+
+    sdFileName    BYTE  "DFSTEST.TXT", 0
+    flFileName    BYTE  "dfstest.txt", 0
+    testContent   BYTE  "Hello from the P2 Dual Filesystem!", 0
+
+VAR
+
+    byte  buffer[512]
+
+PUB go() | workerCog, status, handle, bytes_read, free_sectors
+
+    debug("=== Dual Filesystem Basic Example ===")
+    debug(" ")
+
+    ' --- Step 1: Initialize driver ---
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if workerCog < 0
+        debug("ERROR: Could not start driver")
+        return
+    debug("Driver started on cog ", udec_(workerCog))
+
+    ' --- Step 2: Mount both devices ---
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
+        debug("SD mount FAILED: ", sdec_(status))
+        dfs.stop()
+        return
+    debug("SD card mounted")
+
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+        debug("Flash mount FAILED: ", sdec_(status))
+        dfs.unmount(dfs.DEV_SD)
+        dfs.stop()
+        return
+    debug("Flash mounted")
+    debug(" ")
+
+    ' --- Step 3: Write to SD ---
+    debug("Writing to SD: ", zstr_(@sdFileName))
+    handle := dfs.createFileNew(dfs.DEV_SD, @sdFileName)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, strsize(@testContent))
+        dfs.closeFileHandle(handle)
+        debug("  Wrote ", udec_(strsize(@testContent)), " bytes")
+    else
+        debug("  ERROR creating SD file: ", sdec_(handle))
+
+    ' --- Step 4: Write to Flash ---
+    debug("Writing to Flash: ", zstr_(@flFileName))
+    handle := dfs.open(dfs.DEV_FLASH, @flFileName, dfs.FILEMODE_WRITE)
+    if handle >= 0
+        dfs.wr_str(handle, @testContent)
+        dfs.closeFileHandle(handle)
+        debug("  Wrote string to Flash")
+    else
+        debug("  ERROR creating Flash file: ", sdec_(handle))
+    debug(" ")
+
+    ' --- Step 5: Read back from SD ---
+    debug("Reading from SD: ", zstr_(@sdFileName))
+    handle := dfs.openFileRead(dfs.DEV_SD, @sdFileName)
+    if handle >= 0
+        bytefill(@buffer, 0, 512)
+        bytes_read := dfs.readHandle(handle, @buffer, 511)
+        dfs.closeFileHandle(handle)
+        debug("  Read ", udec_(bytes_read), " bytes: ", zstr_(@buffer))
+    else
+        debug("  ERROR opening SD file: ", sdec_(handle))
+
+    ' --- Step 6: Read back from Flash ---
+    debug("Reading from Flash: ", zstr_(@flFileName))
+    handle := dfs.open(dfs.DEV_FLASH, @flFileName, dfs.FILEMODE_READ)
+    if handle >= 0
+        bytefill(@buffer, 0, 512)
+        bytes_read := dfs.rd_str(handle, @buffer, 511)
+        dfs.closeFileHandle(handle)
+        debug("  Read ", udec_(bytes_read), " bytes: ", zstr_(@buffer))
+    else
+        debug("  ERROR opening Flash file: ", sdec_(handle))
+    debug(" ")
+
+    ' --- Step 7: Show stats ---
+    free_sectors := dfs.freeSpace(dfs.DEV_SD)
+    debug("SD free: ", udec_(free_sectors), " sectors (", udec_(free_sectors / 2048), " MB)")
+    debug("Flash version: ", udec_(dfs.version(dfs.DEV_FLASH)))
+    debug(" ")
+
+    ' --- Step 8: Clean up ---
+    dfs.deleteFile(dfs.DEV_SD, @sdFileName)
+    dfs.deleteFile(dfs.DEV_FLASH, @flFileName)
+    dfs.unmount(dfs.DEV_SD)
+    dfs.unmount(dfs.DEV_FLASH)
+    dfs.stop()
+
+    debug("=== Example complete ===")
+
+
+con { license }
+
+{{
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+}}

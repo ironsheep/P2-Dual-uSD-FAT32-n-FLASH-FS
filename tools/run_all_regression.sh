@@ -1,14 +1,15 @@
 #!/bin/bash
 #
-# run_all_regression.sh - Run Phase 1-3 verification + Phase 4 SD regression tests
+# run_all_regression.sh - Run Phase 1-3 verification + Phase 4 SD + Phase 5 Flash regression
 #
-# Usage: ./run_all_regression.sh [--include-format] [--include-testcard] [--compile-only]
+# Usage: ./run_all_regression.sh [--include-format] [--include-testcard] [--include-8cog] [--compile-only]
 #
 # Runs in order:
 #   1. Phase 1 SD verification (25 tests)
 #   2. Phase 2 dual-device verification (27 tests)
 #   3. Phase 3 Flash file ops verification (43 tests)
 #   4. Phase 4 SD regression suites (345+ tests)
+#   5. Phase 5 Flash regression suites (849+ tests)
 #
 
 set -e
@@ -32,18 +33,30 @@ fi
 
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Pass through arguments to phase4 runner
-PASSTHROUGH_ARGS=("$@")
+# Parse arguments and build per-phase arg lists
 COMPILE_ONLY=false
+PHASE4_ARGS=()
+PHASE5_ARGS=()
+
 for arg in "$@"; do
-    if [[ "$arg" == "--compile-only" ]]; then
-        COMPILE_ONLY=true
-    fi
+    case "$arg" in
+        --compile-only)
+            COMPILE_ONLY=true
+            PHASE4_ARGS+=("$arg")
+            PHASE5_ARGS+=("$arg")
+            ;;
+        --include-format|--include-testcard)
+            PHASE4_ARGS+=("$arg")
+            ;;
+        --include-8cog)
+            PHASE5_ARGS+=("$arg")
+            ;;
+    esac
 done
 
 echo ""
 echo -e "${BOLD}============================================================${NC}"
-echo -e "${BOLD}  Full Regression Suite (Phase 1-3 + Phase 4)${NC}"
+echo -e "${BOLD}  Full Regression Suite (Phase 1-5)${NC}"
 echo -e "${BOLD}============================================================${NC}"
 echo ""
 
@@ -122,11 +135,21 @@ echo ""
 
 # --- Phase 4: SD regression suites ---
 echo -e "${CYAN}=== Phase 4: SD Regression Suites ===${NC}"
-if ./run_phase4_regression.sh "${PASSTHROUGH_ARGS[@]}"; then
+if ./run_phase4_regression.sh "${PHASE4_ARGS[@]}"; then
     PHASE_PASS=$((PHASE_PASS + 1))
 else
     PHASE_FAIL=$((PHASE_FAIL + 1))
     PHASE_FAILED+=("Phase 4")
+fi
+echo ""
+
+# --- Phase 5: Flash regression suites ---
+echo -e "${CYAN}=== Phase 5: Flash Regression Suites ===${NC}"
+if ./run_phase5_regression.sh "${PHASE5_ARGS[@]}"; then
+    PHASE_PASS=$((PHASE_PASS + 1))
+else
+    PHASE_FAIL=$((PHASE_FAIL + 1))
+    PHASE_FAILED+=("Phase 5")
 fi
 echo ""
 

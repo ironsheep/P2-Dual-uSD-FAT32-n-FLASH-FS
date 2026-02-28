@@ -1,0 +1,205 @@
+'' =================================================================================================
+''   File....... DFS_example_data_logger.spin2
+''   Purpose.... Data logger example: log to Flash, archive to SD
+''   Author..... Stephen M Moraco
+''               Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 28 FEB 2026
+''   Updated.... 28 FEB 2026
+'' =================================================================================================
+''
+''  This example demonstrates a common dual-FS pattern:
+''    1. Mount both devices
+''    2. Open a log file on Flash for fast writes
+''    3. Write timestamped sensor readings (simulated)
+''    4. Close the Flash log
+''    5. Archive (copy) the log from Flash to SD for long-term storage
+''    6. Verify the archive exists on SD
+''    7. Clean up
+''
+''  This pattern is useful for embedded data acquisition where:
+''    - Flash provides fast, reliable write buffering
+''    - SD provides large, removable archival storage
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    NUM_SAMPLES  = 20                                           ' number of simulated readings
+    BUFFER_SIZE  = 512
+
+OBJ
+
+    dfs : "dual_fs"
+
+DAT
+
+    flLogName     BYTE  "sensor.log", 0
+    sdArchiveName BYTE  "SENSOR.LOG", 0
+
+VAR
+
+    byte  buffer[BUFFER_SIZE]
+
+PUB go() | status, handle, sample, reading, bytes_read
+
+    debug("=== Data Logger Example ===")
+    debug("Pattern: Log to Flash, archive to SD")
+    debug(" ")
+
+    ' --- Initialize and mount ---
+    if dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("ERROR: Driver init failed")
+        return
+
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
+        debug("SD mount FAILED: ", sdec_(status))
+        dfs.stop()
+        return
+
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+        debug("Flash mount FAILED: ", sdec_(status))
+        dfs.unmount(dfs.DEV_SD)
+        dfs.stop()
+        return
+    debug("Both devices mounted")
+
+    ' --- Step 1: Open Flash log for writing ---
+    debug(" ")
+    debug("Opening Flash log: ", zstr_(@flLogName))
+    dfs.deleteFile(dfs.DEV_FLASH, @flLogName)
+    handle := dfs.open(dfs.DEV_FLASH, @flLogName, dfs.FILEMODE_WRITE)
+    if handle < 0
+        debug("  ERROR opening log: ", sdec_(handle))
+        cleanup()
+        return
+
+    ' --- Step 2: Write header ---
+    dfs.wr_str(handle, @"# Sensor Log")
+    dfs.wr_str(handle, @"# Sample, Reading")
+
+    ' --- Step 3: Write simulated sensor data ---
+    debug("Logging ", udec_(NUM_SAMPLES), " samples to Flash...")
+    repeat sample from 1 to NUM_SAMPLES
+        ' Simulate a sensor reading (temperature-like values 200-300)
+        reading := 200 + (sample * 5) + (getrnd() +/ 10)
+        ' Format as simple CSV: "sample,reading"
+        format_sample(@buffer, sample, reading)
+        dfs.wr_str(handle, @buffer)
+        if (sample // 5) == 0
+            debug("  Logged sample ", udec_(sample), "/", udec_(NUM_SAMPLES))
+
+    ' --- Step 4: Close Flash log ---
+    dfs.closeFileHandle(handle)
+    debug("Flash log closed")
+
+    ' --- Step 5: Archive Flash log to SD ---
+    debug(" ")
+    debug("Archiving to SD: ", zstr_(@sdArchiveName))
+    dfs.deleteFile(dfs.DEV_SD, @sdArchiveName)
+    status := dfs.copyFile(dfs.DEV_FLASH, @flLogName, dfs.DEV_SD, @sdArchiveName)
+    if status == dfs.SUCCESS
+        debug("  Archive successful!")
+    else
+        debug("  Archive FAILED: ", sdec_(status))
+        cleanup()
+        return
+
+    ' --- Step 6: Verify archive on SD ---
+    debug("Verifying archive...")
+    handle := dfs.openFileRead(dfs.DEV_SD, @sdArchiveName)
+    if handle >= 0
+        bytefill(@buffer, 0, BUFFER_SIZE)
+        bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
+        dfs.closeFileHandle(handle)
+        debug("  Archive contains ", udec_(bytes_read), " bytes")
+        debug("  First bytes: ", zstr_(@buffer))
+    else
+        debug("  ERROR: Cannot read archive: ", sdec_(handle))
+
+    ' --- Step 7: Clean up ---
+    debug(" ")
+    cleanup()
+    debug("=== Data Logger Example Complete ===")
+
+
+PRI format_sample(p_buf, sample_num, value) | idx, digit, started
+
+'' Format "NNN,VVV" into buffer as a zero-terminated string.
+
+  idx := 0
+
+  ' Format sample number (1-999)
+  started := false
+  if sample_num >= 100
+    digit := sample_num / 100
+    BYTE[p_buf][idx++] := "0" + digit
+    sample_num -= digit * 100
+    started := true
+  if sample_num >= 10 or started
+    digit := sample_num / 10
+    BYTE[p_buf][idx++] := "0" + digit
+    sample_num -= digit * 10
+  BYTE[p_buf][idx++] := "0" + sample_num
+
+  BYTE[p_buf][idx++] := ","
+
+  ' Format value (0-999)
+  started := false
+  if value >= 100
+    digit := value / 100
+    BYTE[p_buf][idx++] := "0" + digit
+    value -= digit * 100
+    started := true
+  if value >= 10 or started
+    digit := value / 10
+    BYTE[p_buf][idx++] := "0" + digit
+    value -= digit * 10
+  BYTE[p_buf][idx++] := "0" + value
+
+  BYTE[p_buf][idx] := 0
+
+
+PRI cleanup()
+
+    dfs.deleteFile(dfs.DEV_SD, @sdArchiveName)
+    dfs.deleteFile(dfs.DEV_FLASH, @flLogName)
+    dfs.unmount(dfs.DEV_SD)
+    dfs.unmount(dfs.DEV_FLASH)
+    dfs.stop()
+    debug("Cleaned up and stopped")
+
+
+con { license }
+
+{{
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+}}

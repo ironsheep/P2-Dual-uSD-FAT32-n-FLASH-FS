@@ -1,0 +1,183 @@
+'' =================================================================================================
+''   File....... DFS_example_cross_copy.spin2
+''   Purpose.... Cross-device file copy example: SD <-> Flash round-trip
+''   Author..... Stephen M Moraco
+''               Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 28 FEB 2026
+''   Updated.... 28 FEB 2026
+'' =================================================================================================
+''
+''  This example demonstrates cross-device file operations:
+''    1. Create a file on SD with known content
+''    2. Copy it from SD to Flash using copyFile()
+''    3. Copy it from Flash back to SD under a new name
+''    4. Verify all three copies match
+''    5. Clean up
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    BUFFER_SIZE = 512
+
+OBJ
+
+    dfs : "dual_fs"
+
+DAT
+
+    sdOriginal    BYTE  "XCOPYSRC.TXT", 0
+    flCopy        BYTE  "xcopy_fl.txt", 0
+    sdRoundTrip   BYTE  "XCOPYRT.TXT", 0
+    testData      BYTE  "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-Cross-Device-Copy-Test!", 0
+
+VAR
+
+    byte  buf1[BUFFER_SIZE]
+    byte  buf2[BUFFER_SIZE]
+
+PUB go() | status, handle, bytes_read, bMatch, i
+
+    debug("=== Cross-Device Copy Example ===")
+    debug(" ")
+
+    ' --- Initialize and mount both ---
+    if dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("ERROR: Driver init failed")
+        return
+
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
+        debug("SD mount FAILED: ", sdec_(status))
+        dfs.stop()
+        return
+
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+        debug("Flash mount FAILED: ", sdec_(status))
+        dfs.unmount(dfs.DEV_SD)
+        dfs.stop()
+        return
+    debug("Both devices mounted")
+
+    ' --- Step 1: Create source file on SD ---
+    debug(" ")
+    debug("Creating source file on SD...")
+    dfs.deleteFile(dfs.DEV_SD, @sdOriginal)
+    handle := dfs.createFileNew(dfs.DEV_SD, @sdOriginal)
+    if handle < 0
+        debug("  ERROR: ", sdec_(handle))
+        cleanup()
+        return
+    dfs.writeHandle(handle, @testData, strsize(@testData))
+    dfs.closeFileHandle(handle)
+    debug("  Created ", zstr_(@sdOriginal), " (", udec_(strsize(@testData)), " bytes)")
+
+    ' --- Step 2: Copy SD -> Flash ---
+    debug("Copying SD -> Flash...")
+    dfs.deleteFile(dfs.DEV_FLASH, @flCopy)
+    status := dfs.copyFile(dfs.DEV_SD, @sdOriginal, dfs.DEV_FLASH, @flCopy)
+    if status <> dfs.SUCCESS
+        debug("  FAILED: ", sdec_(status))
+        cleanup()
+        return
+    debug("  Copied to Flash: ", zstr_(@flCopy))
+
+    ' --- Step 3: Copy Flash -> SD (round-trip) ---
+    debug("Copying Flash -> SD (round-trip)...")
+    dfs.deleteFile(dfs.DEV_SD, @sdRoundTrip)
+    status := dfs.copyFile(dfs.DEV_FLASH, @flCopy, dfs.DEV_SD, @sdRoundTrip)
+    if status <> dfs.SUCCESS
+        debug("  FAILED: ", sdec_(status))
+        cleanup()
+        return
+    debug("  Copied to SD: ", zstr_(@sdRoundTrip))
+
+    ' --- Step 4: Verify original and round-trip match ---
+    debug(" ")
+    debug("Verifying round-trip integrity...")
+
+    ' Read original from SD
+    handle := dfs.openFileRead(dfs.DEV_SD, @sdOriginal)
+    if handle >= 0
+        bytefill(@buf1, 0, BUFFER_SIZE)
+        bytes_read := dfs.readHandle(handle, @buf1, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+    else
+        debug("  ERROR reading original: ", sdec_(handle))
+        cleanup()
+        return
+
+    ' Read round-trip copy from SD
+    handle := dfs.openFileRead(dfs.DEV_SD, @sdRoundTrip)
+    if handle >= 0
+        bytefill(@buf2, 0, BUFFER_SIZE)
+        bytes_read := dfs.readHandle(handle, @buf2, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+    else
+        debug("  ERROR reading round-trip: ", sdec_(handle))
+        cleanup()
+        return
+
+    ' Compare byte-by-byte
+    bMatch := true
+    repeat i from 0 to strsize(@testData) - 1
+        if buf1[i] <> buf2[i]
+            bMatch := false
+            debug("  MISMATCH at byte ", udec_(i), ": ", uhex_(buf1[i]), " vs ", uhex_(buf2[i]))
+            quit
+
+    if bMatch
+        debug("  PASS: Round-trip data matches original!")
+    else
+        debug("  FAIL: Data mismatch after round-trip copy")
+
+    ' --- Step 5: Clean up ---
+    debug(" ")
+    cleanup()
+    debug("=== Example complete ===")
+
+
+PRI cleanup()
+
+    dfs.deleteFile(dfs.DEV_SD, @sdOriginal)
+    dfs.deleteFile(dfs.DEV_SD, @sdRoundTrip)
+    dfs.deleteFile(dfs.DEV_FLASH, @flCopy)
+    dfs.unmount(dfs.DEV_SD)
+    dfs.unmount(dfs.DEV_FLASH)
+    dfs.stop()
+    debug("Cleaned up and stopped")
+
+
+con { license }
+
+{{
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+}}

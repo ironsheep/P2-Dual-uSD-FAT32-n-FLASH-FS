@@ -572,6 +572,7 @@ DAT '' singleton control - SHARED across all object instances
                 WORD    0[7]            ' crtTime, crtDate, accDate, clusHI, wrtTime, wrtDate, clusLO
                 LONG    0              ' fileSize
   vol_label     BYTE    0[12]           ' Volume label (11 chars + null)
+  copy_buf      BYTE    0[512]          ' Scratch buffer for copyFile() operations
 
   ' ═══════════════════════════════════════════════════════════════════════════
   ' V3 FILE HANDLE TABLE - 28 bytes per handle
@@ -6882,19 +6883,62 @@ CON ' ════════════════════════�
     ' CROSS-DEVICE OPERATIONS
     ' ═══════════════════════════════════════════════════════════════════════════
 
-PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status
-'' Copy file between devices (Phase 4+).
-'' Worker reads from source device and writes to destination internally.
+PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status | srcHandle, dstHandle, bytes_read, bytes_written
+'' Copy file between devices.
+'' Opens source for read, creates destination for write, copies data in 512-byte
+'' chunks, then closes both handles. Works for SD-to-Flash, Flash-to-SD, or
+'' same-device copies.
 ''
 '' @param srcDev - Source device (DEV_SD or DEV_FLASH)
-'' @param p_src_path - Source file path
+'' @param p_src_path - Source filename
 '' @param dstDev - Destination device (DEV_SD or DEV_FLASH)
-'' @param p_dst_path - Destination file path
-'' @returns status - SUCCESS or error code
+'' @param p_dst_path - Destination filename
+'' @returns status - SUCCESS or negative error code
 
-  ' Phase 4+ stub
-  set_error(E_NOT_SUPPORTED)
-  return E_NOT_SUPPORTED
+  ' Validate devices
+  if srcDev <> DEV_SD and srcDev <> DEV_FLASH
+    return set_error(E_BAD_DEVICE)
+  if dstDev <> DEV_SD and dstDev <> DEV_FLASH
+    return set_error(E_BAD_DEVICE)
+
+  ' Open source for read
+  srcHandle := openFileRead(srcDev, p_src_path)
+  if srcHandle < 0
+    return srcHandle
+
+  ' Create/open destination for write
+  if dstDev == DEV_SD
+    dstHandle := createFileNew(dstDev, p_dst_path)
+  else
+    dstHandle := open(dstDev, p_dst_path, FILEMODE_WRITE)
+  if dstHandle < 0
+    closeFileHandle(srcHandle)
+    return dstHandle
+
+  ' Copy loop: read from source, write to destination
+  status := SUCCESS
+  repeat
+    bytes_read := readHandle(srcHandle, @copy_buf, 512)
+    if bytes_read < 0
+      status := bytes_read
+      quit
+    if bytes_read == 0
+      quit
+    bytes_written := writeHandle(dstHandle, @copy_buf, bytes_read)
+    if bytes_written < 0
+      status := bytes_written
+      quit
+    if bytes_written <> bytes_read
+      status := E_IO_ERROR
+      quit
+
+  ' Close both handles (always, even on error)
+  closeFileHandle(dstHandle)
+  closeFileHandle(srcHandle)
+
+  if status < 0
+    set_error(status)
+  return status
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
     ' ERROR REPORTING
