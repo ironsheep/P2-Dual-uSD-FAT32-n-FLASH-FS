@@ -1,0 +1,560 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_multihandle_tests.spin2
+''   Purpose.... This object tests V3 multi-file handle functionality
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 29 JAN 2026
+''
+'' =================================================================================================
+''
+'' Tests the V3 handle-based file API:
+''   - Multiple simultaneous file opens
+''   - Per-handle independent positions
+''   - Single-writer policy enforcement
+''   - Handle allocation and release
+''   - Data persistence through write/close/reopen/read cycle
+''   - Sync operations
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     ' V3 Error codes we expect to encounter
+     E_TOO_MANY_FILES    = -90
+     E_INVALID_HANDLE    = -91
+     E_FILE_ALREADY_OPEN = -92
+     E_FILE_NOT_FOUND    = -40
+     E_FILE_EXISTS       = -41
+
+     ' Maximum handles to test (must match driver's MAX_OPEN_FILES)
+     MAX_TEST_HANDLES = 6
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames - unique names for multi-handle tests
+testfile1       BYTE    "MHTEST1.TXT", 0
+testfile2       BYTE    "MHTEST2.TXT", 0
+testfile3       BYTE    "MHTEST3.TXT", 0
+testfile4       BYTE    "MHTEST4.TXT", 0
+testfile5       BYTE    "MHTEST5.TXT", 0      ' Fifth file for overflow test
+
+' Test content - unique for each file
+content1        BYTE    "Content for file ONE - first test file", 0
+content2        BYTE    "Content for file TWO - second test file", 0
+content3        BYTE    "Content for file THREE - third test file", 0
+content4        BYTE    "Content for file FOUR - fourth test file", 0
+
+' Buffer for read operations
+readBuffer      BYTE    0[256]
+readBuffer_guard BYTE   0[16]
+
+PUB go() | workerCog, result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
+'' Main entry point for multi-handle regression tests
+''
+'' Tests V3 handle-based file API with multiple simultaneous file handles
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) V3 - Multi-Handle Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount the card first
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    ' Show card info
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+
+    ' Clean up any existing test files
+    cleanupTestFiles()
+
+    ' Create test files with known content
+    createTestFiles()
+
+    ' ======================================================================
+    ' TEST GROUP: Multiple Read Handles
+    ' ======================================================================
+    utils.startTestGroup(@"Multiple Read Handles")
+
+    ' Test: Open 4 files for read, get unique handles
+    utils.startTest(@"Open 4 files for read returns unique handles 0-3")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile2)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @testfile3)
+    h4 := dfs.openFileRead(dfs.DEV_SD, @testfile4)
+
+    utils.evaluateSubBool(h1 >= 0, @"Handle 1 valid", true)
+    utils.evaluateSubBool(h2 >= 0, @"Handle 2 valid", true)
+    utils.evaluateSubBool(h3 >= 0, @"Handle 3 valid", true)
+    utils.evaluateSubBool(h4 >= 0, @"Handle 4 valid", true)
+    utils.evaluateSubBool(h1 <> h2 and h2 <> h3 and h3 <> h4, @"All handles unique", true)
+
+    ' Test: Read from all 4 files, verify correct data
+    utils.startTest(@"Read from 4 handles returns correct data")
+    utils.setCheckCountPerTest(4)
+
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h1, @readBuffer, strsize(@content1))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strcomp(@readBuffer, @content1), @"Handle 1 content", true)
+
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h2, @readBuffer, strsize(@content2))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strcomp(@readBuffer, @content2), @"Handle 2 content", true)
+
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h3, @readBuffer, strsize(@content3))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strcomp(@readBuffer, @content3), @"Handle 3 content", true)
+
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h4, @readBuffer, strsize(@content4))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strcomp(@readBuffer, @content4), @"Handle 4 content", true)
+    utils.setCheckCountPerTest(1)
+
+    ' Close all handles
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+    dfs.closeFileHandle(h3)
+    dfs.closeFileHandle(h4)
+
+    ' ======================================================================
+    ' TEST GROUP: Independent Positions
+    ' ======================================================================
+    utils.startTestGroup(@"Independent Handle Positions")
+
+    ' Test: Same file, two read handles, independent positions
+    utils.startTest(@"Same file on 2 handles have independent positions")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+
+    utils.evaluateSubBool(h1 >= 0, @"First handle valid", true)
+    utils.evaluateSubBool(h2 >= 0, @"Second handle valid", true)
+    utils.evaluateSubBool(h1 <> h2, @"Handles are different", true)
+
+    ' Seek handle 1 to position 12 ("file ONE" starts there)
+    dfs.seekHandle(h1, 12)
+
+    ' Read from both - should get different data
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h1, @readBuffer, 8)  ' Read "file ONE"
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strncmp(@readBuffer, @"file ONE", 8), @"Handle 1 at pos 12", true)
+
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h2, @readBuffer, 7)  ' Read "Content"
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strncmp(@readBuffer, @"Content", 7), @"Handle 2 at pos 0", true)
+
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+
+    ' ======================================================================
+    ' TEST GROUP: Single-Writer Policy
+    ' ======================================================================
+    utils.startTestGroup(@"Single-Writer Policy")
+
+    ' Test: Second write open returns E_FILE_ALREADY_OPEN
+    utils.startTest(@"Second write-open returns E_FILE_ALREADY_OPEN")
+    h1 := dfs.openFileWrite(dfs.DEV_SD, @testfile1)
+    utils.evaluateSubBool(h1 >= 0, @"First write-open succeeds", true)
+
+    h2 := dfs.openFileWrite(dfs.DEV_SD, @testfile1)
+    utils.evaluateSubValue(h2, @"Second write-open error", E_FILE_ALREADY_OPEN)
+
+    dfs.closeFileHandle(h1)
+
+    ' Test: Write open blocks write, but read is allowed
+    utils.startTest(@"Read allowed while file open for write")
+    h1 := dfs.openFileWrite(dfs.DEV_SD, @testfile1)
+    utils.evaluateSubBool(h1 >= 0, @"Write-open succeeds", true)
+
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateSubBool(h2 >= 0, @"Read-open succeeds", true)
+
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+
+    ' ======================================================================
+    ' TEST GROUP: Handle Limit Enforcement
+    ' ======================================================================
+    utils.startTestGroup(@"Handle Limit Enforcement")
+
+    ' Test: Opening 7th file returns E_TOO_MANY_FILES (MAX_OPEN_FILES = 6)
+    utils.startTest(@"Opening 7th file returns E_TOO_MANY_FILES")
+
+    ' Create the 5th test file
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile5)
+    if h1 >= 0
+        dfs.closeFileHandle(h1)
+
+    ' Open all 6 handles (reuse testfile1 for 6th handle)
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile2)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @testfile3)
+    h4 := dfs.openFileRead(dfs.DEV_SD, @testfile4)
+    h5 := dfs.openFileRead(dfs.DEV_SD, @testfile5)
+    h6 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+
+    utils.evaluateSubBool(h1 >= 0, @"Handle 1 allocated", true)
+    utils.evaluateSubBool(h2 >= 0, @"Handle 2 allocated", true)
+    utils.evaluateSubBool(h3 >= 0, @"Handle 3 allocated", true)
+    utils.evaluateSubBool(h4 >= 0, @"Handle 4 allocated", true)
+    utils.evaluateSubBool(h5 >= 0, @"Handle 5 allocated", true)
+    utils.evaluateSubBool(h6 >= 0, @"Handle 6 allocated", true)
+
+    result := dfs.openFileRead(dfs.DEV_SD, @testfile2)
+    utils.evaluateSubValue(result, @"7th open error", E_TOO_MANY_FILES)
+
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+    dfs.closeFileHandle(h3)
+    dfs.closeFileHandle(h4)
+    dfs.closeFileHandle(h5)
+    dfs.closeFileHandle(h6)
+
+    ' ======================================================================
+    ' TEST GROUP: Handle Release and Reuse
+    ' ======================================================================
+    utils.startTestGroup(@"Handle Release and Reuse")
+
+    ' Test: Close handles in non-sequential order, verify slots become reusable
+    utils.startTest(@"Closed handles become reusable")
+
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile2)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @testfile3)
+    h4 := dfs.openFileRead(dfs.DEV_SD, @testfile4)
+
+    ' Close in non-sequential order: 2, 0, 3, 1
+    result := dfs.closeFileHandle(h3)  ' Close handle for file 3
+    utils.evaluateSubValue(result, @"Close h3", 0)
+
+    result := dfs.closeFileHandle(h1)  ' Close handle for file 1
+    utils.evaluateSubValue(result, @"Close h1", 0)
+
+    result := dfs.closeFileHandle(h4)  ' Close handle for file 4
+    utils.evaluateSubValue(result, @"Close h4", 0)
+
+    result := dfs.closeFileHandle(h2)  ' Close handle for file 2
+    utils.evaluateSubValue(result, @"Close h2", 0)
+
+    ' Now open should work again
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateSubBool(h1 >= 0, @"Reopen after close", true)
+    dfs.closeFileHandle(h1)
+
+    ' ======================================================================
+    ' TEST GROUP: Write Persistence
+    ' ======================================================================
+    utils.startTestGroup(@"Write Persistence")
+
+    ' Test: Write, close, reopen, read back - verify data persisted
+    utils.startTest(@"Write persists through close/reopen cycle")
+
+    ' Delete the test file if it exists, then create fresh
+    dfs.deleteFile(dfs.DEV_SD, @testfile5)
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile5)
+    utils.evaluateSubBool(h1 >= 0, @"Create new file", true)
+
+    ' Write test data
+    bytesWritten := dfs.writeHandle(h1, @"Persistence Test Data", 21)
+    utils.evaluateSubValue(bytesWritten, @"Bytes written", 21)
+
+    ' Close the file
+    result := dfs.closeFileHandle(h1)
+    utils.evaluateSubValue(result, @"Close after write", 0)
+
+    ' Reopen for read
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile5)
+    utils.evaluateSubBool(h1 >= 0, @"Reopen for read", true)
+
+    ' Check file size
+    size := dfs.fileSizeHandle(h1)
+    utils.evaluateSubValue(size, @"File size", 21)
+
+    ' Read back and verify
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h1, @readBuffer, 21)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubValue(bytesRead, @"Bytes read", 21)
+    utils.evaluateSubBool(strcomp(@readBuffer, @"Persistence Test Data"), @"Data matches", true)
+
+    dfs.closeFileHandle(h1)
+
+    ' ======================================================================
+    ' TEST GROUP: Sync Operations
+    ' ======================================================================
+    utils.startTestGroup(@"Sync Operations")
+
+    ' Test: Sync flushes data without closing
+    utils.startTest(@"syncHandle flushes without closing")
+
+    ' Create and write to a file
+    dfs.deleteFile(dfs.DEV_SD, @testfile5)
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile5)
+    utils.evaluateSubBool(h1 >= 0, @"Create file", true)
+
+    bytesWritten := dfs.writeHandle(h1, @"Sync Test", 9)
+    utils.evaluateSubValue(bytesWritten, @"Bytes written", 9)
+
+    ' Sync the handle
+    result := dfs.syncHandle(h1)
+    utils.evaluateSubValue(result, @"Sync result", 0)
+
+    ' Handle should still be valid - write more data
+    bytesWritten := dfs.writeHandle(h1, @" More", 5)
+    utils.evaluateSubValue(bytesWritten, @"Write after sync", 5)
+
+    ' Check size includes both writes
+    size := dfs.fileSizeHandle(h1)
+    utils.evaluateSubValue(size, @"Size after sync+write", 14)
+
+    dfs.closeFileHandle(h1)
+
+    ' Verify by reopening
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile5)
+    size := dfs.fileSizeHandle(h1)
+    utils.evaluateSubValue(size, @"Final size", 14)
+
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h1, @readBuffer, 14)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubBool(strcomp(@readBuffer, @"Sync Test More"), @"All data present", true)
+
+    dfs.closeFileHandle(h1)
+
+    ' ======================================================================
+    ' TEST GROUP: EOF Detection
+    ' ======================================================================
+    utils.startTestGroup(@"EOF Detection")
+
+    utils.startTest(@"eofHandle returns correct state")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+
+    ' At start, should not be at EOF
+    result := dfs.eofHandle(h1)
+    utils.evaluateSubBool(result == 0, @"Not at EOF initially", true)
+
+    ' Read entire file
+    size := dfs.fileSizeHandle(h1)
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h1, @readBuffer, size)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+
+    ' Now should be at EOF
+    result := dfs.eofHandle(h1)
+    utils.evaluateSubBool(result <> 0, @"At EOF after reading all", true)
+
+    ' Seek back - should not be at EOF
+    dfs.seekHandle(h1, 0)
+    result := dfs.eofHandle(h1)
+    utils.evaluateSubBool(result == 0, @"Not at EOF after seek to 0", true)
+
+    dfs.closeFileHandle(h1)
+
+    ' ======================================================================
+    ' TEST GROUP: Invalid Handle Parameters
+    ' ======================================================================
+    utils.startTestGroup(@"Invalid Handle Parameters")
+
+    ' Test: readHandle with -1 returns E_INVALID_HANDLE
+    utils.startTest(@"readHandle(-1) returns E_INVALID_HANDLE")
+    result := dfs.readHandle(-1, @readBuffer, 10)
+    utils.evaluateSingleValue(result, @"readHandle(-1)", E_INVALID_HANDLE)
+
+    ' Test: readHandle with 99 returns E_INVALID_HANDLE
+    utils.startTest(@"readHandle(99) returns E_INVALID_HANDLE")
+    result := dfs.readHandle(99, @readBuffer, 10)
+    utils.evaluateSingleValue(result, @"readHandle(99)", E_INVALID_HANDLE)
+
+    ' Test: writeHandle on closed handle returns E_INVALID_HANDLE
+    utils.startTest(@"writeHandle on closed handle returns E_INVALID_HANDLE")
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile5)
+    dfs.closeFileHandle(h1)
+    result := dfs.writeHandle(h1, @"test", 4)
+    utils.evaluateSingleValue(result, @"writeHandle(closed)", E_INVALID_HANDLE)
+
+    ' Test: seekHandle with invalid handle returns E_INVALID_HANDLE
+    utils.startTest(@"seekHandle(-1) returns E_INVALID_HANDLE")
+    result := dfs.seekHandle(-1, 0)
+    utils.evaluateSingleValue(result, @"seekHandle(-1)", E_INVALID_HANDLE)
+
+    ' Test: closeFileHandle twice returns E_INVALID_HANDLE on second call
+    utils.startTest(@"Double close returns E_INVALID_HANDLE")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    result := dfs.closeFileHandle(h1)
+    utils.evaluateSubValue(result, @"First close", 0)
+    result := dfs.closeFileHandle(h1)
+    utils.evaluateSubValue(result, @"Second close", E_INVALID_HANDLE)
+
+    ' Test: tellHandle with invalid handle returns E_INVALID_HANDLE
+    utils.startTest(@"tellHandle(-1) returns E_INVALID_HANDLE")
+    result := dfs.tellHandle(-1)
+    utils.evaluateSingleValue(result, @"tellHandle(-1)", E_INVALID_HANDLE)
+
+    ' Test: fileSizeHandle with invalid handle returns E_INVALID_HANDLE
+    utils.startTest(@"fileSizeHandle(-1) returns E_INVALID_HANDLE")
+    result := dfs.fileSizeHandle(-1)
+    utils.evaluateSingleValue(result, @"fileSizeHandle(-1)", E_INVALID_HANDLE)
+
+    ' Test: syncHandle with invalid handle returns E_INVALID_HANDLE
+    utils.startTest(@"syncHandle(-1) returns E_INVALID_HANDLE")
+    result := dfs.syncHandle(-1)
+    utils.evaluateSingleValue(result, @"syncHandle(-1)", E_INVALID_HANDLE)
+
+    ' Test: eofHandle with invalid handle returns E_INVALID_HANDLE
+    utils.startTest(@"eofHandle(-1) returns E_INVALID_HANDLE")
+    result := dfs.eofHandle(-1)
+    utils.evaluateSingleValue(result, @"eofHandle(-1)", E_INVALID_HANDLE)
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+    cleanupTestFiles()
+
+    dfs.unmount(dfs.DEV_SD)
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+PRI cleanupTestFiles()
+' Delete all test files (ignore errors for non-existent files)
+
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    dfs.deleteFile(dfs.DEV_SD, @testfile3)
+    dfs.deleteFile(dfs.DEV_SD, @testfile4)
+    dfs.deleteFile(dfs.DEV_SD, @testfile5)
+
+PRI createTestFiles() | h
+' Create test files with known content
+
+    debug(" ")
+    debug("* Creating test files...")
+
+    ' File 1
+    h := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if h >= 0
+        dfs.writeHandle(h, @content1, strsize(@content1))
+        dfs.closeFileHandle(h)
+        debug("  Created: ", zstr_(@testfile1))
+    else
+        debug("  ERROR creating ", zstr_(@testfile1))
+
+    ' File 2
+    h := dfs.createFileNew(dfs.DEV_SD, @testfile2)
+    if h >= 0
+        dfs.writeHandle(h, @content2, strsize(@content2))
+        dfs.closeFileHandle(h)
+        debug("  Created: ", zstr_(@testfile2))
+    else
+        debug("  ERROR creating ", zstr_(@testfile2))
+
+    ' File 3
+    h := dfs.createFileNew(dfs.DEV_SD, @testfile3)
+    if h >= 0
+        dfs.writeHandle(h, @content3, strsize(@content3))
+        dfs.closeFileHandle(h)
+        debug("  Created: ", zstr_(@testfile3))
+    else
+        debug("  ERROR creating ", zstr_(@testfile3))
+
+    ' File 4
+    h := dfs.createFileNew(dfs.DEV_SD, @testfile4)
+    if h >= 0
+        dfs.writeHandle(h, @content4, strsize(@content4))
+        dfs.closeFileHandle(h)
+        debug("  Created: ", zstr_(@testfile4))
+    else
+        debug("  ERROR creating ", zstr_(@testfile4))
+
+    debug("* Test files created")
+    debug(" ")
+
+PRI strncmp(p1, p2, n) : match | i
+' Compare first n bytes of two strings
+'
+' @param p1 - pointer to first string
+' @param p2 - pointer to second string
+' @param n - number of bytes to compare
+' @returns match - true if first n bytes match
+
+    match := true
+    repeat i from 0 to n - 1
+        if BYTE[p1][i] <> BYTE[p2][i]
+            match := false
+            quit
+
+{{
+=================================================================================================
+=                                LICENSE MIT                                                     =
+=================================================================================================
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+=================================================================================================
+}}

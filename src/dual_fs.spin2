@@ -1,6 +1,6 @@
 {Spin2_v45}
 {{┌──────────────────────────────────────────┐
-  │ Dual Filesystem Driver — Release v0.1.0  │  Unified SD + Flash filesystem driver
+  │ Dual Filesystem Driver — Release v0.2.0  │  Unified SD + Flash filesystem driver
   │ Based on: Chris Gadd SD V3, Chip Gracey  │  for the P2 Edge Module
   │ flash_fs, combined by S.M. Moraco        │
   │ Copyright (c) 2023-2026                  │  Both devices share SPI bus (P58-P61)
@@ -39,63 +39,59 @@
 '' ═══════════════════════════════════════════════════════════════════════════════
 
 #IFDEF SD_INCLUDE_ALL
-  #IFNDEF SD_INCLUDE_RAW
-    #DEFINE SD_INCLUDE_RAW
-  #ENDIF
-  #IFNDEF SD_INCLUDE_REGISTERS
-    #DEFINE SD_INCLUDE_REGISTERS
-  #ENDIF
-  #IFNDEF SD_INCLUDE_SPEED
-    #DEFINE SD_INCLUDE_SPEED
-  #ENDIF
-  #IFNDEF SD_INCLUDE_DEBUG
-    #DEFINE SD_INCLUDE_DEBUG
-  #ENDIF
+#IFNDEF SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_RAW
+#ENDIF
+#IFNDEF SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_REGISTERS
+#ENDIF
+#IFNDEF SD_INCLUDE_SPEED
+#DEFINE SD_INCLUDE_SPEED
+#ENDIF
+#IFNDEF SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_DEBUG
+#ENDIF
 #ENDIF
 
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' DEVICE CONSTANTS - Target device for path-based and device-level calls
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' DEVICE CONSTANTS - Target device for path-based and device-level calls
+    ' ═══════════════════════════════════════════════════════════════════════════
   DEV_SD    = 0       ' microSD card (FAT32)
   DEV_FLASH = 1       ' Onboard 16MB Flash chip
   DEV_BOTH  = 2       ' Both devices (for mount/unmount)
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' FLASH FILE OPEN MODE CONSTANTS
-    '' ═══════════════════════════════════════════════════════════════════════════
+  DFS_VERSION   = 100  ' Dual FS driver version 1.0.0 (major.minor.patch as integer)
+  SD_VERSION    = 300  ' SD sub-driver version (from micro_sd_fat32_fs V3.0)
+  FLASH_VERSION = 200  ' Flash sub-driver version (from flash_fs V2.0)
+
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' FLASH FILE OPEN MODE CONSTANTS
+    ' ═══════════════════════════════════════════════════════════════════════════
   FILEMODE_READ            = $72      ' "r"
   FILEMODE_WRITE           = $77      ' "w"
   FILEMODE_APPEND          = $61      ' "a"
   FILEMODE_READ_EXTENDED   = $2B72    ' "r+"
   FILEMODE_WRITE_EXTENDED  = $2B77    ' "w+"
 
-CON  '' flags
+CON  ' flags
   ' NOTE: V3 driver exceeds 255 debug record limit when debug is fully enabled
   ' pnut-ts error: "DEBUG data is too long: too many records: max 255"
   ' Set to 1 to disable debug in driver and avoid compilation errors
   DEBUG_DISABLE = 1
 
-  F_OPEN    = decod 0
   F_NEWDIR  = decod 1
-  F_NEWDATA = decod 2
   F_MOUNTED = decod 3
 
-CON '' driver mode (enforces valid command sequences)
+CON ' driver mode (enforces valid command sequences)
   MODE_NONE       = 0       ' Not initialized - only mount() or initCardOnly() allowed
   MODE_RAW        = 1       ' Raw sector access only - initCardOnly() was called
   MODE_FILESYSTEM = 2       ' Full filesystem access - mount() was called
 
-CON '' command codes for worker cog
+CON ' command codes for worker cog
   CMD_NONE      = 0         ' Idle / command complete
   CMD_MOUNT     = 1         ' Mount filesystem
   CMD_UNMOUNT   = 2         ' Unmount filesystem
-  CMD_OPEN      = 3         ' Open file: param0=filename ptr
-  CMD_CLOSE     = 4         ' Close file
-  CMD_READ      = 5         ' Read: param0=buffer ptr, param1=count
-  CMD_WRITE     = 6         ' Write: param0=buffer ptr, param1=count
-  CMD_SEEK      = 7         ' Seek: param0=position
-  CMD_NEWFILE   = 8         ' Create new file: param0=filename ptr
   CMD_NEWDIR    = 9         ' Create new directory: param0=dirname ptr
   CMD_DELETE    = 10        ' Delete file: param0=filename ptr
   CMD_RENAME    = 11        ' Rename: param0=oldname, param1=newname
@@ -110,12 +106,13 @@ CON '' command codes for worker cog
   CMD_DEBUG_CLEAR_ROOT = 26 ' DEBUG: Clear root directory (fixes corruption)
 #ENDIF
 
+  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read (always available for readVBRRaw)
+
 #IFDEF SD_INCLUDE_RAW
   CMD_INIT_CARD_ONLY = 22   ' Initialize card without filesystem (raw mode)
   CMD_GET_CARD_SIZE  = 23   ' Get card size in sectors: returns in data0
   CMD_READ_SECTORS  = 18    ' Raw multi-block read: param0=start_sector, param1=count, param2=buffer ptr
   CMD_WRITE_SECTORS = 19    ' Raw multi-block write: param0=start_sector, param1=count, param2=buffer ptr
-  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read: param0=sector, param1=buffer ptr
   CMD_WRITE_SECTOR_RAW = 21 ' Raw single sector write: param0=sector, param1=buffer ptr
 #ENDIF
 
@@ -171,14 +168,22 @@ CON '' command codes for worker cog
   CMD_MOUNTED_Q         = 68       ' Query device mount status
   ' Cross-device:
   CMD_COPY_FILE         = 70       ' Copy file between devices
+  ' Flash byte-level I/O:
+  CMD_FL_WR_BYTE        = 71       ' Write single byte to Flash handle
+  CMD_FL_RD_BYTE        = 72       ' Read single byte from Flash handle
+  CMD_FL_RD_STR         = 73       ' Read string from Flash handle (seeks terminator)
+  ' Flash extended:
+  CMD_FL_FILE_SIZE_UNUSED = 79     ' Get unused bytes in last block of Flash file
+  CMD_FL_CAN_MOUNT        = 81     ' Non-destructive Flash mount check
+  CMD_FL_COUNT_BYTES    = 80       ' Count file bytes (TEST_ diagnostic)
 
 
-CON '' buffer types for sector read/write (diagnostic: separate buffers to isolate conflicts)
+CON ' buffer types for sector read/write (diagnostic: separate buffers to isolate conflicts)
   BUF_DIR  = 0      ' Directory sector buffer
   BUF_FAT  = 1      ' FAT sector buffer
   BUF_DATA = 2      ' Data sector buffer
 
-CON '' error codes
+CON ' error codes
   SUCCESS           = 0
   E_TIMEOUT         = -1        ' Card didn't respond in time
   E_NO_RESPONSE     = -2        ' Card not responding
@@ -235,7 +240,7 @@ CON '' error codes
   E_DEVICE_NOT_MOUNTED     = -121  ' Requested device not mounted
   E_NOT_SUPPORTED          = -122  ' Operation not supported on this device
 
-CON '' V3 multi-file handle configuration
+CON ' V3 multi-file handle configuration
   ' ═══════════════════════════════════════════════════════════════════════════
   ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
   ' User can override MAX_OPEN_FILES in their top-level CON section before OBJ
@@ -251,12 +256,12 @@ CON '' V3 multi-file handle configuration
   HF_DIR    = 4                 ' Handle is a directory enumeration handle
   HF_DIRTY  = $80               ' Handle's buffer has pending writes (OR'd with mode)
 
-CON '' worker cog stack size
+CON ' worker cog stack size
   STACK_SIZE = 256              ' 256 longs = 1024 bytes (increased for Flash mount scan)
   STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 
-CON '' streamer configuration (compile-time constants for bulk sector transfers)
+CON ' streamer configuration (compile-time constants for bulk sector transfers)
   ' Reference: flash_loader.spin2 pattern, P2 Silicon Doc streamer section
   ' Using explicit hex values from working flash_loader code:
   ' Mode word: [31:28]=mode [27:24]=options [23:17]=pin [16:0]=count
@@ -265,16 +270,16 @@ CON '' streamer configuration (compile-time constants for bulk sector transfers)
   STREAM_RX_BASE = $C081_0000   ' 1-pin input to hub, MSB-first (flash_loader wmode)
   STREAM_TX_BASE = $8081_0000   ' hub to 1-pin output, MSB-first (flash_loader rmode)
 
-CON '' CRC-16-CCITT configuration (using P2 GETCRC instruction)
+CON ' CRC-16-CCITT configuration (using P2 GETCRC instruction)
   ' Replaces 512-byte lookup table with hardware GETCRC + transformation
   ' Formula: crc := ((GETCRC(@data, CRC_POLY, 512) ^ CRC_BASE_512) REV 31) >> 16
   CRC_POLY_REFLECTED = $8408    ' CRC-16-CCITT in LSB-first (reflected) form
   CRC_BASE_512       = $2C68    ' GETCRC of 512 zero bytes with poly $8408
 
-CON '' CRC retry configuration
+CON ' CRC retry configuration
   MAX_READ_CRC_RETRIES = 3       ' Number of read retries on CRC mismatch (industry standard)
 
-CON '' Flash filesystem geometry and constants
+CON ' Flash filesystem geometry and constants
   ' Block geometry (16MB Flash chip, first 512KB reserved for boot image)
   FIRST_BLOCK      = $080                           ' Physical address of first FS block
   LAST_BLOCK       = $FFF                           ' Physical address of last FS block
@@ -322,8 +327,10 @@ CON '' Flash filesystem geometry and constants
   ' Data capacity per block type
   BYTES_IN_HEAD_BLOCK = 3956                        ' Head block: 4096 - 140 bytes overhead
   BYTES_IN_BODY_BLOCK = 4088                        ' Body block: 4096 - 8 bytes overhead
+  LONGS_IN_HEAD_BLOCK = BYTES_IN_HEAD_BLOCK / 4     ' 989 longs per head block
+  LONGS_IN_BODY_BLOCK = BYTES_IN_BODY_BLOCK / 4     ' 1022 longs per body block
 
-CON '' SD card command codes and tokens for multi-block operations
+CON ' SD card command codes and tokens for multi-block operations
   ' ═══════════════════════════════════════════════════════════════════════════
   ' SD SPI Commands for multi-block operations (reference: SD Physical Layer Spec)
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -360,12 +367,12 @@ CON '' SD card command codes and tokens for multi-block operations
   DATA_CRC_ERROR         = $0B ' Lower 5 bits = xxx01011 = CRC error
   DATA_WRITE_ERROR       = $0D ' Lower 5 bits = xxx01101 = write error
 
-CON '' struct types - SD card register and FAT32 on-disk data structures
-  '' ═══════════════════════════════════════════════════════════════════════════
-  '' Struct type definitions for card registers, filesystem structures, and
-  '' directory entries. Exported automatically to consumer objects via OBJ.
-  '' All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
-  '' ═══════════════════════════════════════════════════════════════════════════
+CON ' struct types - SD card register and FAT32 on-disk data structures
+  ' ═══════════════════════════════════════════════════════════════════════════
+  ' Struct type definitions for card registers, filesystem structures, and
+  ' directory entries. Exported automatically to consumer objects via OBJ.
+  ' All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
+  ' ═══════════════════════════════════════════════════════════════════════════
 
   ' --- SD Card Registers ---
 
@@ -436,6 +443,10 @@ DAT '' singleton control - SHARED across all object instances
   pb_data0      LONG    0               ' Result data 0 (handle, count, etc.)
   pb_data1      LONG    0               ' Result data 1
   pb_data2      LONG    0               ' Result data 2 (third return value, e.g., stats)
+  ' Per-cog saved copies of pb_data (captured before lock release, multi-cog safe)
+  saved_data0   LONG    0[8]            ' Snapshot of pb_data0, one per cog
+  saved_data1   LONG    0[8]            ' Snapshot of pb_data1, one per cog
+  saved_data2   LONG    0[8]            ' Snapshot of pb_data2, one per cog
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' WORKER COG STACK
@@ -482,7 +493,6 @@ DAT '' singleton control - SHARED across all object instances
   entry_address LONG    0               ' Current entry byte address
   date_stamp    LONG    0               ' Timestamp for new files
   n_sec         LONG    0               ' Current sector number
-  file_idx      LONG    0               ' Position within file
   flags         LONG    0               ' Open/new file flags
   dir_sec_in_buf LONG   0               ' Directory sector currently in dir_buf
   fat_sec_in_buf LONG   0               ' FAT sector currently in fat_buf
@@ -545,6 +555,11 @@ DAT '' singleton control - SHARED across all object instances
   diag_write_dresp   LONG    0          ' Data response token from card
   diag_write_sector  LONG    0          ' Sector number attempted
 
+  ' TEST HOOKS: Error injection for CRC validation testing
+  test_force_read_crc_error   BYTE    0  ' Counter: force N read CRC mismatches
+  test_force_write_crc_error  BYTE    0  ' Flag: corrupt next write CRC (one-shot)
+  test_error_count            LONG    0  ' Count of injected errors triggered
+
   ' ═══════════════════════════════════════════════════════════════════════
   ' BUFFERS (must be in DAT for worker cog access)
   ' DIAGNOSTIC: Separate buffers for each sector type to isolate conflicts
@@ -552,7 +567,10 @@ DAT '' singleton control - SHARED across all object instances
   dir_buf       BYTE    0[512]          ' Directory sector buffer
   fat_buf       BYTE    0[512]          ' FAT sector buffer
   buf           BYTE    0[512]          ' Data sector buffer
-  entry_buffer  BYTE    0[32]           ' Directory entry buffer
+  entry_buffer  dir_entry_t
+                BYTE    0[14]           ' name[8], ext[3], attr, ntRes, crtTenth
+                WORD    0[7]            ' crtTime, crtDate, accDate, clusHI, wrtTime, wrtDate, clusLO
+                LONG    0              ' fileSize
   vol_label     BYTE    0[12]           ' Volume label (11 chars + null)
 
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -625,9 +643,9 @@ DAT '' singleton control - SHARED across all object instances
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' MULTI-COG LIFECYCLE METHODS
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' MULTI-COG LIFECYCLE METHODS
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB init(sd_cs, _mosi, _miso, sd_sck) : result
 '' Initialize the unified filesystem driver (singleton).
@@ -823,6 +841,38 @@ PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
   r1_resp := diag_write_r1
   data_resp := diag_write_dresp
   sector_num := diag_write_sector
+
+PUB setTestForceReadError(count)
+'' Set CRC error injection counter for reads. Each sector read will see a
+'' forced CRC mismatch until the counter reaches zero.
+'' Set to 1: one retry then success. Set to MAX_READ_CRC_RETRIES (3): all retries fail.
+''
+'' @param count - Number of read CRC mismatches to force
+
+  test_force_read_crc_error := count
+
+PUB setTestForceWriteError(enabled)
+'' Arm one-shot CRC error injection for the next write. The next writeSector()
+'' will send a corrupted CRC, causing the card to reject the data.
+''
+'' @param enabled - Non-zero arms, zero disarms
+
+  test_force_write_crc_error := (enabled <> 0) ? 1 : 0
+
+PUB getTestErrorCount() : count
+'' Get count of injected test errors triggered since last clear.
+''
+'' @returns count - Number of injected errors triggered
+
+  return test_error_count
+
+PUB clearTestErrors()
+'' Reset all test error injection state. Disarms read/write hooks
+'' and zeroes the triggered error counter.
+
+  test_force_read_crc_error := 0
+  test_force_write_crc_error := 0
+  test_error_count := 0
 #ENDIF
 
 PRI set_error(code) : code_out
@@ -863,7 +913,7 @@ PRI fs_worker() | cur_cmd
     ' Raw sector commands are allowed in both MODE_RAW and MODE_FILESYSTEM
     ' Mode transitions (MOUNT, UNMOUNT, INIT_CARD_ONLY) have their own logic
     ' V3: Include handle-based commands (CMD_OPEN_READ through CMD_CLOSE_DIR_H)
-    if (cur_cmd >= CMD_OPEN and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SET_VOL_LABEL)
+    if (cur_cmd >= CMD_NEWDIR and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SET_VOL_LABEL)
       if driver_mode <> MODE_FILESYSTEM
         debug("  [fs_worker] REJECTED: File operation requires MODE_FILESYSTEM")
         pb_status := E_NOT_MOUNTED
@@ -872,6 +922,26 @@ PRI fs_worker() | cur_cmd
         COGATN(1 << pb_caller)
         next                                                                    ' Skip to next command
 
+    ' FLASH MOUNT ENFORCEMENT: Reject Flash file operations when Flash is not mounted.
+    ' Allow: CMD_FLASH_MOUNT (need to mount), CMD_FLASH_FORMAT (creates FS), CMD_FL_CAN_MOUNT (HW check)
+    if cur_cmd > CMD_FLASH_FORMAT and cur_cmd < CMD_FL_CAN_MOUNT
+      ifnot flash_mounted
+        debug("  [fs_worker] REJECTED: Flash not mounted for cmd ", udec_(cur_cmd))
+        pb_status := E_NOT_MOUNTED
+        pb_data0 := E_NOT_MOUNTED
+        pb_cmd := CMD_NONE
+        COGATN(1 << pb_caller)
+        next
+
+    ' Lazy SPI bus switching: only switch when target device changes.
+    ' The guards inside switch_to_flash()/switch_to_sd() make these no-ops
+    ' when already on the correct device, so consecutive Flash operations
+    ' only switch once (not per-command with expensive reinitCard).
+    if cur_cmd >= CMD_FLASH_MOUNT and cur_cmd <= CMD_FL_CAN_MOUNT
+      switch_to_flash()
+    else
+      switch_to_sd()
+
     ' Dispatch command
     case cur_cmd
       CMD_MOUNT:
@@ -879,26 +949,6 @@ PRI fs_worker() | cur_cmd
 
       CMD_UNMOUNT:
         pb_status := do_unmount()
-
-      CMD_OPEN:
-        pb_status := do_open(pb_param0)
-
-      CMD_CLOSE:
-        pb_status := do_close()
-
-      CMD_READ:
-        pb_data0 := do_read(pb_param0, pb_param1)
-        pb_status := SUCCESS
-
-      CMD_WRITE:
-        do_write(pb_param0, pb_param1)
-        pb_status := SUCCESS
-
-      CMD_SEEK:
-        pb_status := do_seek(pb_param0)
-
-      CMD_NEWFILE:
-        pb_status := do_newfile(pb_param0)
 
       CMD_NEWDIR:
         pb_status := do_newdir(pb_param0)
@@ -945,6 +995,14 @@ PRI fs_worker() | cur_cmd
           pb_status := E_IO_ERROR
 #ENDIF
 
+      CMD_READ_SECTOR_RAW:
+        sec_in_buf := -1                                                        ' Force re-read
+        if readSector(pb_param0, BUF_DATA) == 0                                 ' readSector returns 0 on success, -1 on error
+          bytemove(pb_param1, @buf, 512)
+          pb_status := SUCCESS
+        else
+          pb_status := E_IO_ERROR
+
 #IFDEF SD_INCLUDE_RAW
       CMD_READ_SECTORS:
         pb_data0 := readSectors(pb_param0, pb_param1, pb_param2)
@@ -953,14 +1011,6 @@ PRI fs_worker() | cur_cmd
       CMD_WRITE_SECTORS:
         pb_data0 := writeSectors(pb_param0, pb_param1, pb_param2)
         pb_status := SUCCESS
-
-      CMD_READ_SECTOR_RAW:
-        sec_in_buf := -1                                                        ' Force re-read
-        if readSector(pb_param0, BUF_DATA) == 0                                 ' readSector returns 0 on success, -1 on error
-          bytemove(pb_param1, @buf, 512)
-          pb_status := SUCCESS
-        else
-          pb_status := E_IO_ERROR
 
       CMD_WRITE_SECTOR_RAW:
         bytemove(@buf, pb_param1, 512)
@@ -1075,90 +1125,95 @@ PRI fs_worker() | cur_cmd
       CMD_SET_VOL_LABEL:
         pb_status := do_set_vol_label(pb_param0)
 
+      CMD_FLASH_FORMAT:
+        pb_status := fl_format()
+
       CMD_FLASH_MOUNT:
         pb_status := do_flash_mount()
+        if pb_status == SUCCESS
+          flash_mounted := TRUE
 
       CMD_SERIAL_NUMBER:
         pb_data0, pb_data1 := do_flash_serial_number()
         pb_status := SUCCESS
 
       CMD_FLASH_OPEN:
-        switch_to_flash()
         pb_data0 := fl_open(pb_param0, pb_param1)
-        switch_to_sd()
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
 
       CMD_FLASH_OPEN_CIRC:
-        switch_to_flash()
         pb_data0 := fl_open_circular(pb_param0, pb_param1, pb_param2)
-        switch_to_sd()
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
 
       CMD_FLASH_CLOSE:
-        switch_to_flash()
         pb_status := fl_close(pb_param0)
-        switch_to_sd()
 
       CMD_FLASH_READ:
-        switch_to_flash()
         pb_data0 := fl_read(pb_param0, pb_param1, pb_param2)
-        switch_to_sd()
-        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+        if pb_data0 < 0
+          pb_status := pb_data0
+        elseif fl_errorCode < 0
+          pb_status := fl_errorCode           ' propagate EOF from fl_rd_byte_no_locks
+        else
+          pb_status := SUCCESS
 
       CMD_FLASH_WRITE:
-        switch_to_flash()
         pb_data0 := fl_write(pb_param0, pb_param1, pb_param2)
-        switch_to_sd()
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
 
       CMD_FLASH_SEEK:
-        switch_to_flash()
         pb_data0 := fl_seek(pb_param0, pb_param1, pb_param2)
-        switch_to_sd()
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
 
       CMD_FLASH_FLUSH:
-        switch_to_flash()
         pb_status := fl_flush(pb_param0)
-        switch_to_sd()
 
       CMD_FLASH_DELETE:
-        switch_to_flash()
         pb_status := fl_delete(pb_param0)
-        switch_to_sd()
 
       CMD_FLASH_RENAME:
-        switch_to_flash()
         pb_status := fl_rename(pb_param0, pb_param1)
-        switch_to_sd()
 
       CMD_FLASH_EXISTS:
-        switch_to_flash()
         pb_data0 := fl_exists(pb_param0) ? 1 : 0
-        switch_to_sd()
         pb_status := SUCCESS
 
       CMD_FLASH_CREATE_FILE:
-        switch_to_flash()
         pb_status := fl_create_file(pb_param0, pb_param1, pb_param2)
-        switch_to_sd()
 
       CMD_FLASH_FILE_SIZE:
-        switch_to_flash()
         pb_data0 := fl_file_size(pb_param0)
-        switch_to_sd()
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
 
       CMD_FLASH_STATS:
-        switch_to_flash()
         pb_data0, pb_data1, pb_data2 := fl_stats()
-        switch_to_sd()
         pb_status := SUCCESS
 
       CMD_FLASH_DIRECTORY:
-        switch_to_flash()
         pb_data0 := fl_directory(pb_param0, pb_param1, pb_param2)
-        switch_to_sd()
+        pb_status := SUCCESS
+
+      CMD_FL_WR_BYTE:
+        pb_status := fl_wr_byte_no_locks(pb_param0, pb_param1)
+
+      CMD_FL_RD_BYTE:
+        pb_data0 := fl_rd_byte_no_locks(pb_param0)
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FL_RD_STR:
+        pb_data0 := fl_rd_str(pb_param0, pb_param1, pb_param2)
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FL_FILE_SIZE_UNUSED:
+        pb_data0 := fl_file_size_unused(pb_param0)
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FL_COUNT_BYTES:
+        pb_data0, pb_data1, pb_data2 := fl_TEST_count_file_bytes(pb_param0)
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_FL_CAN_MOUNT:
+        pb_data0 := fl_can_mount()
         pb_status := SUCCESS
 
       other:
@@ -1179,10 +1234,15 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 ' @param p3 - Parameter 3
 ' @returns status - Status code from worker
 
+  ' Clear stale errors before each operation (matches reference driver behavior)
+  set_error(SUCCESS)
+
   ' Verify worker cog is running
   if cog_id == -1
     debug("  [send_command] ERROR: Worker not running")
-    pb_data0 := E_NOT_MOUNTED
+    LONG[@saved_data0][COGID()] := E_NOT_MOUNTED
+    LONG[@saved_data1][COGID()] := 0
+    LONG[@saved_data2][COGID()] := 0
     return E_NOT_MOUNTED
 
   ' Acquire API lock (serialize multi-cog access)
@@ -1205,17 +1265,24 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
   if not checkStackGuard()
     debug("  [send_command] STACK OVERFLOW after cmd ", udec_(op_cmd))
 
-  ' Get result
+  ' Snapshot results while still holding lock (multi-cog safety, per-cog storage)
   status := pb_status
+  LONG[@saved_data0][pb_caller] := pb_data0
+  LONG[@saved_data1][pb_caller] := pb_data1
+  LONG[@saved_data2][pb_caller] := pb_data2
+
+  ' Propagate worker error to caller-side error() mechanism
+  if status < 0
+    set_error(status)
 
   ' Release lock
   lockrel(api_lock)
 
   return status
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' V3 FILE HANDLE MANAGEMENT HELPERS
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' V3 FILE HANDLE MANAGEMENT HELPERS
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI allocateHandle() : handle
 ' Find and allocate a free handle slot by searching the handle table.
@@ -1293,90 +1360,186 @@ PRI initHandleTable() | i
   repeat i from 0 to MAX_OPEN_FILES - 1
     freeHandle(i)
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' STRUCT ACCESSOR HELPERS (workaround: pnut-ts v51a ^structName not in locals)
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' STRUCT ACCESSOR HELPERS (workaround: pnut-ts v51a ^structName not in locals)
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI partType(^mbr_partition_t pPart) : value
+' Get partition type code from MBR partition entry.
+'
+' @param pPart - Pointer to MBR partition entry
+' @returns value - Partition type code ($0B/$0C = FAT32)
   return pPart.partType
 
 PRI partLbaStart(^mbr_partition_t pPart) : value
+' Get LBA start sector of partition from MBR partition entry.
+'
+' @param pPart - Pointer to MBR partition entry
+' @returns value - LBA start sector number
   return pPart.lbaStart
 
 PRI vbrBytesPerSec(^vbr_t pVBR) : value
+' Get bytes per sector from Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns value - Bytes per sector (must be 512)
   return pVBR.bytesPerSec
 
 PRI vbrSecPerClus(^vbr_t pVBR) : value
+' Get sectors per cluster from Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns value - Sectors per cluster (power of 2)
   return pVBR.secPerClus
 
 PRI vbrReservedSec(^vbr_t pVBR) : value
+' Get reserved sector count from Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns value - Number of reserved sectors before first FAT
   return pVBR.reservedSec
 
 PRI vbrNumFats(^vbr_t pVBR) : value
+' Get number of FATs from Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns value - Number of FAT copies (must be 2)
   return pVBR.numFats
 
 PRI vbrSecPerFat32(^vbr_t pVBR) : value
+' Get sectors per FAT (FAT32) from Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns value - Sectors per FAT
   return pVBR.secPerFat32
 
 PRI vbrFsInfoSec(^vbr_t pVBR) : value
+' Get FSInfo sector number from Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns value - Sector number of FSInfo structure (relative to VBR)
   return pVBR.fsInfoSec
 
 PRI vbrVolLabelAddr(^vbr_t pVBR) : addr
+' Get address of volume label field in Volume Boot Record.
+'
+' @param pVBR - Pointer to VBR structure
+' @returns addr - Hub address of 11-byte volume label field
   return @pVBR.volLabel
 
 PRI fsiLeadSig(^fsinfo_t pFSI) : value
+' Get lead signature from FSInfo sector (expected $41615252).
+'
+' @param pFSI - Pointer to FSInfo structure
+' @returns value - Lead signature value
   return pFSI.leadSig
 
 PRI fsiStructSig(^fsinfo_t pFSI) : value
+' Get struct signature from FSInfo sector (expected $61417272).
+'
+' @param pFSI - Pointer to FSInfo structure
+' @returns value - Struct signature value
   return pFSI.structSig
 
 PRI fsiFreeClusters(^fsinfo_t pFSI) : value
+' Get free cluster count from FSInfo sector.
+'
+' @param pFSI - Pointer to FSInfo structure
+' @returns value - Free cluster count ($FFFFFFFF if unknown)
   return pFSI.freeClusters
 
 PRI fsiNextFreeHint(^fsinfo_t pFSI) : value
+' Get next free cluster hint from FSInfo sector.
+'
+' @param pFSI - Pointer to FSInfo structure
+' @returns value - Next free cluster hint ($FFFFFFFF if unknown)
   return pFSI.nextFreeHint
 
 PRI fsiSetFreeClusters(^fsinfo_t pFSI, value)
+' Set free cluster count in FSInfo sector.
+'
+' @param pFSI - Pointer to FSInfo structure
+' @param value - Free cluster count to store
   pFSI.freeClusters := value
 
 PRI fsiSetNextFreeHint(^fsinfo_t pFSI, value)
+' Set next free cluster hint in FSInfo sector.
+'
+' @param pFSI - Pointer to FSInfo structure
+' @param value - Next free cluster hint to store
   pFSI.nextFreeHint := value
 
 PRI dirEntAttr(^dir_entry_t p) : value
+' Get attribute byte from directory entry.
+'
+' @param p - Pointer to directory entry
+' @returns value - Attribute byte ($10=dir, $20=archive, $08=volume label)
   return p.attr
 
 PRI dirEntStartClus(^dir_entry_t p) : value
+' Get start cluster from directory entry (combines high and low words).
+'
+' @param p - Pointer to directory entry
+' @returns value - 32-bit start cluster number
   return p.clusHI << 16 | p.clusLO
 
 PRI dirEntFileSize(^dir_entry_t p) : value
+' Get file size from directory entry.
+'
+' @param p - Pointer to directory entry
+' @returns value - File size in bytes
   return p.fileSize
 
 PRI dirEntSetAttr(^dir_entry_t p, value)
+' Set attribute byte in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param value - Attribute byte to store
   p.attr := value
 
 PRI dirEntSetStartClus(^dir_entry_t p, value)
+' Set start cluster in directory entry (splits into high and low words).
+'
+' @param p - Pointer to directory entry
+' @param value - 32-bit start cluster number
   p.clusHI := value >> 16
   p.clusLO := value & $FFFF
 
 PRI dirEntSetFileSize(^dir_entry_t p, value)
+' Set file size in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param value - File size in bytes
   p.fileSize := value
 
 PRI dirEntAddFileSize(^dir_entry_t p, delta)
+' Add delta to file size in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param delta - Byte count to add to current file size
   p.fileSize += delta
 
 PRI dirEntSetCreateStamp(^dir_entry_t p, stamp)
+' Set creation timestamp in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param stamp - Packed FAT timestamp (low word=time, high word=date)
   p.crtTime := stamp & $FFFF
   p.crtDate := stamp >> 16
 
 PRI dirEntSetModifyStamp(^dir_entry_t p, stamp)
+' Set modification timestamp in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param stamp - Packed FAT timestamp (low word=time, high word=date)
   p.wrtTime := stamp & $FFFF
   p.wrtDate := stamp >> 16
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
+    ' ═══════════════════════════════════════════════════════════════════════════
 
-PRI do_mount() : result | reserved, pPart, pVBR, pFSI
+PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sector, sec_idx, next_cluster, found
 ' Internal mount operation - initializes card and reads filesystem structures.
 '
 ' @returns result - SUCCESS on success, error code on failure
@@ -1440,7 +1603,40 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI
   cluster_offset := root_sec // sec_per_clus
   bytemove(@vol_label, vbrVolLabelAddr(pVBR), 11)
   vol_label[11] := 0
-  debug("  [do_mount] Volume label: ", zstr(@vol_label))
+  debug("  [do_mount] VBR volume label: ", zstr(@vol_label))
+
+  ' Check root directory for authoritative volume label entry (ATTR_VOLUME_ID)
+  ' The root directory entry is the primary source per the FAT32 spec;
+  ' the VBR copy is a fallback (Windows format may write "NO NAME" to VBR).
+  ' Follow the root cluster chain so we find the label even if it's not in the first sector.
+  cluster := 2
+  found := false
+  repeat while cluster >= 2 and cluster +< $0FFF_FFF8 and not found
+    sector := clus2sec(cluster)
+    repeat sec_idx from 0 to sec_per_clus - 1
+      if readSector(sector + sec_idx, BUF_DIR) < 0
+        debug("  [do_mount] Root dir read failed, using VBR label")
+        found := true
+        quit
+      repeat i from 0 to 15
+        p_entry := @dir_buf + (i * 32)
+        if byte[p_entry] == $00                                                        '  end of directory
+          found := true
+          quit
+        if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                         '  volume label entry
+          bytemove(@vol_label, p_entry, 11)
+          vol_label[11] := 0
+          debug("  [do_mount] Root dir volume label: ", zstr(@vol_label))
+          found := true
+          quit
+      if found
+        quit
+    ' Follow FAT chain to next cluster
+    if not found
+      if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
+        quit
+      next_cluster := LONG[@fat_buf + ((cluster << 2) & 511)]
+      cluster := next_cluster
 
   ' Read FSInfo sector for free cluster count and next-free hint
   if fsinfo_sec > 0 and fsinfo_sec < reserved
@@ -1612,29 +1808,18 @@ PRI do_open(name_ptr) : result | search_result
   search_result := searchDirectory(name_ptr)
   if search_result
     if attributes() & %0001_1110 == 0
-      flags |= F_OPEN
       return SUCCESS
   return E_FILE_NOT_FOUND
 
 PRI do_close() : result
-' Internal close file operation - close the file and write changed data to the card.
-' Flushes pending data buffer (if dirty) and updates directory entry on disk.
+' Internal close file operation - close the file and update directory entry on disk.
 '
 ' @returns result - SUCCESS (0) on success, E_IO_ERROR on write failure
 
   result := SUCCESS
 
-  ' Flush pending data buffer only if it holds valid cached data.
-  ' After multi-sector writes (CMD25), buf is empty and sec_in_buf is -1.
-  ' Writing zeros to n_sec in that case is a spurious write to a wrong sector.
-  if flags & F_NEWDATA
-    if sec_in_buf >= 0
-      if not writeSector(n_sec, BUF_DATA)
-        debug("  [do_close] Data write FAILED for sector ", udec_(n_sec))
-        result := E_IO_ERROR
-
   ' Update directory entry on disk
-  if flags & (F_NEWDIR | F_NEWDATA)
+  if flags & F_NEWDIR
     if readSector(entry_address >> 9, BUF_DIR) < 0
       debug("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> 9))
       result := E_IO_ERROR
@@ -1645,8 +1830,7 @@ PRI do_close() : result
         result := E_IO_ERROR
 
   bytefill(@entry_buffer, 0, 32)
-  flags := flags & !F_NEWDATA & !F_NEWDIR & !F_OPEN
-  file_idx := 0
+  flags := flags & !F_NEWDIR
 
 ' ═══════════════════════════════════════════════════════════════════════════
 ' V3 HANDLE-BASED FILE OPERATIONS
@@ -1752,7 +1936,7 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     repeat cluster_count
       fat_addr := readFat(current_cluster)
       current_cluster := long[fat_addr]
-      if current_cluster >= $0FFF_FFF8                                          ' End of chain - shouldn't happen
+      if current_cluster +>= $0FFF_FFF8                                         ' End of chain - shouldn't happen
         quit
     h_cluster[handle] := current_cluster
     h_sector[handle] := clus2sec(current_cluster) + ((f_size - 1) >> 9) & (sec_per_clus - 1)
@@ -1933,7 +2117,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
         return 0
       fat_addr := @fat_buf + ((cluster << 2) & 511)
       next_cluster := long[fat_addr]
-      if next_cluster >= $0FFF_FFF8
+      if next_cluster +>= $0FFF_FFF8
         debug("  [do_read_h] End of chain at boundary advance")
         return 0
       h_cluster[handle] := next_cluster
@@ -1975,7 +2159,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
           return bytes_read                                                            ' Return partial read count
         fat_addr := @fat_buf + ((cluster << 2) & 511)
         next_cluster := long[fat_addr]
-        if next_cluster >= $0FFF_FFF8
+        if next_cluster +>= $0FFF_FFF8
           ' End of chain - shouldn't happen if h_size is correct
           debug("  [do_read_h] Unexpected end of FAT chain")
           quit
@@ -2155,7 +2339,7 @@ PRI do_seek_h(handle, position) : result | target_cluster_idx, cluster, i, fat_a
         return E_IO_ERROR
       fat_addr := @fat_buf + ((cluster << 2) & 511)
       cluster := long[fat_addr]
-      if cluster >= $0FFF_FFF8
+      if cluster +>= $0FFF_FFF8
         ' End of chain reached before target - shouldn't happen
         debug("  [do_seek_h] Unexpected end of FAT chain at index ", udec_(i))
         return E_END_OF_FILE
@@ -2312,7 +2496,7 @@ PRI do_read_dir_h(handle) : result | p_hbuf, offset, char, attrib, cluster, fat_
           return E_IO_ERROR
         fat_addr := @fat_buf + ((cluster << 2) & 511)
         next_cluster := long[fat_addr]
-        if next_cluster >= $0FFF_FFF8
+        if next_cluster +>= $0FFF_FFF8
           return E_FILE_NOT_FOUND                                               ' End of directory chain
         h_cluster[handle] := next_cluster
         h_sector[handle] := clus2sec(next_cluster)
@@ -2368,185 +2552,6 @@ PRI do_close_dir_h(handle) : result
   freeHandle(handle)
   return SUCCESS
 
-PRI do_read(p_buffer, count) : bytes_read | delta, sectors_to_boundary, full_sectors, multi_count, multi_read
-' Internal read operation - optimized with multi-sector support for throughput.
-' Uses CMD18 (readSectors) when reading 2+ full sequential sectors within a cluster.
-'
-' @param p_buffer - Pointer to destination buffer
-' @param count - Number of bytes to read
-' @returns bytes_read - Number of bytes actually read
-' @local delta - Bytes to read in partial sector
-' @local sectors_to_boundary - Sectors remaining before cluster boundary
-' @local full_sectors - Number of full sectors to read
-' @local multi_count - Sectors to read in multi-sector operation
-' @local multi_read - Sectors actually read in multi-sector operation
-
-  if (flags & F_OPEN) and not (attributes() & %0001_1110)
-    count <#= (fileSize() - file_idx)
-
-    ' Handle partial first sector (if not at sector boundary)
-    if (file_idx & 511) and count > 0
-      if readSector(n_sec, BUF_DATA) < 0
-        debug("  [do_read] Sector read FAILED for sector ", udec_(n_sec))
-        return 0
-      delta := (512 - (file_idx & 511)) <# count
-      bytemove(p_buffer, @buf + (file_idx & 511), delta)
-      file_idx += delta
-      bytes_read += delta
-      p_buffer += delta
-      count -= delta
-      if file_idx & 511 == 0
-        readNextSector(BUF_DATA)
-
-    ' Multi-sector optimization: read full sectors directly to user buffer
-    repeat while count >= 512
-      ' Calculate sectors remaining before cluster boundary
-      sectors_to_boundary := sec_per_clus - ((n_sec - cluster_offset) & (sec_per_clus - 1))
-      full_sectors := count >> 9                                                ' Number of full sectors needed
-      multi_count := sectors_to_boundary <# full_sectors                        ' Limit to cluster boundary
-
-      if multi_count >= 2
-        ' Multi-sector read directly to user buffer (more efficient)
-        multi_read := readSectors(n_sec, multi_count, p_buffer)
-        if multi_read > 0
-          file_idx += multi_read << 9
-          bytes_read += multi_read << 9
-          p_buffer += multi_read << 9
-          count -= multi_read << 9
-          n_sec += multi_read
-          sec_in_buf := -1                                                      ' Invalidate cache (we bypassed buf)
-          ' Check if we hit cluster boundary
-          if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-            followFatChain()                                                    ' Update n_sec to next cluster
-        else
-          quit                                                                  ' Error - exit loop
-      else
-        ' Single-sector read (for partial cluster or small reads)
-        if readSector(n_sec, BUF_DATA) < 0
-          debug("  [do_read] Sector read FAILED for sector ", udec_(n_sec))
-          return bytes_read                                                           ' Return partial read count
-        bytemove(p_buffer, @buf, 512)
-        file_idx += 512
-        bytes_read += 512
-        p_buffer += 512
-        count -= 512
-        readNextSector(BUF_DATA)
-
-    ' Handle partial last sector
-    if count > 0
-      if readSector(n_sec, BUF_DATA) < 0
-        debug("  [do_read] Tail sector read FAILED for sector ", udec_(n_sec))
-        return bytes_read                                                             ' Return partial read count
-      bytemove(p_buffer, @buf, count)
-      file_idx += count
-      bytes_read += count
-
-PRI do_write(p_buffer, count) | delta, temp, sectors_to_boundary, full_sectors, multi_count, multi_written
-' Internal write operation - optimized with multi-sector support for throughput.
-' Uses CMD25 (writeSectors) when writing 2+ full sequential sectors within a cluster.
-'
-' @param p_buffer - Pointer to source data buffer
-' @param count - Number of bytes to write
-' @local delta - Bytes to write in partial sector
-' @local temp - Temporary calculation variable
-' @local sectors_to_boundary - Sectors remaining before cluster boundary
-' @local full_sectors - Number of full sectors to write
-' @local multi_count - Sectors to write in multi-sector operation
-' @local multi_written - Sectors actually written in multi-sector operation
-
-  if (flags & F_OPEN) and (count > 0) and not (attributes() & %0001_1111)
-    if fileSize() & (sec_per_clus << 9 - 1) == 0
-      temp := firstCluster()
-      repeat (fileSize()-1) / (sec_per_clus << 9)
-        temp := long[readFat(temp)]
-      temp := allocateCluster(temp)
-      if fileSize() == 0
-        dirEntSetStartClus(@entry_buffer, temp)
-      n_sec := clus2sec(temp)
-      bytefill(@buf,0,512)
-    else
-      do_seek(fileSize())                                                       ' Use internal seek to avoid deadlock
-
-    ' Handle partial first sector (if not at sector boundary)
-    if (file_idx & 511) and count > 0
-      delta := (512 - (file_idx & 511)) <# count
-      bytemove(@buf + (file_idx & 511), p_buffer, delta)
-      sec_in_buf := n_sec
-      file_idx += delta
-      p_buffer += delta
-      dirEntAddFileSize(@entry_buffer, delta)
-      count -= delta
-      if file_idx & 511 == 0
-        writeSector(n_sec++, BUF_DATA)
-        bytefill(@buf,0,512)
-        if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-          temp := allocateCluster(sec2clus(n_sec-1))
-          n_sec := clus2sec(temp)
-
-    ' Multi-sector optimization: write full sectors directly from user buffer
-    repeat while count >= 512
-      ' Calculate sectors remaining before cluster boundary
-      sectors_to_boundary := sec_per_clus - ((n_sec - cluster_offset) & (sec_per_clus - 1))
-      full_sectors := count >> 9                                                ' Number of full sectors to write
-      multi_count := sectors_to_boundary <# full_sectors                        ' Limit to cluster boundary
-
-      if multi_count >= 2
-        ' Multi-sector write directly from user buffer (more efficient)
-        multi_written := writeSectors(n_sec, multi_count, p_buffer)
-        if multi_written > 0
-          file_idx += multi_written << 9
-          dirEntAddFileSize(@entry_buffer, multi_written << 9)
-          p_buffer += multi_written << 9
-          count -= multi_written << 9
-          n_sec += multi_written
-          sec_in_buf := -1                                                      ' Invalidate cache (we bypassed buf)
-          ' Check if we hit cluster boundary and need more writes
-          if count > 0 and ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-            temp := allocateCluster(sec2clus(n_sec-1))
-            n_sec := clus2sec(temp)
-        else
-          quit                                                                  ' Error - exit loop
-      else
-        ' Single-sector write (for partial cluster or small writes)
-        bytemove(@buf, p_buffer, 512)
-        writeSector(n_sec++, BUF_DATA)
-        file_idx += 512
-        dirEntAddFileSize(@entry_buffer, 512)
-        p_buffer += 512
-        count -= 512
-        bytefill(@buf,0,512)
-        if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-          temp := allocateCluster(sec2clus(n_sec-1))
-          n_sec := clus2sec(temp)
-
-    ' Handle partial last sector
-    if count > 0
-      bytemove(@buf + (file_idx & 511), p_buffer, count)
-      sec_in_buf := n_sec
-      file_idx += count
-      dirEntAddFileSize(@entry_buffer, count)
-
-    flags |= F_NEWDATA
-
-PRI do_seek(pos) : result | cluster
-' Internal seek operation - sets file position to specified byte offset.
-'
-' @param pos - Byte position to seek to
-' @returns result - SUCCESS on success, E_END_OF_FILE if past end
-' @local cluster - Current cluster during FAT chain walk
-
-  if pos > fileSize()
-    return E_END_OF_FILE
-  cluster := firstCluster()
-  repeat (pos / (sec_per_clus << 9))
-    cluster := long[readFat(cluster)]
-  n_sec := clus2sec(cluster)
-  n_sec += (pos / 512) // sec_per_clus
-  if readSector(n_sec, BUF_DATA) < 0
-    debug("  [do_seek] Sector read FAILED for sector ", udec_(n_sec))
-    return E_IO_ERROR
-  file_idx := pos
-  return SUCCESS
 
 PRI do_newfile(name_ptr) : result | temp
 ' Internal new file operation - creates a new file in current directory.
@@ -2576,7 +2581,7 @@ PRI do_newfile(name_ptr) : result | temp
   dirEntSetStartClus(@entry_buffer, 0)
   dirEntSetModifyStamp(@entry_buffer, date_stamp)
   dirEntSetFileSize(@entry_buffer, 0)
-  flags |= F_OPEN | F_NEWDIR
+  flags |= F_NEWDIR
   return SUCCESS
 
 PRI do_newdir(name_ptr) : result | temp
@@ -2690,7 +2695,7 @@ PRI do_delete(name_ptr) : result | cluster, p_cluster, fat_sector, loop_count
       loop_count++
       if loop_count > 100000                                                    ' Safety limit - prevent infinite loop
         return E_IO_ERROR
-    until cluster >= $0FFF_FFF8
+    until cluster +>= $0FFF_FFF8
   return SUCCESS
 
 PRI do_chdir(name_ptr) : result
@@ -2729,11 +2734,8 @@ PRI do_freespace() : result | cluster
   result := result * sec_per_clus
 
 PRI do_sync()
-' Internal sync operation - flushes pending writes without closing file.
+' Internal sync operation - flushes directory entry without closing file.
 
-  if flags & F_NEWDATA
-    writeSector(n_sec, BUF_DATA)
-    flags := flags & !F_NEWDATA
   if flags & F_NEWDIR
     if readSector(entry_address >> 9, BUF_DIR) < 0
       debug("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> 9))
@@ -2798,6 +2800,7 @@ PRI do_rename(old_name, new_name) : result | bookmark, temp_sec, i, saved_entry[
       return SUCCESS
     else
       debug("  [do_rename] New name already exists!")
+      return E_FILE_EXISTS
   else
     debug("  [do_rename] Old file NOT FOUND")
   return E_FILE_NOT_FOUND
@@ -2929,10 +2932,10 @@ PRI do_readdir(entry_num) : result | idx, char, attrib
       readNextSector(BUF_DIR)
   return E_FILE_NOT_FOUND
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' FLASH SPI ENGINE AND MOUNT LOGIC (Phase 2)
-    '' All methods run in the worker cog context (called from fs_worker dispatch)
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' FLASH SPI ENGINE AND MOUNT LOGIC (Phase 2)
+    ' All methods run in the worker cog context (called from fs_worker dispatch)
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI switch_to_flash()
 ' Reconfigure SPI bus for Flash device (Mode 3, MOSI/MISO as GPIO bit-bang).
@@ -3271,6 +3274,23 @@ PRI fl_activate_block(block_address, cycle_bits)
 
   fl_program_bit(block_address, cycle_bits << 5 | %00011111)
 
+PRI fl_format() : status | block_address, cycleBits
+' Format Flash filesystem: cancel all active blocks, then remount.
+' Port of flash_fs.spin2 format() lines 250-291.
+'
+' @returns status - SUCCESS or error code
+
+  debug("  [fl_format] Formatting ", udec_(FL_BLOCKS), " blocks...")
+
+  repeat FL_BLOCKS with block_address
+    fl_read_block_addr(block_address, @cycleBits, $000, $000)
+    if lookdown(cycleBits.[7..5] : %011, %101, %110)
+      fl_cancel_block(block_address)
+
+  debug("  [fl_format] Format complete, remounting...")
+  flash_mounted := FALSE
+  status := do_flash_mount()
+
 PRI fl_cancel_block(block_address)
 ' Cancel a block by clearing all lifecycle bits.
 '
@@ -3405,9 +3425,6 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
 
   status := SUCCESS
 
-  ' Switch to Flash SPI mode
-  switch_to_flash()
-
   ' M1 pass: Check each block and fix duplicate IDs
   debug("  [do_flash_mount] M1: Scanning ", udec_(FL_BLOCKS), " blocks for duplicates...")
   repeat FL_BLOCKS with block_address
@@ -3432,9 +3449,6 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
       fl_cancel_block(block_address)                                              ' Cancel on chip
       status := E_FLASH_BAD_BLOCKS
 
-  ' Switch back to SD mode (default bus state)
-  switch_to_sd()
-
   ' Bad blocks found but cleaned is informational, not fatal
   if status == E_FLASH_BAD_BLOCKS
     debug("  [do_flash_mount] WARNING: Dead blocks were cleaned during mount")
@@ -3442,6 +3456,90 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
 
   debug("  [do_flash_mount] Flash mount complete")
   return status
+
+PRI fl_can_mount() : ok | block_address, blockTypeBits, signature, bad_count, dupe_count, badBlockCount
+' Non-destructive check if Flash would mount cleanly.
+' Like do_flash_mount() but read-only: never calls fl_cancel_block().
+' Uses fl_check_block_read_only() instead of fl_check_block_fix_dupe_id().
+'
+' @returns ok - TRUE if no blocks would need repair, FALSE otherwise
+
+  debug("  [fl_can_mount] Checking Flash mount readiness...")
+
+  if flash_mounted
+    return true                                                                  ' Already mounted is OK
+
+  ' Clear translation tables (temporary, for scan only)
+  bytefill(@fl_IDToBlocks, 0, ID_TO_BLOCKS_SZ * 2)
+  bytefill(@fl_IDValids, 0, FL_FLAGS_SIZE)
+  bytefill(@fl_BlockStates, 0, FL_STATES_SIZE)
+
+  fl_IDToBlock  := ^@fl_IDToBlocks.[11..0]
+  fl_IDValid    := ^@fl_IDValids.[0]
+  fl_BlockState := ^@fl_BlockStates.[1..0]
+
+  badBlockCount := 0
+
+  ' Pass 1: Read-only block check (no cancel operations)
+  repeat FL_BLOCKS with block_address
+    bad_count, dupe_count := fl_check_block_read_only(block_address)
+    badBlockCount += bad_count
+
+  ' Pass 2: Trace head blocks
+  repeat FL_BLOCKS with block_address
+    if field[fl_BlockState][block_address] == B_TEMP
+      fl_read_block_addr(block_address, @blockTypeBits, $000, $000)
+      ifnot blockTypeBits.[1]                                                    ' Head block?
+        ifnot fl_trace_file_set_flags(block_address, true)
+          fl_trace_file_set_flags(block_address, false)
+
+  ' Pass 3: Count dead blocks (read-only — do NOT cancel)
+  repeat FL_BLOCKS with block_address
+    if field[fl_BlockState][block_address] == B_TEMP
+      fl_read_block_addr(block_address, @signature, $000, $003)
+      field[fl_IDValid][signature.[19..8]]~
+      field[fl_BlockState][block_address] := B_FREE
+      badBlockCount++
+
+  ok := badBlockCount == 0
+  debug("  [fl_can_mount] Result: ", udec_(badBlockCount), " bad blocks, ok=", udec_(ok))
+
+PRI fl_check_block_read_only(thisBlockAddress) : bad_count, dupe_count | otherBlockAddress, thisCycleBits, otherCycleBits, thisBlockID
+' Read-only block check: like fl_check_block_fix_dupe_id but never cancels blocks.
+' Port of flash_fs.spin2 check_block_read_only().
+'
+' @param thisBlockAddress - Block offset within filesystem
+' @returns bad_count - 1 if block has bad CRC, 0 otherwise
+' @returns dupe_count - 1 if duplicate ID found, 0 otherwise
+
+  fl_read_block_addr(thisBlockAddress, @thisCycleBits, $000, $000)               ' Read first byte
+
+  ifnot lookdown(thisCycleBits.[7..5]: %011, %101, %110)                         ' Valid lifecycle?
+    return                                                                        ' No - stays B_FREE
+
+  fl_read_block_addr(thisBlockAddress, @fl_tmpBlockBuff, $000, $FFF)             ' Read entire block
+
+  if LONG[@fl_tmpBlockBuff + $FFC] <> fl_block_crc(@fl_tmpBlockBuff)             ' CRC valid?
+    bad_count++                                                                   ' No - count as bad
+    return                                                                        ' Status stays B_FREE
+
+  thisBlockID := LONG[@fl_tmpBlockBuff].[19..8]                                  ' Good block, get ID
+
+  ifnot field[fl_IDValid][thisBlockID]~~                                         ' Set flag, was it set?
+    field[fl_IDToBlock][thisBlockID] := thisBlockAddress                          ' First with this ID
+    field[fl_BlockState][thisBlockAddress] := B_TEMP
+    return
+
+  ' Duplicate ID found — resolve in tables only (no cancel)
+  otherBlockAddress := field[fl_IDToBlock][thisBlockID]
+  dupe_count++
+
+  fl_read_block_addr(otherBlockAddress, @otherCycleBits, $000, $000)
+
+  if lookdown(thisCycleBits.[7..5] << 3 | otherCycleBits.[7..5]: %011_110, %101_011, %110_101)
+    field[fl_IDToBlock][thisBlockID] := thisBlockAddress                          ' This is newer
+    field[fl_BlockState][thisBlockAddress] := B_TEMP
+    field[fl_BlockState][otherBlockAddress] := B_FREE
 
 PRI do_flash_serial_number() : sn_hi, sn_lo
 ' Read Flash chip 64-bit JEDEC unique ID (command $4B).
@@ -3453,7 +3551,6 @@ PRI do_flash_serial_number() : sn_hi, sn_lo
 ' @returns sn_hi - High 32 bits of unique ID
 ' @returns sn_lo - Low 32 bits of unique ID
 
-  switch_to_flash()
   fl_command($4B, 1)                                                              ' Read Unique ID command
   fl_send($00, 4)                                                                 ' 4 dummy bytes
   fl_receive(@fl_sn_buf, 8)                                                       ' 8 ID bytes into DAT buffer
@@ -3466,14 +3563,13 @@ PRI do_flash_serial_number() : sn_hi, sn_lo
     movbyts   sn_lo, #%%0123
   end
 
-  switch_to_sd()
   debug("  [do_flash_serial_number] ID: $", uhex_long_(sn_hi), "_", uhex_long_(sn_lo))
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' PHASE 3: FLASH FILE OPERATIONS (worker cog internal methods)
-    '' Ported from flash_fs.spin2 with fl_ prefix, adapted for unified driver.
-    '' All methods run in worker cog — no locks, no mount checks (dispatch handles).
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' PHASE 3: FLASH FILE OPERATIONS (worker cog internal methods)
+    ' Ported from flash_fs.spin2 with fl_ prefix, adapted for unified driver.
+    ' All methods run in worker cog — no locks, no mount checks (dispatch handles).
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 ' ─── Step 3: Non-SPI Helpers ────────────────────────────────────────────────
 
@@ -3527,6 +3623,17 @@ PRI fl_ensure_handle_mode(handle, open_mode_bits) : status
     status := SUCCESS
   else
     status := E_FLASH_FILE_MODE
+
+PRI fl_has_free_handle() : bAvail | idx
+' Check if any handle slot is available without allocating.
+' Used for early-exit error checking before expensive operations.
+'
+' @returns bAvail - TRUE if at least one handle is free
+
+  repeat idx from 0 to MAX_OPEN_FILES - 1
+    if h_flags[idx] == HF_FREE
+      return TRUE
+  return FALSE
 
 PRI fl_new_handle(p_filename) : handle
 ' Allocate a unified handle and configure it for Flash use.
@@ -3698,6 +3805,23 @@ PRI fl_get_file_head_signature(p_filename) : foundSignature | tmpFilenameCRC, bl
 
   if foundSignature <> 0
     foundSignature.[2] := bIsOldFmt ? 0 : 1
+
+PRI fl_TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count | signature
+' Return file statistics by filename (used by test utilities).
+' Port of flash_fs.spin2 TEST_count_file_bytes().
+'
+' @param p_filename - pointer to filename string
+' @returns bytes_used - bytes written (or E_FILE_NOT_FOUND)
+' @returns bytes_free - unused bytes in last block
+' @returns block_count - total blocks allocated
+
+  ifnot flash_mounted
+    return E_NOT_MOUNTED, 0, 0
+
+  if signature := fl_get_file_head_signature(p_filename)
+    bytes_used, bytes_free, block_count := fl_count_file_bytes(field[fl_IDToBlock][signature.[19..8]])
+  else
+    bytes_used := E_FILE_NOT_FOUND
 
 PRI fl_count_file_bytes(block_address) : bytes_used, bytes_free, block_count | signature
 ' Return information about a file: bytes used, bytes free, block count.
@@ -4042,6 +4166,57 @@ PRI fl_wr_byte_no_locks(handle, byte_value) : status | pBuff, nextBlockID, isSee
     else
       fl_hEndPtr[handle] := endPtr
 
+PRI fl_rd_str(handle, p_str, count) : bytes_read | byteIndex, readValue
+' Read zero-terminated string from Flash file.
+' Port of flash_fs.spin2 rd_str().
+'
+' @param handle - handle to file open for read
+' @param p_str - destination buffer in hub RAM
+' @param count - max bytes including terminator
+' @returns bytes_read - string length (not including terminator), or negative error
+
+  bytefill(p_str, 0, count)
+  bytes_read := 0
+
+  repeat count with byteIndex
+    readValue := fl_rd_byte_no_locks(handle)
+    if readValue < 0
+      if readValue == E_END_OF_FILE
+        if byteIndex == 0
+          bytes_read := readValue
+        else
+          BYTE[p_str][byteIndex] := 0
+          fl_errorCode := E_FLASH_INCOMPLETE_STR
+      else
+        bytes_read := readValue
+      quit
+    else
+      if byteIndex == count - 1 and readValue <> 0
+        BYTE[p_str][byteIndex] := 0
+        fl_errorCode := E_FLASH_TRUNCATED_STR
+        quit
+      else
+        BYTE[p_str][byteIndex] := readValue
+        if readValue == 0
+          quit
+        else
+          bytes_read++
+
+PRI fl_file_size_unused(p_filename) : size_unused | signature
+' Get count of unused bytes in last allocated block of a Flash file.
+' Port of flash_fs.spin2 file_size_unused().
+'
+' @param p_filename - pointer to filename string
+' @returns size_unused - unused bytes, or negative error
+
+  ifnot flash_mounted
+    return E_NOT_MOUNTED
+
+  if signature := fl_get_file_head_signature(p_filename)
+    _, size_unused, _ := fl_count_file_bytes(field[fl_IDToBlock][signature.[19..8]])
+  else
+    size_unused := E_FILE_NOT_FOUND
+
 PRI fl_close_no_lock(handle) : status | open_mode, chain_block_address, head_block_id, chain_block_id, chainState
 ' Close an open Flash file (internal, no lock).
 ' Port of flash_fs.spin2 close_no_lock().
@@ -4184,6 +4359,10 @@ PRI fl_open(p_filename, mode) : handle | findings, bFileExists
   fl_errorCode := SUCCESS
   handle := FL_NOT_VALID
 
+  ' Check for available handle BEFORE other checks (matches reference driver order)
+  ifnot fl_has_free_handle()
+    return fl_set_error(E_FLASH_NO_HANDLE)
+
   case mode
     "r", "R":
     "a", "A", "w", "W", FILEMODE_READ_EXTENDED, FILEMODE_WRITE_EXTENDED:
@@ -4237,6 +4416,10 @@ PRI fl_open_circular(p_filename, mode, max_file_length) : handle | bFileExists
 
   fl_errorCode := SUCCESS
   handle := FL_NOT_VALID
+
+  ' Check for available handle BEFORE other checks (matches reference driver order)
+  ifnot fl_has_free_handle()
+    return fl_set_error(E_FLASH_NO_HANDLE)
 
   bFileExists := fl_exists_no_lock(p_filename)
 
@@ -4577,25 +4760,25 @@ PRI fl_create_file(p_filename, fill_value, byte_count) : status | signature, hea
   until isLast
 
   fl_activate_block(field[fl_IDToBlock][head_block_id], %011)
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' PUBLIC API - Multi-cog safe via worker cog
-    '' All operations are serialized through send_command()
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' PUBLIC API - Multi-cog safe via worker cog
+    ' All operations are serialized through send_command()
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 CON     '' management methods
-PUB mount(dev) : result
+PUB mount(dev) : status
 '' Mount one or both filesystems (multi-cog safe).
 '' Requires init() to have been called first (worker cog must be running).
 '' Use DEV_SD to mount SD card, DEV_FLASH to mount Flash chip, DEV_BOTH for both.
 ''
 '' @param dev - DEV_SD, DEV_FLASH, or DEV_BOTH
-'' @returns result - TRUE if all requested devices mounted, FALSE on any failure
+'' @returns status - SUCCESS (0) if all requested devices mounted, negative error code on failure
 
   ' Require init() to have been called
   if cog_id == -1
     debug("  [mount] ERROR: init() not called, worker not running")
     set_error(E_NOT_MOUNTED)
-    return false
+    return E_NOT_MOUNTED
 
   ' Mount SD if requested
   if dev == DEV_SD or dev == DEV_BOTH
@@ -4605,40 +4788,49 @@ PUB mount(dev) : result
       ' MODE_RAW -> MODE_FILESYSTEM upgrade is allowed
       if driver_mode == MODE_RAW
         debug("  [mount] Upgrading from RAW to FILESYSTEM mode")
-      result := send_command(CMD_MOUNT, 0, 0, 0, 0)
-      if result == SUCCESS
+      status := send_command(CMD_MOUNT, 0, 0, 0, 0)
+      if status == SUCCESS
         sd_mounted := TRUE
         debug("  [mount] SD mount successful")
       else
-        debug("  [mount] SD mount failed with error ", sdec_(result))
-        set_error(result)
+        debug("  [mount] SD mount failed with error ", sdec_(status))
+        set_error(status)
         if dev == DEV_SD
-          return false
+          return status
 
   ' Mount Flash if requested
   if dev == DEV_FLASH or dev == DEV_BOTH
     if flash_mounted
       debug("  [mount] Flash already mounted")
     else
-      result := send_command(CMD_FLASH_MOUNT, 0, 0, 0, 0)
-      if result == SUCCESS
+      status := send_command(CMD_FLASH_MOUNT, 0, 0, 0, 0)
+      if status == SUCCESS
         flash_mounted := TRUE
         debug("  [mount] Flash mount successful")
       else
-        debug("  [mount] Flash mount failed with error ", sdec_(result))
-        set_error(result)
+        debug("  [mount] Flash mount failed with error ", sdec_(status))
+        set_error(status)
         if dev == DEV_FLASH
-          return false
+          return status
         ' DEV_BOTH: Flash failure is non-fatal if SD succeeded
 
-  ' Return TRUE if all requested devices are mounted
+  ' Return SUCCESS if all requested devices are now mounted, else error
   case dev
-    DEV_SD:    return sd_mounted
-    DEV_FLASH: return flash_mounted
-    DEV_BOTH:  return sd_mounted and flash_mounted
+    DEV_SD:
+      ifnot sd_mounted
+        return E_NOT_MOUNTED
+    DEV_FLASH:
+      ifnot flash_mounted
+        return E_NOT_MOUNTED
+    DEV_BOTH:
+      if sd_mounted and flash_mounted
+        return SUCCESS
+      return E_NOT_MOUNTED
     other:
       set_error(E_BAD_DEVICE)
-      return false
+      return E_BAD_DEVICE
+
+  return SUCCESS
 
 PUB mounted(dev) : result
 '' Check if a device is currently mounted.
@@ -4666,10 +4858,23 @@ PUB canMount(dev) : result
       ' TODO: implement non-destructive SD card check
       return false
     DEV_FLASH:
-      ' Phase 2+ stub
-      return false
+      send_command(CMD_FL_CAN_MOUNT, 0, 0, 0, 0)
+      return LONG[@saved_data0][COGID()]
     other:
       return false
+
+PUB version(dev) : ver
+'' Get driver version for a device as integer (e.g., 200 = v2.0.0).
+'' Use DFS_VERSION constant for unified driver version.
+''
+'' @param dev - DEV_SD, DEV_FLASH, or DEV_BOTH (returns DFS_VERSION)
+'' @returns ver - Version integer (major * 100 + minor * 10 + patch)
+
+  case dev
+    DEV_SD:    return SD_VERSION
+    DEV_FLASH: return FLASH_VERSION
+    DEV_BOTH:  return DFS_VERSION
+    other:     return DFS_VERSION
 
 #IFDEF SD_INCLUDE_RAW
 PUB initCardOnly() : result
@@ -4713,7 +4918,7 @@ PUB cardSizeSectors() : result
     debug("  [cardSizeSectors] ERROR: Worker not running")
     return 0
   send_command(CMD_GET_CARD_SIZE, 0, 0, 0, 0)
-  result := pb_data0
+  result := LONG[@saved_data0][COGID()]
   debug("  [cardSizeSectors] ", udec(result), " sectors")
 #ENDIF
 
@@ -4809,6 +5014,10 @@ PUB writeSectorRaw(sector, p_buffer) : result
   if cog_id == -1
     debug("  [writeSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
     return false
+  ' Require SD card to be initialized (mount or initCardOnly)
+  if driver_mode == MODE_NONE
+    debug("  [writeSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
+    return false
   result := send_command(CMD_WRITE_SECTOR_RAW, sector, p_buffer, 0, 0) == SUCCESS
   if result
     debug("  [writeSectorRaw] Wrote sector ", udec(sector))
@@ -4827,6 +5036,10 @@ PUB readSectorRaw(sector, p_buffer) : result
   if cog_id == -1
     debug("  [readSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
     return false
+  ' Require SD card to be initialized (mount or initCardOnly)
+  if driver_mode == MODE_NONE
+    debug("  [readSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
+    return false
   result := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0) == SUCCESS
   debug("  [readSectorRaw] Read sector ", udec(sector))
 
@@ -4840,7 +5053,7 @@ PUB readSectorsRaw(start_sector, count, p_buffer) : result
 '' @returns result - Number of sectors successfully read
 
   if send_command(CMD_READ_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
-    result := pb_data0
+    result := LONG[@saved_data0][COGID()]
   else
     result := 0
 
@@ -4854,28 +5067,28 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : result
 '' @returns result - Number of sectors successfully written
 
   if send_command(CMD_WRITE_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
-    result := pb_data0
+    result := LONG[@saved_data0][COGID()]
   else
     result := 0
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' CARD IDENTIFICATION METHODS (for diagnostic tools)
-    '' These methods provide raw register access for card characterization.
-    '' Call initCardOnly() or mount() before using these methods.
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' CARD IDENTIFICATION METHODS (for diagnostic tools)
+    ' These methods provide raw register access for card characterization.
+    ' Call initCardOnly() or mount() before using these methods.
     ''
-    '' SD card registers are big-endian (MSB-first). Single-byte fields can be
-    '' read directly, but multi-byte fields need endian conversion on the P2
-    '' (little-endian). Currently done with manual shift/OR patterns.
+    ' SD card registers are big-endian (MSB-first). Single-byte fields can be
+    ' read directly, but multi-byte fields need endian conversion on the P2
+    ' (little-endian). Currently done with manual shift/OR patterns.
     ''
-    '' TODO: With {Spin2_v52} compiler, use ENDIANL() and ENDIANW() for
-    ''   multi-byte big-endian fields:
-    ''     psn := ENDIANL(LONG[@cid_buf + 9])   ' CID serial number
-    ''     mdt := ENDIANW(WORD[@cid_buf + 13])   ' CID manufacturing date
-    ''   Also consider STRUCT (available at v45+) to define cid_t, csd_t, scr_t
-    ''   types here and export them for consumer objects.
-    '' ═══════════════════════════════════════════════════════════════════════════
+    ' TODO: With {Spin2_v52} compiler, use ENDIANL() and ENDIANW() for
+    '   multi-byte big-endian fields:
+    '     psn := ENDIANL(LONG[@cid_buf + 9])   ' CID serial number
+    '     mdt := ENDIANW(WORD[@cid_buf + 13])   ' CID manufacturing date
+    '   Also consider STRUCT (available at v45+) to define cid_t, csd_t, scr_t
+    '   types here and export them for consumer objects.
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB readCIDRaw(p_buf) : result | status
 '' Read CID register (16 bytes) into buffer.
@@ -4963,13 +5176,7 @@ PUB readVBRRaw(p_buf) : result
   if not (flags & F_MOUNTED)
     debug("  [readVBRRaw] FAILED: Card not mounted")
     return false
-  sec_in_buf := -1                                                              '  force re-read
-  if readSector(vbr_sec, BUF_DATA) < 0
-    debug("  [readVBRRaw] FAILED: VBR read error")
-    return false
-  bytemove(p_buf, @buf, 512)
-  debug("  [readVBRRaw] VBR read from sector ", udec(vbr_sec))
-  return true
+  result := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0) == SUCCESS
 #ENDIF
 
 PRI readCSD(p_csd) : result | t, i
@@ -5258,7 +5465,7 @@ PRI setOptimalSpeed()
     debug("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 #IFDEF SD_INCLUDE_SPEED
-CON '' High-Speed Mode Support (50 MHz via CMD6)
+CON ' High-Speed Mode Support (50 MHz via CMD6)
 
 PRI sendCMD6(arg, p_status) : result | t, i
 ' Send CMD6 (SWITCH_FUNC) and receive 64-byte status structure.
@@ -5690,19 +5897,6 @@ PRI readSDStatus(p_buf) : result | t, i
   debug("  [readSDStatus] Success")
   return true
 
-PUB newFile(dev, name_ptr) : result
-'' Create and open a new file (multi-cog safe) in current directory.
-''
-'' @param name_ptr - Pointer to null-terminated filename string
-'' @returns result - TRUE on success, FALSE if file exists or error
-
-  result := send_command(CMD_NEWFILE, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
-
 PUB newDirectory(dev, name_ptr) : result
 '' Create a new directory (multi-cog safe) in current directory.
 ''
@@ -5710,19 +5904,6 @@ PUB newDirectory(dev, name_ptr) : result
 '' @returns result - TRUE on success, FALSE if directory exists or error
 
   result := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
-
-PUB openFile(dev, name_ptr) : result
-'' Open file (multi-cog safe) - opens existing file for reading/writing.
-''
-'' @param name_ptr - Pointer to null-terminated filename string
-'' @returns result - TRUE on success, FALSE if not found
-
-  result := send_command(CMD_OPEN, name_ptr, 0, 0, 0)
   if result == SUCCESS
     return true
   else
@@ -5742,23 +5923,23 @@ PUB changeDirectory(dev, name_ptr) : result
     set_error(result)
     return false
 
-PUB closeFile()
-'' Close file (multi-cog safe) - closes currently open file, flushing pending writes.
-
-  send_command(CMD_CLOSE, 0, 0, 0, 0)
-
-PUB unmount(dev) : result
+PUB unmount(dev) : status | did_unmount
 '' Unmount one or both filesystems (multi-cog safe).
 '' Flushes pending data and updates filesystem metadata.
 ''
 '' @param dev - DEV_SD, DEV_FLASH, or DEV_BOTH
-'' @returns result - TRUE on success
+'' @returns status - SUCCESS (0) on success, E_NOT_MOUNTED if device not mounted
+
+  did_unmount := FALSE
 
   if dev == DEV_SD or dev == DEV_BOTH
     if sd_mounted
-      result := send_command(CMD_UNMOUNT, 0, 0, 0, 0)
+      status := send_command(CMD_UNMOUNT, 0, 0, 0, 0)
       sd_mounted := FALSE
+      did_unmount := TRUE
       debug("  [unmount] SD unmounted")
+    elseif dev == DEV_SD
+      return set_error(E_NOT_MOUNTED)
 
   if dev == DEV_FLASH or dev == DEV_BOTH
     if flash_mounted
@@ -5766,9 +5947,15 @@ PUB unmount(dev) : result
       bytefill(@fl_hStatus, 0, MAX_OPEN_FILES)
       wordfill(@fl_hHeadBlockID, FL_NOT_VALID, MAX_OPEN_FILES)
       flash_mounted := FALSE
+      did_unmount := TRUE
       debug("  [unmount] Flash unmounted")
+    elseif dev == DEV_FLASH
+      return set_error(E_NOT_MOUNTED)
 
-  return true
+  if dev == DEV_BOTH and not did_unmount
+    return set_error(E_NOT_MOUNTED)
+
+  return SUCCESS
 
 PUB sync() : result
 '' Flush buffers (multi-cog safe) - flushes pending writes without closing file.
@@ -5797,10 +5984,10 @@ PUB openFileRead(dev, p_path) : handle
   case dev
     DEV_SD:
       send_command(CMD_OPEN_READ, p_path, 0, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
       send_command(CMD_FLASH_OPEN, p_path, FILEMODE_READ, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
     other:
       return set_error(E_BAD_DEVICE)
   if handle >= 0
@@ -5822,10 +6009,10 @@ PUB openFileWrite(dev, p_path) : handle
   case dev
     DEV_SD:
       send_command(CMD_OPEN_WRITE, p_path, 0, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
       send_command(CMD_FLASH_OPEN, p_path, FILEMODE_WRITE, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
     other:
       return set_error(E_BAD_DEVICE)
   if handle >= 0
@@ -5847,10 +6034,10 @@ PUB createFileNew(dev, p_path) : handle
   case dev
     DEV_SD:
       send_command(CMD_CREATE, p_path, 0, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
       send_command(CMD_FLASH_OPEN, p_path, FILEMODE_WRITE, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
     other:
       return set_error(E_BAD_DEVICE)
   if handle >= 0
@@ -5869,7 +6056,7 @@ PUB closeFileHandle(handle) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     status := send_command(CMD_FLASH_CLOSE, handle, 0, 0, 0)
@@ -5893,16 +6080,17 @@ PUB readHandle(handle, p_buffer, count) : bytes_read
 '' @returns bytes_read - Bytes actually read (0 at EOF), negative on error
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     send_command(CMD_FLASH_READ, handle, p_buffer, count, 0)
   else
     send_command(CMD_READ_H, handle, p_buffer, count, 0)
-  bytes_read := pb_data0
+  bytes_read := LONG[@saved_data0][COGID()]
   if bytes_read < 0
     debug("  [readHandle] Failed: ", sdec_(bytes_read))
     set_error(bytes_read)
+  ' Note: send_command already propagates negative pb_status via set_error()
   return bytes_read
 
 PUB writeHandle(handle, p_buffer, count) : bytes_written
@@ -5916,13 +6104,17 @@ PUB writeHandle(handle, p_buffer, count) : bytes_written
 '' @returns bytes_written - Bytes actually written, negative on error
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
+
+  if count == 0
+    set_error(SUCCESS)
+    return 0
 
   if h_device[handle] == DEV_FLASH
     send_command(CMD_FLASH_WRITE, handle, p_buffer, count, 0)
   else
     send_command(CMD_WRITE_H, handle, p_buffer, count, 0)
-  bytes_written := pb_data0
+  bytes_written := LONG[@saved_data0][COGID()]
   if bytes_written < 0
     debug("  [writeHandle] Failed: ", sdec_(bytes_written))
     set_error(bytes_written)
@@ -5937,11 +6129,11 @@ PUB seekHandle(handle, position) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     send_command(CMD_FLASH_SEEK, handle, position, SK_FILE_START, 0)
-    status := pb_data0 < 0 ? pb_data0 : SUCCESS
+    status := LONG[@saved_data0][COGID()] < 0 ? LONG[@saved_data0][COGID()] : SUCCESS
   else
     status := send_command(CMD_SEEK_H, handle, position, 0, 0)
   if status <> SUCCESS
@@ -5949,35 +6141,59 @@ PUB seekHandle(handle, position) : status
     set_error(status)
   return status
 
-PUB tellHandle(handle) : position
+PUB flashSeek(handle, position, whence) : end_position
+'' Seek within a Flash file with whence parameter (SK_FILE_START or SK_CURRENT_POSN).
+'' Flash-only — SD files should use seekHandle() which is absolute-only.
+''
+'' @param handle - Valid Flash file handle
+'' @param position - Byte position (absolute) or offset (relative)
+'' @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
+'' @returns end_position - Resulting position, or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+
+  if h_device[handle] <> DEV_FLASH
+    return set_error(E_BAD_DEVICE)
+
+  send_command(CMD_FLASH_SEEK, handle, position, whence, 0)
+  end_position := LONG[@saved_data0][COGID()]
+  if end_position < 0
+    debug("  [flashSeek] Failed: ", sdec_(end_position))
+    set_error(end_position)
+  return end_position
+
+PUB tellHandle(handle) : position | cmd_status
 '' Get current position (V3 multi-file) - returns current byte position in file.
 ''
 '' @param handle - Valid file handle
 '' @returns position - Current position (0-based), negative on error
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     send_command(CMD_FLASH_SEEK, handle, 0, SK_CURRENT_POSN, 0)
-    position := pb_data0
+    position := LONG[@saved_data0][COGID()]
   else
-    send_command(CMD_TELL_H, handle, 0, 0, 0)
-    if pb_status == SUCCESS
-      position := pb_data0
+    cmd_status := send_command(CMD_TELL_H, handle, 0, 0, 0)
+    if cmd_status == SUCCESS
+      position := LONG[@saved_data0][COGID()]
     else
-      position := pb_status
+      position := cmd_status
       set_error(position)
   return position
 
-PUB eofHandle(handle) : is_eof | cur_pos, fsize
+PUB eofHandle(handle) : is_eof | cur_pos, fsize, cmd_status
 '' Check if at end of file (V3 multi-file) - returns TRUE if at or past EOF.
 ''
 '' @param handle - Valid file handle
 '' @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     ' Flash EOF: compare current seek position to file size
@@ -5990,15 +6206,15 @@ PUB eofHandle(handle) : is_eof | cur_pos, fsize
     else
       is_eof := cur_pos >= fsize
   else
-    send_command(CMD_EOF_H, handle, 0, 0, 0)
-    if pb_status == SUCCESS
-      is_eof := pb_data0 <> 0
+    cmd_status := send_command(CMD_EOF_H, handle, 0, 0, 0)
+    if cmd_status == SUCCESS
+      is_eof := LONG[@saved_data0][COGID()] <> 0
     else
-      is_eof := pb_status
+      is_eof := cmd_status
       set_error(is_eof)
   return is_eof
 
-PUB fileSizeHandle(handle) : size
+PUB fileSizeHandle(handle) : size | cmd_status
 '' Get file size (V3 multi-file) - returns total size in bytes.
 '' For write handles, reflects current size including pending writes.
 ''
@@ -6006,18 +6222,18 @@ PUB fileSizeHandle(handle) : size
 '' @returns size - File size in bytes, negative on error
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     ' Flash: seek to end (POSX) returns file length
     send_command(CMD_FLASH_SEEK, handle, POSX, SK_FILE_START, 0)
-    size := pb_data0
+    size := LONG[@saved_data0][COGID()]
   else
-    send_command(CMD_FILESIZE_H, handle, 0, 0, 0)
-    if pb_status == SUCCESS
-      size := pb_data0
+    cmd_status := send_command(CMD_FILESIZE_H, handle, 0, 0, 0)
+    if cmd_status == SUCCESS
+      size := LONG[@saved_data0][COGID()]
     else
-      size := pb_status
+      size := cmd_status
       set_error(size)
   return size
 
@@ -6029,7 +6245,7 @@ PUB syncHandle(handle) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
 
   if h_device[handle] == DEV_FLASH
     status := send_command(CMD_FLASH_FLUSH, handle, 0, 0, 0)
@@ -6121,6 +6337,8 @@ PUB deleteFile(dev, name_ptr) : deleted | status
     DEV_SD:
       status := send_command(CMD_DELETE, name_ptr, 0, 0, 0)
     DEV_FLASH:
+      ifnot flash_mounted
+        return set_error(E_NOT_MOUNTED)
       status := send_command(CMD_FLASH_DELETE, name_ptr, 0, 0, 0)
     other:
       set_error(E_BAD_DEVICE)
@@ -6143,6 +6361,8 @@ PUB rename(dev, old_name, new_name) : renamed | status
     DEV_SD:
       status := send_command(CMD_RENAME, old_name, new_name, 0, 0)
     DEV_FLASH:
+      ifnot flash_mounted
+        return set_error(E_NOT_MOUNTED)
       status := send_command(CMD_FLASH_RENAME, old_name, new_name, 0, 0)
     other:
       set_error(E_BAD_DEVICE)
@@ -6176,13 +6396,17 @@ PUB freeSpace(dev) : free_count
 
   case dev
     DEV_SD:
+      if not sd_mounted
+        return 0
       if send_command(CMD_FREESPACE, 0, 0, 0, 0) == SUCCESS
-        return pb_data0
+        return LONG[@saved_data0][COGID()]
       else
         return 0
     DEV_FLASH:
+      if not flash_mounted
+        return 0
       if send_command(CMD_FLASH_STATS, 0, 0, 0, 0) == SUCCESS
-        return pb_data1                                                             ' free_blocks from fl_stats()
+        return LONG[@saved_data1][COGID()]                                                          ' free_blocks from fl_stats()
       else
         return 0
     other:
@@ -6201,56 +6425,6 @@ PUB setDate(year, month, day, hour, minute, second)
   date_stamp := (year - 1980) << 25 | month << 21 | day << 16 | hour << 11 | minute << 5 | second >> 1
 
 CON     '' read/write methods
-PUB read(p_buffer, count) : result
-'' Read bytes from file (multi-cog safe) - reads up to count bytes.
-''
-'' @param p_buffer - Pointer to destination buffer
-'' @param count - Maximum bytes to read
-'' @returns result - Number of bytes actually read
-
-  if send_command(CMD_READ, p_buffer, count, 0, 0) == SUCCESS
-    return pb_data0                                                             ' pb_data0 contains bytes read
-  else
-    return 0
-
-PUB readByte(address) : result | byte_buf
-'' Read single byte from file (multi-cog safe) - seeks to address and reads one byte.
-''
-'' @param address - Byte offset to read from
-'' @returns result - Byte value read, or 0 on error
-'' @local byte_buf - Buffer for single byte read
-
-  seek(address)
-  if read(@byte_buf, 1) == 1
-    return byte_buf
-  else
-    return 0
-
-PUB write(p_buffer, count) : result
-'' Write bytes to file (multi-cog safe) - writes count bytes to open file.
-''
-'' @param p_buffer - Pointer to source data
-'' @param count - Number of bytes to write
-'' @returns result - Command result status
-
-  send_command(CMD_WRITE, p_buffer, count, 0, 0)
-
-PUB writeByte(char) : result
-'' Write single byte to file (multi-cog safe).
-''
-'' @param char - Byte value to write
-'' @returns result - Command result status
-
-  write(@char, 1)
-
-PUB writeString(p_str) : result
-'' Write string to file (multi-cog safe) - writes null-terminated string.
-''
-'' @param p_str - Pointer to null-terminated string
-'' @returns result - Command result status
-
-  write(p_str, strsize(p_str))
-
 PUB readDirectory(entry) : result
 '' Read directory entry (multi-cog safe) - iterates through directory entries.
 ''
@@ -6272,7 +6446,7 @@ PUB openDirectory(dev, p_path) : handle
 '' @returns handle - Handle on success, negative error code on failure
 
   send_command(CMD_OPEN_DIR, p_path, 0, 0, 0)
-  handle := pb_data0
+  handle := LONG[@saved_data0][COGID()]
   return handle
 
 PUB readDirectoryHandle(handle) : p_entry
@@ -6294,22 +6468,9 @@ PUB closeDirectoryHandle(handle)
 
   send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
 
-PUB seek(pos) : result
-'' Seek to position in file (multi-cog safe) - sets file position.
-''
-'' @param pos - Byte position from start of file
-'' @returns result - TRUE on success, FALSE if pos is beyond end of file
-
-  result := send_command(CMD_SEEK, pos, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
-
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' UNIFIED DEVICE-LEVEL METHODS (ADR-9)
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' UNIFIED DEVICE-LEVEL METHODS (ADR-9)
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB serial_number(dev) : sn_hi, sn_lo | status
 '' Get device serial number.
@@ -6327,14 +6488,14 @@ PUB serial_number(dev) : sn_hi, sn_lo | status
       sn_lo := 0
     DEV_FLASH:
       if not flash_mounted
-        set_error(E_DEVICE_NOT_MOUNTED)
+        set_error(E_NOT_MOUNTED)
         sn_hi := 0
         sn_lo := 0
       else
         status := send_command(CMD_SERIAL_NUMBER, 0, 0, 0, 0)
         if status == SUCCESS
-          sn_hi := pb_data0
-          sn_lo := pb_data1
+          sn_hi := LONG[@saved_data0][COGID()]
+          sn_lo := LONG[@saved_data1][COGID()]
         else
           set_error(status)
           sn_hi := 0
@@ -6343,27 +6504,183 @@ PUB serial_number(dev) : sn_hi, sn_lo | status
       sn_hi := 0
       sn_lo := 0
 
-PUB format(dev) : result
+PUB format(dev) : status
 '' Format one device (destructive!).
 '' SD: full FAT32 format. Flash: cancel all active blocks.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
-'' @returns result - TRUE on success
+'' @returns status - SUCCESS (0) on success, negative error code on failure
 
   case dev
     DEV_SD:
       ' SD format is handled by external utility (SD_format_card)
       debug("  [format] SD format not supported in driver (use SD_format_card utility)")
       set_error(E_NOT_SUPPORTED)
-      return false
+      return E_NOT_SUPPORTED
     DEV_FLASH:
-      ' Phase 2+ stub
-      debug("  [format] Flash format not yet implemented (Phase 2)")
-      set_error(E_NOT_MOUNTED)
-      return false
+      if cog_id == -1
+        debug("  [format] ERROR: init() not called")
+        set_error(E_NOT_MOUNTED)
+        return E_NOT_MOUNTED
+      status := send_command(CMD_FLASH_FORMAT, 0, 0, 0, 0)
+      if status == SUCCESS
+        debug("  [format] Flash formatted and remounted")
+      else
+        debug("  [format] Flash format failed")
+      return status
     other:
       set_error(E_BAD_DEVICE)
-      return false
+      return E_BAD_DEVICE
+
+PUB wr_byte(handle, byte_value) : status
+'' Write a byte to Flash file handle.
+''
+'' @param handle - Handle to file open for write
+'' @param byte_value - Byte value to write
+'' @returns status - SUCCESS or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+  status := send_command(CMD_FL_WR_BYTE, handle, byte_value, 0, 0)
+
+PUB rd_byte(handle) : byte_value
+'' Read next byte from Flash file handle.
+''
+'' @param handle - Handle to file open for read
+'' @returns byte_value - Byte [0-255] or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+  send_command(CMD_FL_RD_BYTE, handle, 0, 0, 0)
+  byte_value := LONG[@saved_data0][COGID()]
+
+PUB wr_word(handle, word_value) : status | bytes_written
+'' Write WORD (16-bit, little-endian) to Flash file handle.
+''
+'' @param handle - Handle to file open for write
+'' @param word_value - 16-bit value to write
+'' @returns status - SUCCESS or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+  bytes_written := writeHandle(handle, @word_value, 2)
+  status := bytes_written < 0 ? bytes_written : SUCCESS
+
+PUB rd_word(handle) : word_value | bytes_read
+'' Read next WORD (16-bit) from Flash file handle.
+''
+'' @param handle - Handle to file open for read
+'' @returns word_value - WORD value or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+  word_value := 0
+  bytes_read := readHandle(handle, @word_value, 2)
+  if bytes_read <> 2
+    return error()
+
+PUB wr_long(handle, long_value) : status | bytes_written
+'' Write LONG (32-bit, little-endian) to Flash file handle.
+''
+'' @param handle - Handle to file open for write
+'' @param long_value - 32-bit value to write
+'' @returns status - SUCCESS or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+  bytes_written := writeHandle(handle, @long_value, 4)
+  status := bytes_written < 0 ? bytes_written : SUCCESS
+
+PUB rd_long(handle) : long_value
+'' Read next LONG (32-bit) from Flash file handle.
+'' NOTE: Negative LONGs are valid data. Check error() after call.
+''
+'' @param handle - Handle to file open for read
+'' @returns long_value - LONG value read from file
+
+  ifnot flash_mounted
+    set_error(E_NOT_MOUNTED)
+    return 0
+  ifnot validateHandle(handle)
+    set_error(E_FLASH_BAD_HANDLE)
+    return 0
+  long_value := 0
+  readHandle(handle, @long_value, 4)
+
+PUB wr_str(handle, p_str) : status | bytes_written
+'' Write string including terminator to Flash file handle.
+''
+'' @param handle - Handle to file open for write
+'' @param p_str - Pointer to zero-terminated string
+'' @returns status - SUCCESS or negative error code
+
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
+  bytes_written := writeHandle(handle, p_str, strsize(p_str) + 1)
+  status := bytes_written < 0 ? bytes_written : SUCCESS
+
+PUB rd_str(handle, p_str, count) : bytes_read
+'' Read zero-terminated string from Flash file handle.
+'' Reads byte by byte until terminator found or count reached.
+''
+'' @param handle - Handle to file open for read
+'' @param p_str - Pointer to destination buffer
+'' @param count - Maximum bytes to read (including terminator)
+'' @returns bytes_read - String length (not including terminator), or negative on error
+
+  ifnot flash_mounted
+    set_error(E_NOT_MOUNTED)
+    return 0
+  ifnot validateHandle(handle)
+    set_error(E_FLASH_BAD_HANDLE)
+    return 0
+  send_command(CMD_FL_RD_STR, handle, p_str, count, 0)
+  bytes_read := LONG[@saved_data0][COGID()]
+
+PUB file_size_unused(dev, p_filename) : size_unused
+'' Get unused bytes in last block of a Flash file.
+''
+'' @param dev - Must be DEV_FLASH
+'' @param p_filename - Pointer to filename string
+'' @returns size_unused - Unused byte count, or negative error code
+
+  if dev <> DEV_FLASH
+    return set_error(E_BAD_DEVICE)
+  if cog_id == -1
+    return set_error(E_NOT_MOUNTED)
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  send_command(CMD_FL_FILE_SIZE_UNUSED, p_filename, 0, 0, 0)
+  size_unused := LONG[@saved_data0][COGID()]
+
+PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count
+'' Diagnostic: count bytes in Flash file by filename.
+'' Used by test utilities for file statistics validation.
+''
+'' @param p_filename - Pointer to filename string
+'' @returns bytes_used - Bytes written to file (or E_FILE_NOT_FOUND)
+'' @returns bytes_free - Unused bytes in last block
+'' @returns block_count - Total blocks allocated
+
+  ifnot flash_mounted
+    bytes_used := set_error(E_NOT_MOUNTED)
+    return
+  send_command(CMD_FL_COUNT_BYTES, p_filename, 0, 0, 0)
+  bytes_used := LONG[@saved_data0][COGID()]
+  bytes_free := LONG[@saved_data1][COGID()]
+  block_count := LONG[@saved_data2][COGID()]
 
 PUB stats(dev) : used, free_ct, file_count
 '' Get device statistics.
@@ -6381,14 +6698,38 @@ PUB stats(dev) : used, free_ct, file_count
       used := 0
       file_count := 0
     DEV_FLASH:
+      ifnot flash_mounted
+        used := set_error(E_NOT_MOUNTED)
+        return
       if send_command(CMD_FLASH_STATS, 0, 0, 0, 0) == SUCCESS
-        used := pb_data0
-        free_ct := pb_data1
-        file_count := pb_data2
+        used := LONG[@saved_data0][COGID()]
+        free_ct := LONG[@saved_data1][COGID()]
+        file_count := LONG[@saved_data2][COGID()]
     other:
       used := 0
       free_ct := 0
       file_count := 0
+
+PUB directory(dev, p_block_id, p_filename, p_file_size) : status
+'' Get next Flash directory entry (iterates files).
+'' Flash only — caller sets LONG[p_block_id] to 0 before first call, auto-incremented.
+'' When no more files, p_filename[0] will be 0.
+''
+'' @param dev - Must be DEV_FLASH
+'' @param p_block_id - Pointer to LONG block ID counter (auto-advanced)
+'' @param p_filename - Pointer to 128-byte buffer for filename
+'' @param p_file_size - Pointer to LONG receiving file size
+'' @returns status - SUCCESS or error code
+
+  if dev <> DEV_FLASH
+    return set_error(E_BAD_DEVICE)
+  if cog_id == -1
+    return set_error(E_NOT_MOUNTED)
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+
+  send_command(CMD_FLASH_DIRECTORY, p_block_id, p_filename, p_file_size, 0)
+  return SUCCESS
 
 PUB exists(dev, p_filename) : found
 '' Check if file exists on device.
@@ -6403,14 +6744,17 @@ PUB exists(dev, p_filename) : found
       ' TODO: more efficient implementation using searchDirectory
       found := false
     DEV_FLASH:
+      ifnot flash_mounted
+        set_error(E_NOT_MOUNTED)
+        return false
       if send_command(CMD_FLASH_EXISTS, p_filename, 0, 0, 0) == SUCCESS
-        found := pb_data0 <> 0
+        found := LONG[@saved_data0][COGID()] <> 0
       else
         found := false
     other:
       found := false
 
-PUB file_size(dev, p_filename) : size
+PUB file_size(dev, p_filename) : size | cmd_status
 '' Get file size by name (without opening).
 '' Flash-style by-name size query (Phase 2+).
 ''
@@ -6423,18 +6767,21 @@ PUB file_size(dev, p_filename) : size
       ' Not directly supported for SD (use openFileRead + fileSizeHandle)
       size := E_NOT_SUPPORTED
     DEV_FLASH:
-      if send_command(CMD_FLASH_FILE_SIZE, p_filename, 0, 0, 0) == SUCCESS
-        size := pb_data0
+      ifnot flash_mounted
+        return set_error(E_NOT_MOUNTED)
+      cmd_status := send_command(CMD_FLASH_FILE_SIZE, p_filename, 0, 0, 0)
+      if cmd_status == SUCCESS
+        size := LONG[@saved_data0][COGID()]
       else
-        size := pb_status
+        size := cmd_status
     other:
       size := E_BAD_DEVICE
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' FLASH-STYLE API (Phase 3)
-    '' Mode-based open, circular files, create_file, close, flush.
-    '' SD operations mapped to SD handle commands where applicable.
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' FLASH-STYLE API (Phase 3)
+    ' Mode-based open, circular files, create_file, close, flush.
+    ' SD operations mapped to SD handle commands where applicable.
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB open(dev, p_filename, mode) : handle
 '' Open file with mode (Flash-style). Modes: FILEMODE_READ, FILEMODE_WRITE,
@@ -6457,8 +6804,10 @@ PUB open(dev, p_filename, mode) : handle
           set_error(E_NOT_SUPPORTED)
           return E_NOT_SUPPORTED
     DEV_FLASH:
+      ifnot flash_mounted
+        return set_error(E_NOT_MOUNTED)
       send_command(CMD_FLASH_OPEN, p_filename, mode, 0, 0)
-      handle := pb_data0
+      handle := LONG[@saved_data0][COGID()]
       if handle < 0
         set_error(handle)
       return handle
@@ -6478,8 +6827,10 @@ PUB open_circular(dev, p_filename, mode, max_file_length) : handle
   if dev <> DEV_FLASH
     set_error(E_NOT_SUPPORTED)
     return E_NOT_SUPPORTED
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
   send_command(CMD_FLASH_OPEN_CIRC, p_filename, mode, max_file_length, 0)
-  handle := pb_data0
+  handle := LONG[@saved_data0][COGID()]
   if handle < 0
     set_error(handle)
   return handle
@@ -6496,31 +6847,40 @@ PUB create_file(dev, p_filename, fill_value, byte_count) : status
   if dev <> DEV_FLASH
     set_error(E_NOT_SUPPORTED)
     return E_NOT_SUPPORTED
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
   status := send_command(CMD_FLASH_CREATE_FILE, p_filename, fill_value, byte_count, 0)
   if status <> SUCCESS
     set_error(status)
   return status
 
 PUB close(handle) : status
-'' Close file handle (alias for closeFileHandle).
+'' Close file handle (Flash API compatibility).
 ''
 '' @param handle - Handle to close
 '' @returns status - SUCCESS or error code
 
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
   return closeFileHandle(handle)
 
 PUB flush(handle) : status
-'' Flush handle without closing (Flash-style).
-'' For SD, delegates to syncHandle.
+'' Flush handle without closing (Flash API compatibility).
 ''
 '' @param handle - Handle to flush
 '' @returns status - SUCCESS or error code
 
+  ifnot flash_mounted
+    return set_error(E_NOT_MOUNTED)
+  ifnot validateHandle(handle)
+    return set_error(E_FLASH_BAD_HANDLE)
   return syncHandle(handle)
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' CROSS-DEVICE OPERATIONS
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' CROSS-DEVICE OPERATIONS
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status
 '' Copy file between devices (Phase 4+).
@@ -6536,9 +6896,9 @@ PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status
   set_error(E_NOT_SUPPORTED)
   return E_NOT_SUPPORTED
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' ERROR REPORTING
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' ERROR REPORTING
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB string_for_error(code) : p_str
 '' Return human-readable string for any unified error code.
@@ -6660,17 +7020,17 @@ PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
       name_ptr++                                                                '   advance ptr to byte following "/"
 
     repeat i from 0 to 11                                                       '  convert name to uppercase
-      case entry_buffer[i]
-        "a".."z" : entry_buffer[i] -= $20
+      case BYTE[@entry_buffer][i]
+        "a".."z" : BYTE[@entry_buffer][i] -= $20
 
     i := 0                                                                      '  convert 8.3 filename into short filename
     if strcomp(@entry_buffer,string("..")) == 0                                 '  exception if changing directory to ".."
       repeat strsize(@entry_buffer) <# 9                                        '  search name for extension
-        if entry_buffer[i++] == "."                                             '  if extension found
+        if BYTE[@entry_buffer][i++] == "."                                       '  if extension found
           bytemove(@entry_buffer + 8,@entry_buffer + i,3)                       '   move extension to byte 8
           bytefill(@entry_buffer + i-1," ",9-i)                                 '   fill space between name and extension
     bytefill(@entry_buffer + strsize(@entry_buffer)," ",12-strsize(@entry_buffer)) ' fill remaining space (in case extension < 3 characters)
-    entry_buffer[11] := $00                                                     '  append null
+    BYTE[@entry_buffer][11] := $00                                              '  append null
 
     i := 0
     debug("  [searchDir] Starting search at n_sec=", udec_(n_sec), " for [", lstr_(@entry_buffer, 11), "]")
@@ -6705,7 +7065,6 @@ PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
       i += 32                                                                   '  increment to next entry
       if i & 511 == 0                                                           '  read new directory sector/cluster if needed
         readNextSector(BUF_DIR)
-  file_idx := 0
   return true
 
 PUB fileName() : result | p_temp, i
@@ -6994,7 +7353,7 @@ PRI readNextSector(buf_type) | cluster, address, contents, p_buf
       return
     address := @fat_buf + ((cluster << 2) & 511)                                '   find long within FAT buffer for current cluster
     contents := long[address]                                                   '   read contents to determine next cluster number
-    if contents >= $0FFF_FFF8                                                   '   end-of-chain marker detected
+    if contents +>= $0FFF_FFF8                                                  '   end-of-chain marker detected
       ' Fill appropriate buffer with zeros based on buf_type
       case buf_type
         BUF_DIR:
@@ -7024,9 +7383,9 @@ PRI followFatChain() | cluster, address, contents
     return
   address := @fat_buf + ((cluster << 2) & 511)                                  '  find long within FAT buffer for current cluster
   contents := long[address]                                                     '  read contents to determine next cluster number
-  if contents < $0FFF_FFF8                                                      '  if not end-of-chain marker
+  if contents +< $0FFF_FFF8                                                     '  if not end-of-chain marker
     n_sec := clus2sec(contents)                                                 '   convert next cluster number into sector number
-  ' else: end-of-chain - n_sec stays invalid (caller should check file_idx against fileSize)
+  ' else: end-of-chain - n_sec stays invalid (caller should check position against fileSize)
 
 CON     '' helper methods
 PRI byte2clus(byte_address) : result
@@ -7684,6 +8043,11 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
 
     ' CRC-16 validation: always validate received data against card's CRC
     diag_calc_crc := calcDataCRC(p_buf, 512)
+    ' TEST HOOK: Force CRC mismatch for error injection testing
+    if test_force_read_crc_error > 0
+      diag_calc_crc ^= $FFFF
+      test_force_read_crc_error--
+      test_error_count++
     if diag_calc_crc == diag_recv_crc
       diag_crc_matches++
       pinh(cs)                                                                  ' Deselect card - CRC OK
@@ -7982,6 +8346,11 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
   ' Calculate CRC-16 of the data we just sent and transmit it
   ' SD protocol: CRC high byte first, then low byte
   diag_sent_crc := calcDataCRC(p_buf, 512)
+  ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
+  if test_force_write_crc_error
+    diag_sent_crc ^= $FFFF
+    test_force_write_crc_error := 0
+    test_error_count++
   sp_transfer_8(diag_sent_crc >> 8)                                             ' CRC high byte
   sp_transfer_8(diag_sent_crc & $FF)                                            ' CRC low byte
 
@@ -8429,7 +8798,7 @@ PUB displayEntry() | address, char, ascii_ptr, i
   ascii_ptr := string("0123456789ABCDEF")
   repeat address from 0 to 31 step 16
     repeat i from 0 to 15
-      case char := (entry_buffer[address + i])
+      case char := (BYTE[@entry_buffer][address + i])
         $20..$7E: byte[ascii_ptr + i] := char
         other:
           if char == 0

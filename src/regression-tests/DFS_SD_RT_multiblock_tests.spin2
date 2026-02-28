@@ -1,0 +1,394 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_multiblock_tests.spin2
+''   Purpose.... Multi-block read/write data integrity tests for V2 driver
+''   Author..... Claude + Stephen M Moraco
+''   Started.... JAN 2026
+''
+'' =================================================================================================
+''
+''   This test verifies the V2 driver's multi-block operations (readSectorsRaw/writeSectorsRaw)
+''   work correctly by testing data integrity across multiple scenarios.
+''
+''   Test Scenarios:
+''     1. Round-trip: writeSectorsRaw() 8 sectors -> readSectorsRaw() 8 sectors -> verify
+''     2. Multi-write, single-read: writeSectorsRaw() -> 8x readSectorRaw() -> verify
+''     3. Single-write, multi-read: 8x writeSectorRaw() -> readSectorsRaw() -> verify
+''     4. Edge cases: count=1 (fallback), count=0 (immediate return)
+''     5. Large transfer: 64 sectors (32KB) round-trip
+''
+''   Test Sectors: 200000+ (safe area for all card sizes)
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' External SD header (base pin 16)
+    'SD_CS   = 20
+    'SD_MOSI = 19
+    'SD_MISO = 18
+    'SD_SCK  = 21
+
+    ' Test sector numbers (in free space area, safe for 64GB+ cards)
+    TEST_SECTOR_BASE = 200_000
+
+    ' Test sizes
+    SMALL_COUNT      = 8            ' Standard multi-block test size
+    LARGE_COUNT      = 64           ' Large multi-block test
+
+    SECTOR_SIZE      = 512
+
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
+'' Enable full driver features for multi-block testing
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+VAR
+    ' Buffers for multi-sector operations
+    BYTE    write_buf[SMALL_COUNT * SECTOR_SIZE]     ' 4KB for 8 sectors
+    BYTE    read_buf[SMALL_COUNT * SECTOR_SIZE]
+    BYTE    read_buf_guard[16]
+    BYTE    large_write_buf[LARGE_COUNT * SECTOR_SIZE]  ' 32KB for 64 sectors
+    BYTE    large_read_buf[LARGE_COUNT * SECTOR_SIZE]
+    BYTE    large_read_buf_guard[16]
+
+    LONG    pass_count
+    LONG    fail_count
+
+PUB go() | workerCog, result
+'' Main entry point for multi-block data integrity tests
+''
+'' Tests readSectorsRaw/writeSectorsRaw operations
+
+    debug(" ")
+    debug("============================================================")
+    debug("  SD Multi-Block Data Integrity Tests (V2 Driver)")
+    debug("============================================================")
+    debug(" ")
+
+    pass_count := 0
+    fail_count := 0
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount the card
+    debug("Mounting SD card (V2 driver)...")
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Mount failed!")
+        debug("END_SESSION")
+        return
+
+    debug("Card mounted successfully")
+    debug(" ")
+
+    ' ========================================
+    ' TEST 1: Round-trip multi-block
+    ' ========================================
+    testRoundTripMultiBlock()
+
+    ' ========================================
+    ' TEST 2: Multi-write, single-read
+    ' ========================================
+    testMultiWriteSingleRead()
+
+    ' ========================================
+    ' TEST 3: Single-write, multi-read
+    ' ========================================
+    testSingleWriteMultiRead()
+
+    ' ========================================
+    ' TEST 4: Edge cases
+    ' ========================================
+    testEdgeCases()
+
+    ' ========================================
+    ' TEST 5: Large multi-block (64 sectors)
+    ' ========================================
+    testLargeMultiBlock()
+
+    debug(" ")
+    debug("============================================================")
+    debug("  Multi-Block Tests - Pass: ", udec_(pass_count), ", Fail: ", udec_(fail_count))
+    debug("============================================================")
+
+    dfs.stop()
+    debug(" ")
+    debug("END_SESSION")
+
+
+PRI testRoundTripMultiBlock() | sector, i, written, readCt, errors
+' TEST 1: Write 8 sectors with writeSectorsRaw, read back with readSectorsRaw
+
+    debug("--- TEST 1: Round-trip Multi-Block (8 sectors) ---")
+    sector := TEST_SECTOR_BASE
+
+    ' Fill write buffer with known pattern: each byte = (sector_offset * 17 + byte_offset) & $FF
+    repeat i from 0 to (SMALL_COUNT * SECTOR_SIZE) - 1
+        write_buf[i] := ((i / SECTOR_SIZE) * 17 + (i // SECTOR_SIZE)) & $FF
+
+    ' Write all 8 sectors at once
+    debug("* Writing 8 sectors starting at ", udec_(sector))
+    written := dfs.writeSectorsRaw(sector, SMALL_COUNT, @write_buf)
+    if written <> SMALL_COUNT
+        debug("  FAIL: writeSectorsRaw returned ", udec_(written), " (expected ", udec_(SMALL_COUNT), ")")
+        recordFail()
+        return
+
+    ' Clear read buffer
+    bytefill(@read_buf, $00, SMALL_COUNT * SECTOR_SIZE)
+
+    ' Read all 8 sectors at once
+    debug("* Reading 8 sectors starting at ", udec_(sector))
+    utils.initGuard(@read_buf_guard)
+    readCt := dfs.readSectorsRaw(sector, SMALL_COUNT, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
+    if readCt <> SMALL_COUNT
+        debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(SMALL_COUNT), ")")
+        recordFail()
+        return
+
+    ' Verify every byte
+    errors := 0
+    repeat i from 0 to (SMALL_COUNT * SECTOR_SIZE) - 1
+        if read_buf[i] <> write_buf[i]
+            if errors < 5  ' Only report first 5 errors
+                debug("  ERROR at byte ", udec_(i), ": expected $", uhex_byte_(write_buf[i]), " got $", uhex_byte_(read_buf[i]))
+            errors++
+
+    if errors == 0
+        debug("  -> PASS: All ", udec_(SMALL_COUNT * SECTOR_SIZE), " bytes verified")
+        recordPass()
+    else
+        debug("  -> FAIL: ", udec_(errors), " byte mismatches")
+        recordFail()
+
+
+PRI testMultiWriteSingleRead() | sector, i, j, written, errors, expected, actual, bufOffset
+' TEST 2: Write 8 sectors with writeSectorsRaw, read back with individual readSectorRaw calls
+
+    debug(" ")
+    debug("--- TEST 2: Multi-Write, Single-Read (8 sectors) ---")
+    sector := TEST_SECTOR_BASE + 10
+
+    ' Fill write buffer with different pattern
+    repeat i from 0 to (SMALL_COUNT * SECTOR_SIZE) - 1
+        write_buf[i] := ((i / SECTOR_SIZE) * 23 + (i // SECTOR_SIZE) + $A0) & $FF
+
+    ' Write all 8 sectors at once
+    debug("* Writing 8 sectors with writeSectorsRaw at ", udec_(sector))
+    written := dfs.writeSectorsRaw(sector, SMALL_COUNT, @write_buf)
+    if written <> SMALL_COUNT
+        debug("  FAIL: writeSectorsRaw returned ", udec_(written))
+        recordFail()
+        return
+
+    ' Read back with 8 individual reads and verify each
+    errors := 0
+    utils.initGuard(@read_buf_guard)
+    repeat i from 0 to SMALL_COUNT - 1
+        ' Read single sector into read_buf (reuse first 512 bytes)
+        dfs.readSectorRaw(sector + i, @read_buf)
+        utils.initAndCheckGuard(@read_buf_guard, @"read_buf guard")
+
+        ' Verify this sector's data against write_buf
+        bufOffset := i * SECTOR_SIZE
+        repeat j from 0 to SECTOR_SIZE - 1
+            expected := write_buf[bufOffset + j]
+            actual := read_buf[j]
+            if actual <> expected
+                if errors < 5
+                    debug("  ERROR sector ", udec_(i), " byte ", udec_(j), ": expected $", uhex_byte_(expected), " got $", uhex_byte_(actual))
+                errors++
+
+    if errors == 0
+        debug("  -> PASS: All 8 sectors verified with single reads")
+        recordPass()
+    else
+        debug("  -> FAIL: ", udec_(errors), " byte mismatches")
+        recordFail()
+
+
+PRI testSingleWriteMultiRead() | sector, i, j, readCt, errors, expected, actual, bufOffset
+' TEST 3: Write 8 sectors with individual writeSectorRaw calls, read back with readSectorsRaw
+
+    debug(" ")
+    debug("--- TEST 3: Single-Write, Multi-Read (8 sectors) ---")
+    sector := TEST_SECTOR_BASE + 20
+
+    ' Write 8 sectors one at a time with unique pattern per sector
+    debug("* Writing 8 sectors with individual writeSectorRaw at ", udec_(sector))
+    repeat i from 0 to SMALL_COUNT - 1
+        ' Fill single sector buffer
+        bufOffset := i * SECTOR_SIZE
+        repeat j from 0 to SECTOR_SIZE - 1
+            write_buf[bufOffset + j] := ((i * 31) + j + $B0) & $FF
+
+        ' Write this sector
+        if not dfs.writeSectorRaw(sector + i, @write_buf + bufOffset)
+            debug("  FAIL: writeSectorRaw failed for sector ", udec_(i))
+            recordFail()
+            return
+
+    ' Clear read buffer
+    bytefill(@read_buf, $00, SMALL_COUNT * SECTOR_SIZE)
+
+    ' Read all 8 sectors at once
+    debug("* Reading 8 sectors with readSectorsRaw")
+    utils.initGuard(@read_buf_guard)
+    readCt := dfs.readSectorsRaw(sector, SMALL_COUNT, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
+    if readCt <> SMALL_COUNT
+        debug("  FAIL: readSectorsRaw returned ", udec_(readCt))
+        recordFail()
+        return
+
+    ' Verify all data
+    errors := 0
+    repeat i from 0 to SMALL_COUNT - 1
+        bufOffset := i * SECTOR_SIZE
+        repeat j from 0 to SECTOR_SIZE - 1
+            expected := write_buf[bufOffset + j]
+            actual := read_buf[bufOffset + j]
+            if actual <> expected
+                if errors < 5
+                    debug("  ERROR sector ", udec_(i), " byte ", udec_(j), ": expected $", uhex_byte_(expected), " got $", uhex_byte_(actual))
+                errors++
+
+    if errors == 0
+        debug("  -> PASS: All 8 sectors verified")
+        recordPass()
+    else
+        debug("  -> FAIL: ", udec_(errors), " byte mismatches")
+        recordFail()
+
+
+PRI testEdgeCases() | sector, i, written, readCt, errors
+' TEST 4: Edge cases - count=1, count=0
+
+    debug(" ")
+    debug("--- TEST 4: Edge Cases ---")
+
+    ' Test 4a: count=1 (should work as single-sector operation)
+    sector := TEST_SECTOR_BASE + 30
+    debug("* Test 4a: writeSectorsRaw/readSectorsRaw with count=1")
+
+    ' Fill single sector
+    repeat i from 0 to SECTOR_SIZE - 1
+        write_buf[i] := (i + $C0) & $FF
+
+    written := dfs.writeSectorsRaw(sector, 1, @write_buf)
+    if written <> 1
+        debug("  FAIL: count=1 write returned ", udec_(written))
+        recordFail()
+    else
+        bytefill(@read_buf, $00, SECTOR_SIZE)
+        utils.initGuard(@read_buf_guard)
+        readCt := dfs.readSectorsRaw(sector, 1, @read_buf)
+        utils.checkGuard(@read_buf_guard, @"read_buf guard")
+        if readCt <> 1
+            debug("  FAIL: count=1 read returned ", udec_(readCt))
+            recordFail()
+        else
+            errors := 0
+            repeat i from 0 to SECTOR_SIZE - 1
+                if read_buf[i] <> write_buf[i]
+                    errors++
+            if errors == 0
+                debug("  -> PASS: count=1 works correctly")
+                recordPass()
+            else
+                debug("  -> FAIL: count=1 data mismatch (", udec_(errors), " errors)")
+                recordFail()
+
+    ' Test 4b: count=0 (should return 0 immediately)
+    debug("* Test 4b: writeSectorsRaw/readSectorsRaw with count=0")
+
+    written := dfs.writeSectorsRaw(sector, 0, @write_buf)
+    readCt := dfs.readSectorsRaw(sector, 0, @read_buf)
+
+    if written == 0 and readCt == 0
+        debug("  -> PASS: count=0 returns 0 for both operations")
+        recordPass()
+    else
+        debug("  -> FAIL: count=0 returned write=", udec_(written), " read=", udec_(readCt))
+        recordFail()
+
+
+PRI testLargeMultiBlock() | sector, i, written, readCt, errors
+' TEST 5: Large multi-block (64 sectors = 32KB)
+
+    debug(" ")
+    debug("--- TEST 5: Large Multi-Block (64 sectors = 32KB) ---")
+    sector := TEST_SECTOR_BASE + 50
+
+    ' Fill large write buffer with pattern
+    debug("* Filling 32KB buffer with pattern...")
+    repeat i from 0 to (LARGE_COUNT * SECTOR_SIZE) - 1
+        large_write_buf[i] := ((i / SECTOR_SIZE) + (i // SECTOR_SIZE)) & $FF
+
+    ' Write 64 sectors at once
+    debug("* Writing 64 sectors starting at ", udec_(sector))
+    written := dfs.writeSectorsRaw(sector, LARGE_COUNT, @large_write_buf)
+    if written <> LARGE_COUNT
+        debug("  FAIL: writeSectorsRaw returned ", udec_(written), " (expected ", udec_(LARGE_COUNT), ")")
+        recordFail()
+        return
+
+    debug("* Write complete, clearing read buffer...")
+    bytefill(@large_read_buf, $00, LARGE_COUNT * SECTOR_SIZE)
+
+    ' Read 64 sectors at once
+    debug("* Reading 64 sectors starting at ", udec_(sector))
+    utils.initGuard(@large_read_buf_guard)
+    readCt := dfs.readSectorsRaw(sector, LARGE_COUNT, @large_read_buf)
+    utils.checkGuard(@large_read_buf_guard, @"large_read_buf guard")
+    if readCt <> LARGE_COUNT
+        debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(LARGE_COUNT), ")")
+        recordFail()
+        return
+
+    ' Verify all 32KB
+    debug("* Verifying 32KB of data...")
+    errors := 0
+    repeat i from 0 to (LARGE_COUNT * SECTOR_SIZE) - 1
+        if large_read_buf[i] <> large_write_buf[i]
+            if errors < 5
+                debug("  ERROR at byte ", udec_(i), ": expected $", uhex_byte_(large_write_buf[i]), " got $", uhex_byte_(large_read_buf[i]))
+            errors++
+
+    if errors == 0
+        debug("  -> PASS: All 32KB (", udec_(LARGE_COUNT * SECTOR_SIZE), " bytes) verified")
+        recordPass()
+    else
+        debug("  -> FAIL: ", udec_(errors), " byte mismatches in 32KB")
+        recordFail()
+
+
+PRI recordPass()
+' Record a passing test
+
+    pass_count++
+
+PRI recordFail()
+' Record a failing test
+
+    fail_count++

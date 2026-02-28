@@ -1,6 +1,6 @@
 '' =================================================================================================
 ''
-''   File....... DUAL_RT_phase1_verify.spin2
+''   File....... DFS_SD_RT_phase1_verify.spin2
 ''   Purpose.... Phase 1 verification: exercise dual_fs.spin2 SD-only API
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
@@ -26,13 +26,23 @@ CON
      E_DEVICE_NOT_MOUNTED = -121
      E_BAD_DEVICE        = -120
 
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
 '' Enable raw sector access for diagnostic tests
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
 '' Enable debug diagnostics
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
 
 OBJ
-    fs    : "dual_fs"
+    dfs   : "dual_fs"
     utils : "isp_rt_utilities"
 
 DAT
@@ -44,7 +54,7 @@ readBuf_guard   BYTE    0[16]
 sectorBuffer    BYTE    0[512]
 secBuf_guard    BYTE    0[16]
 
-PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
+PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel
 '' Main entry point for Phase 1 verification tests
 ''
 '' Tests dual_fs.spin2 SD operations via new init()/mount(DEV_SD) API
@@ -61,8 +71,8 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"Operations before init() should fail gracefully")
 
     utils.startTest(@"mount(DEV_SD) before init()")
-    result := fs.mount(fs.DEV_SD)
-    utils.evaluateBool(result, @"mount(DEV_SD)", false)
+    status := dfs.mount(dfs.DEV_SD)
+    utils.evaluateBool(status < 0, @"mount(DEV_SD) returns error", true)
 
     ' ----------------------------------
     ' TEST GROUP: init() / mount(DEV_SD)
@@ -70,30 +80,30 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"init() and mount(DEV_SD)")
 
     utils.startTest(@"init() with valid pins")
-    result := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     utils.evaluateRange(result, @"init() returns cog ID", 0, 7)
 
     utils.startTest(@"mounted(DEV_SD) before mount")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", false)
 
     utils.startTest(@"mount(DEV_SD)")
-    result := fs.mount(fs.DEV_SD)
-    utils.evaluateBool(result, @"mount(DEV_SD)", true)
+    status := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(status, @"mount(DEV_SD)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_SD) after mount")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", true)
 
     utils.startTest(@"mounted(DEV_FLASH) should be false")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
 
     ' DIAGNOSTIC: Show CMD13 and CRC state after mount
     debug(" ")
-    debug("  DIAG: error()=", sdec_(fs.error()))
-    debug("  DIAG: lastCMD13=$", uhex_(fs.getLastCMD13()), " lastCMD13Error=$", uhex_(fs.getLastCMD13Error()))
-    debug("  DIAG: CRC match=", udec_(fs.getCRCMatchCount()), " mismatch=", udec_(fs.getCRCMismatchCount()), " retry=", udec_(fs.getCRCRetryCount()))
+    debug("  DIAG: error()=", sdec_(dfs.error()))
+    debug("  DIAG: lastCMD13=$", uhex_(dfs.getLastCMD13()), " lastCMD13Error=$", uhex_(dfs.getLastCMD13Error()))
+    debug("  DIAG: CRC match=", udec_(dfs.getCRCMatchCount()), " mismatch=", udec_(dfs.getCRCMismatchCount()), " retry=", udec_(dfs.getCRCRetryCount()))
 
     ' ----------------------------------
     ' TEST GROUP: Volume info
@@ -101,11 +111,11 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"Volume information via DEV_SD")
 
     utils.startTest(@"volumeLabel(DEV_SD)")
-    pLabel := fs.volumeLabel(fs.DEV_SD)
+    pLabel := dfs.volumeLabel(dfs.DEV_SD)
     utils.evaluateNotZero(pLabel, @"volumeLabel() pointer")
 
     utils.startTest(@"freeSpace(DEV_SD)")
-    freeSpace := fs.freeSpace(fs.DEV_SD)
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
     utils.evaluateRange(freeSpace, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
 
     debug(" ")
@@ -120,7 +130,7 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
 
     utils.startTest(@"readSectorRaw(0) reads MBR")
     utils.initGuard(@secBuf_guard)
-    result := fs.readSectorRaw(0, @sectorBuffer)
+    result := dfs.readSectorRaw(0, @sectorBuffer)
     utils.checkGuard(@secBuf_guard, @"secBuf guard")
     utils.evaluateBool(result, @"readSectorRaw(0)", true)
 
@@ -137,30 +147,30 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"V3 Handle API - write/read round-trip")
 
     ' Delete test file if it exists from a prior run
-    fs.deleteFile(fs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
 
     utils.startTest(@"createFileNew(DEV_SD, TEST1.TXT)")
-    handle := fs.createFileNew(fs.DEV_SD, @testfile1)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
     utils.evaluateRange(handle, @"createFileNew() handle", 0, 5)
 
     if handle >= 0
       utils.startTest(@"writeHandle() test data")
-      bytesWritten := fs.writeHandle(handle, @testdata, strsize(@testdata))
+      bytesWritten := dfs.writeHandle(handle, @testdata, strsize(@testdata))
       utils.evaluateSingleValue(bytesWritten, @"writeHandle() bytes", strsize(@testdata))
 
       utils.startTest(@"closeFileHandle() after write")
-      result := fs.closeFileHandle(handle)
+      result := dfs.closeFileHandle(handle)
       utils.evaluateSingleValue(result, @"closeFileHandle()", 0)
 
     utils.startTest(@"openFileRead(DEV_SD, TEST1.TXT)")
-    handle := fs.openFileRead(fs.DEV_SD, @testfile1)
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
     utils.evaluateRange(handle, @"openFileRead() handle", 0, 5)
 
     if handle >= 0
       utils.startTest(@"readHandle() returns correct data")
       utils.initGuard(@readBuf_guard)
       bytefill(@readBuffer, 0, 512)
-      bytesRead := fs.readHandle(handle, @readBuffer, 512)
+      bytesRead := dfs.readHandle(handle, @readBuffer, 512)
       utils.checkGuard(@readBuf_guard, @"readBuf guard")
       utils.evaluateSingleValue(bytesRead, @"readHandle() bytes", strsize(@testdata))
 
@@ -168,11 +178,11 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
       utils.evaluateBufferMatch(@readBuffer, @testdata, strsize(@testdata), @"read vs written")
 
       utils.startTest(@"closeFileHandle() after read")
-      result := fs.closeFileHandle(handle)
+      result := dfs.closeFileHandle(handle)
       utils.evaluateSingleValue(result, @"closeFileHandle()", 0)
 
     ' Clean up: delete the test file
-    fs.deleteFile(fs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
 
     ' ----------------------------------
     ' TEST GROUP: Flash stubs return proper errors
@@ -180,11 +190,11 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"Flash stubs return proper errors")
 
     utils.startTest(@"openFileRead(DEV_FLASH, ...) returns error")
-    handle := fs.openFileRead(fs.DEV_FLASH, @testfile1)
+    handle := dfs.openFileRead(dfs.DEV_FLASH, @testfile1)
     utils.evaluateBool(handle < 0, @"openFileRead(DEV_FLASH) fails", true)
 
     utils.startTest(@"freeSpace(DEV_FLASH) returns 0 or error")
-    result := fs.freeSpace(fs.DEV_FLASH)
+    result := dfs.freeSpace(dfs.DEV_FLASH)
     utils.evaluateSingleValue(result, @"freeSpace(DEV_FLASH)", 0)
 
     ' ----------------------------------
@@ -193,23 +203,23 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"Unmount and remount")
 
     utils.startTest(@"unmount(DEV_SD)")
-    result := fs.unmount(fs.DEV_SD)
-    utils.evaluateBool(result, @"unmount(DEV_SD)", true)
+    status := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateSingleValue(status, @"unmount(DEV_SD)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_SD) after unmount")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", false)
 
     utils.startTest(@"freeSpace(DEV_SD) after unmount returns 0")
-    freeSpace := fs.freeSpace(fs.DEV_SD)
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
     utils.evaluateSingleValue(freeSpace, @"freeSpace(DEV_SD)", 0)
 
     utils.startTest(@"mount(DEV_SD) again")
-    result := fs.mount(fs.DEV_SD)
-    utils.evaluateBool(result, @"mount(DEV_SD)", true)
+    status := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(status, @"mount(DEV_SD)", dfs.SUCCESS)
 
     utils.startTest(@"freeSpace(DEV_SD) after remount")
-    freeSpace := fs.freeSpace(fs.DEV_SD)
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
     utils.evaluateRange(freeSpace, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
 
     ' ----------------------------------
@@ -218,12 +228,12 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel
     utils.startTestGroup(@"Worker cog health")
 
     utils.startTest(@"checkStackGuard() intact")
-    result := fs.checkStackGuard()
+    result := dfs.checkStackGuard()
     utils.evaluateBool(result, @"stack guard intact", true)
 
     ' Final cleanup
-    fs.unmount(fs.DEV_SD)
-    fs.stop()
+    dfs.unmount(dfs.DEV_SD)
+    dfs.stop()
 
     ' ----------------------------------
     ' Summary

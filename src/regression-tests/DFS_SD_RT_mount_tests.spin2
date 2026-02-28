@@ -1,0 +1,257 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_mount_tests.spin2
+''   Purpose.... This object exercises mount/unmount and basic card operations
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 16 JAN 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     ' Error codes for pre-mount validation
+     E_NOT_MOUNTED   = -20
+
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
+'' Enable raw sector access for diagnostic tests
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+'' Enable debug diagnostics (CMD13, CRC counters)
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+testfile1       BYTE    "TEST1.TXT", 0
+testfile2       BYTE    "TEST2.BIN", 0
+sectorBuffer    BYTE    0[512]
+sectorBuffer_guard BYTE 0[16]
+
+PUB go() | workerCog, result, pLabel, freeSpace, handle
+'' Main entry point for mount/unmount regression tests
+''
+'' Tests SD card mount, unmount, and basic card operations
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Mount/Unmount Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' ----------------------------------
+    ' TEST GROUP: Operations before mount
+    ' ----------------------------------
+    utils.startTestGroup(@"Operations before mount should fail gracefully")
+
+    ' These operations should not crash when card isn't mounted
+    utils.startTest(@"openFile() before mount")
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", false)
+
+    utils.startTest(@"closeFile() before mount")
+    dfs.closeFileHandle(handle)  ' Should not crash
+    utils.evaluateBool(true, @"closeFile() completed without crash", true)
+
+    utils.startTest(@"freeSpace() before mount")
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateSingleValue(freeSpace, @"freeSpace()", 0)
+
+    ' ----------------------------------
+    ' TEST GROUP: Pre-Mount Error Validation (V3 Handle API)
+    ' ----------------------------------
+    utils.startTestGroup(@"Pre-Mount Error Validation (V3 Handle API)")
+
+    utils.startTest(@"openFileRead() before mount returns E_NOT_MOUNTED")
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateSingleValue(handle, @"openFileRead()", E_NOT_MOUNTED)
+
+    utils.startTest(@"createFileNew() before mount returns E_NOT_MOUNTED")
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    utils.evaluateSingleValue(handle, @"createFileNew()", E_NOT_MOUNTED)
+
+    utils.startTest(@"readSectorRaw() before mount returns false")
+    utils.initGuard(@sectorBuffer_guard)
+    result := dfs.readSectorRaw(0, @sectorBuffer)
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
+    utils.evaluateSingleValue(result, @"readSectorRaw()", 0)
+
+    utils.startTest(@"changeDirectory() before mount returns false")
+    result := dfs.changeDirectory(dfs.DEV_SD, @"TESTDIR")
+    utils.evaluateBool(result, @"changeDirectory()", false)
+
+    ' ----------------------------------
+    ' TEST GROUP: Mount card
+    ' ----------------------------------
+    utils.startTestGroup(@"Mount SD card")
+
+    utils.startTest(@"mount() with valid pins")
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"mount()", true)
+
+    ' DIAGNOSTIC: Show CMD13 and CRC state after mount attempt
+    debug(" ")
+    debug("  DIAG: error()=", sdec_(dfs.error()))
+    debug("  DIAG: lastCMD13=$", uhex_(dfs.getLastCMD13()), " lastCMD13Error=$", uhex_(dfs.getLastCMD13Error()))
+    debug("  DIAG: CRC match=", udec_(dfs.getCRCMatchCount()), " mismatch=", udec_(dfs.getCRCMismatchCount()), " retry=", udec_(dfs.getCRCRetryCount()))
+    debug("  DIAG: recvCRC=$", uhex_(dfs.getLastReceivedCRC()), " calcCRC=$", uhex_(dfs.getLastCalculatedCRC()))
+    ' Read sector 0 raw to inspect MBR partition table bytes
+    utils.initGuard(@sectorBuffer_guard)
+    if dfs.readSectorRaw(0, @sectorBuffer)
+      utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
+      debug("  DIAG MBR: sig=$", uhex_byte_(sectorBuffer[$1FE]), " $", uhex_byte_(sectorBuffer[$1FF]))
+      debug("  DIAG MBR: part1 type=$", uhex_byte_(sectorBuffer[$1C2]), " lba=$", uhex_byte_(sectorBuffer[$1C9]), uhex_byte_(sectorBuffer[$1C8]), uhex_byte_(sectorBuffer[$1C7]), uhex_byte_(sectorBuffer[$1C6]))
+      debug("  DIAG MBR[0..7]: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " $", uhex_byte_(sectorBuffer[4]), " $", uhex_byte_(sectorBuffer[5]), " $", uhex_byte_(sectorBuffer[6]), " $", uhex_byte_(sectorBuffer[7]))
+    else
+      debug("  DIAG: readSectorRaw(0) FAILED")
+
+    utils.startTest(@"Verify card is accessible - get volume label")
+    pLabel := dfs.volumeLabel(dfs.DEV_SD)
+    utils.evaluateNotZero(pLabel, @"volumeLabel() pointer")
+
+    utils.startTest(@"Verify free space is reasonable")
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateRange(freeSpace, @"freeSpace()", 1, $7FFF_FFFF)
+
+    debug(" ")
+    debug("  Card Info:")
+    debug("    Volume Label: ", zstr_(pLabel))
+    debug("    Free Space: ", udec_(freeSpace), " sectors (", udec_(freeSpace / 2048), " MB)")
+
+    ' ----------------------------------
+    ' TEST GROUP: Unmount card
+    ' ----------------------------------
+    utils.startTestGroup(@"Unmount SD card")
+
+    utils.startTest(@"unmount() card")
+    result := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"unmount()", true)
+
+    utils.startTest(@"Operations after unmount should fail")
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateSingleValue(freeSpace, @"freeSpace() after unmount", 0)
+
+    ' ----------------------------------
+    ' TEST GROUP: Remount card
+    ' ----------------------------------
+    utils.startTestGroup(@"Remount SD card")
+
+    utils.startTest(@"mount() again")
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"mount() second time", true)
+
+    ' DIAGNOSTIC: Show CMD13 and CRC state after remount attempt
+    debug("  DIAG2: error()=", sdec_(dfs.error()))
+    debug("  DIAG2: lastCMD13=$", uhex_(dfs.getLastCMD13()), " lastCMD13Error=$", uhex_(dfs.getLastCMD13Error()))
+    debug("  DIAG2: CRC match=", udec_(dfs.getCRCMatchCount()), " mismatch=", udec_(dfs.getCRCMismatchCount()), " retry=", udec_(dfs.getCRCRetryCount()))
+
+    utils.startTest(@"Card still accessible after remount")
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateRange(freeSpace, @"freeSpace() after remount", 1, $7FFF_FFFF)
+
+    ' ----------------------------------
+    ' TEST GROUP: Multiple mount calls
+    ' ----------------------------------
+    utils.startTestGroup(@"Multiple mount/unmount cycles")
+
+    utils.startTest(@"unmount()")
+    result := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"unmount()", true)
+
+    utils.startTest(@"mount() cycle 1")
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"mount()", true)
+
+    utils.startTest(@"unmount()")
+    result := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"unmount()", true)
+
+    utils.startTest(@"mount() cycle 2")
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"mount()", true)
+
+    utils.startTest(@"unmount()")
+    result := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"unmount()", true)
+
+    utils.startTest(@"mount() cycle 3")
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateBool(result, @"mount()", true)
+
+    utils.startTest(@"Card still works after 3 mount/unmount cycles")
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateRange(freeSpace, @"freeSpace()", 1, $7FFF_FFFF)
+
+    ' Final unmount
+    dfs.unmount(dfs.DEV_SD)
+
+    ' ----------------------------------
+    ' Summary
+    ' ----------------------------------
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Mount/Unmount Tests Complete")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

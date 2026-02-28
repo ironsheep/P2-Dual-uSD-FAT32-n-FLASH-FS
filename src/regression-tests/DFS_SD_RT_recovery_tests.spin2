@@ -1,0 +1,386 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_recovery_tests.spin2
+''   Purpose.... This object tests recovery scenarios after injected CRC errors
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 28 FEB 2026
+''
+'' =================================================================================================
+''
+'' Tests recovery behavior after various error conditions:
+''   - Continue reading after CRC retry
+''   - Seek and retry after exhaustive CRC failure
+''   - File data preservation after write rejection
+''   - Retry write after rejection
+''   - Remount recovery after errors
+''   - Handle isolation (error on one handle doesn't corrupt others)
+''   - Handle reuse after error close
+''
+'' Depends on: Phase 4 CRC error injection test hooks
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     BUFFER_SIZE = 512
+
+     MAX_READ_CRC_RETRIES = 3  ' Must match driver constant
+
+' Enable all features including debug/test hooks
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+recFile1        BYTE    "RECOV1.BIN", 0
+recFile2        BYTE    "RECOV2.BIN", 0
+recFile3        BYTE    "RECOV3.BIN", 0
+recWriteFile    BYTE    "RECWR1.TXT", 0
+
+' Buffers
+writeBuffer     BYTE    0[BUFFER_SIZE]
+readBuffer      BYTE    0[BUFFER_SIZE]
+readBuffer_guard BYTE   0[16]
+readBuffer2     BYTE    0[BUFFER_SIZE]
+readBuffer2_guard BYTE  0[16]
+
+' Short content for write tests
+beforeContent   BYTE    "BEFORE", 0
+afterContent    BYTE    "AFTER", 0
+
+PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWritten
+'' Main entry point for recovery scenario regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Recovery Scenario Tests")
+    debug("==============================================")
+
+    ' Mount the card first
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    ' Show card info
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+
+    ' Clean up any existing test files
+    dfs.deleteFile(dfs.DEV_SD, @recFile1)
+    dfs.deleteFile(dfs.DEV_SD, @recFile2)
+    dfs.deleteFile(dfs.DEV_SD, @recFile3)
+    dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
+
+    ' Create test files with known patterns
+    ' recFile1: pattern $31 (1024 bytes = 2 sectors)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $31)
+    handle := dfs.createFileNew(dfs.DEV_SD, @recFile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+
+    ' recFile2: pattern $42
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $42)
+    handle := dfs.createFileNew(dfs.DEV_SD, @recFile2)
+    if handle >= 0
+        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+
+    ' recFile3: pattern $53
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $53)
+    handle := dfs.createFileNew(dfs.DEV_SD, @recFile3)
+    if handle >= 0
+        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+
+    ' Ensure test hooks are clean
+    dfs.clearTestErrors()
+
+    ' ======================================================================
+    ' TEST GROUP: Recovery After Read Errors
+    ' ======================================================================
+    utils.startTestGroup(@"Recovery After Read Errors")
+
+    ' Test 1: Continue reading after CRC retry
+    ' Open file -> arm force(1) -> read 512B twice -> both succeed
+    utils.startTest(@"Continue reading after CRC retry")
+    utils.setCheckCountPerTest(2)
+    handle := dfs.openFileRead(dfs.DEV_SD, @recFile1)
+    if handle >= 0
+        dfs.setTestForceReadError(1)
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"first read 512 bytes", BUFFER_SIZE)
+
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"second read 512 bytes", BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+    utils.showSubTestResults()
+
+    ' Test 2: Seek and retry after exhaustive error
+    ' open file -> arm(3) -> read fails -> clear -> seek(0) -> read succeeds
+    utils.startTest(@"Seek and retry after exhaustive CRC error")
+    utils.setCheckCountPerTest(3)
+    dfs.clearTestErrors()
+    handle := dfs.openFileRead(dfs.DEV_SD, @recFile1)
+    if handle >= 0
+        dfs.setTestForceReadError(MAX_READ_CRC_RETRIES)
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.evaluateSubValue(bytesRead, @"read fails with 0", 0)
+
+        ' Clear errors and seek back to start
+        dfs.clearTestErrors()
+        dfs.seekHandle(handle, 0)
+
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"retry read 512 bytes", BUFFER_SIZE)
+
+        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
+        utils.evaluateSubBool(result, @"data matches pattern", true)
+        dfs.closeFileHandle(handle)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Recovery After Write Errors
+    ' ======================================================================
+    utils.startTestGroup(@"Recovery After Write Errors")
+
+    ' Test 3: File data preserved after write rejection
+    ' Write "BEFORE", close, reopen write, arm error, attempt write -> close
+    ' Reopen read -> "BEFORE" still present
+    utils.startTest(@"File data preserved after write rejection")
+    dfs.clearTestErrors()
+    dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
+    handle := dfs.createFileNew(dfs.DEV_SD, @recWriteFile)
+    if handle >= 0
+        dfs.writeHandle(handle, @beforeContent, strsize(@beforeContent))
+        dfs.closeFileHandle(handle)
+
+    ' Reopen for write, arm error, attempt write
+    handle := dfs.openFileWrite(dfs.DEV_SD, @recWriteFile)
+    if handle >= 0
+        dfs.setTestForceWriteError(1)
+        dfs.writeHandle(handle, @afterContent, strsize(@afterContent))
+        dfs.closeFileHandle(handle)
+
+    ' Read back and verify original content is present
+    dfs.clearTestErrors()
+    handle := dfs.openFileRead(dfs.DEV_SD, @recWriteFile)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 64)
+        dfs.closeFileHandle(handle)
+    debug("  Read back: ", udec_(bytesRead), " bytes, content=[", lstr_(@readBuffer, bytesRead <# 20), "]")
+    ' File should contain at least "BEFORE" - data should not be corrupted
+    utils.evaluateSubBool(bytesRead >= strsize(@beforeContent), @"has content", true)
+
+    ' Test 4: Retry write after rejection succeeds
+    utils.startTest(@"Retry write after rejection succeeds")
+    dfs.clearTestErrors()
+    dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
+    handle := dfs.createFileNew(dfs.DEV_SD, @recWriteFile)
+    if handle >= 0
+        dfs.writeHandle(handle, @afterContent, strsize(@afterContent))
+        dfs.closeFileHandle(handle)
+
+    ' Verify "AFTER" was written
+    handle := dfs.openFileRead(dfs.DEV_SD, @recWriteFile)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 64)
+        dfs.closeFileHandle(handle)
+    debug("  Read back: ", udec_(bytesRead), " bytes, content=[", lstr_(@readBuffer, bytesRead <# 20), "]")
+    utils.evaluateSubBool(bytesRead == strsize(@afterContent), @"write succeeded", true)
+
+    ' ======================================================================
+    ' TEST GROUP: Remount Recovery
+    ' ======================================================================
+    utils.startTestGroup(@"Remount Recovery")
+
+    ' Test 5: Remount after errors restores operation
+    utils.startTest(@"Remount after errors restores operation")
+    utils.setCheckCountPerTest(3)
+    ' Force some errors then unmount/remount
+    dfs.setTestForceReadError(1)
+    dfs.unmount(dfs.DEV_SD)
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSubBool(result, @"remount succeeds", true)
+
+    ' Create a new file
+    dfs.clearTestErrors()
+    dfs.deleteFile(dfs.DEV_SD, @"REMOUNT.TXT")
+    handle := dfs.createFileNew(dfs.DEV_SD, @"REMOUNT.TXT")
+    if handle >= 0
+        dfs.writeHandle(handle, @"Remount test", 12)
+        dfs.closeFileHandle(handle)
+    utils.evaluateSubBool(handle >= 0, @"create file after remount", true)
+
+    ' Read existing file
+    handle := dfs.openFileRead(dfs.DEV_SD, @recFile2)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $42)
+    utils.evaluateSubBool(result, @"existing file data OK", true)
+    utils.showSubTestResults()
+
+    dfs.deleteFile(dfs.DEV_SD, @"REMOUNT.TXT")
+
+    ' ======================================================================
+    ' TEST GROUP: Handle Isolation
+    ' ======================================================================
+    utils.startTestGroup(@"Handle Isolation")
+
+    ' Test 6: Error on one handle does not corrupt others
+    utils.startTest(@"Error on one handle does not corrupt others")
+    utils.setCheckCountPerTest(3)
+    dfs.clearTestErrors()
+
+    ' Open three files
+    h0 := dfs.openFileRead(dfs.DEV_SD, @recFile1)
+    h1 := dfs.openFileRead(dfs.DEV_SD, @recFile2)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @recFile3)
+
+    ' Read h0 successfully
+    bytefill(@readBuffer, 0, BUFFER_SIZE)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h0, @readBuffer, BUFFER_SIZE)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
+    utils.evaluateSubBool(result, @"h0 read correct", true)
+
+    ' Force error on h1
+    dfs.setTestForceReadError(MAX_READ_CRC_RETRIES)
+    bytesRead := dfs.readHandle(h1, @readBuffer, BUFFER_SIZE)
+    debug("  h1 read after force error: ", sdec_(bytesRead))
+
+    ' Clear errors, verify h0 and h2 still work
+    dfs.clearTestErrors()
+    ' h0 is at position 512 (already read first sector), read second sector
+    bytefill(@readBuffer, 0, BUFFER_SIZE)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := dfs.readHandle(h0, @readBuffer, BUFFER_SIZE)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubValue(bytesRead, @"h0 2nd read OK", BUFFER_SIZE)
+
+    bytefill(@readBuffer2, 0, BUFFER_SIZE)
+    utils.initGuard(@readBuffer2_guard)
+    bytesRead2 := dfs.readHandle(h2, @readBuffer2, BUFFER_SIZE)
+    utils.checkGuard(@readBuffer2_guard, @"readBuffer2 guard")
+    result := utils.verifyBufferPattern(@readBuffer2, BUFFER_SIZE, $53)
+    utils.evaluateSubBool(result, @"h2 read correct", true)
+
+    dfs.closeFileHandle(h0)
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+    utils.showSubTestResults()
+
+    ' Test 7: Handle reuse after error close
+    utils.startTest(@"Handle reuse after error close")
+    dfs.clearTestErrors()
+    ' h1 was closed above, open a new file in freed slot
+    handle := dfs.openFileRead(dfs.DEV_SD, @recFile2)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $42)
+    utils.evaluateBool(result, @"reused handle reads OK", true)
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+    dfs.clearTestErrors()
+    dfs.deleteFile(dfs.DEV_SD, @recFile1)
+    dfs.deleteFile(dfs.DEV_SD, @recFile2)
+    dfs.deleteFile(dfs.DEV_SD, @recFile3)
+    dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
+
+    dfs.unmount(dfs.DEV_SD)
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  =================================================================================================
+}}

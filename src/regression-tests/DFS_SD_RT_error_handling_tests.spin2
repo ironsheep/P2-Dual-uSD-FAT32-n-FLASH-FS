@@ -1,0 +1,395 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_error_handling_tests.spin2
+''   Purpose.... This object tests error conditions and edge cases for the SD card driver
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 28 FEB 2026
+''
+'' =================================================================================================
+''
+'' This test file focuses on error conditions that require specific setup scenarios:
+''   - File state errors (E_FILE_NOT_OPEN, E_END_OF_FILE)
+''   - Directory errors (E_FILE_EXISTS for directories, E_FILE_NOT_FOUND in non-existent paths)
+''   - Handle patterns (handle reuse, simultaneous read/write on same file)
+''   - Handle type mismatch (write on read handle, read on write handle)
+''   - Rename edge cases (rename to existing destination)
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     ' Error codes
+     E_FILE_NOT_FOUND    = -40
+     E_FILE_EXISTS       = -41
+     E_FILE_NOT_OPEN     = -45
+     E_END_OF_FILE       = -46
+     E_TOO_MANY_FILES    = -90
+     E_INVALID_HANDLE    = -91
+     E_FILE_ALREADY_OPEN = -92
+
+     MBR_SIGNATURE       = $AA55
+     SECTOR_SIZE         = 512
+
+' Enable raw sector access for MBR integrity check and debug features
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+testfile1       BYTE    "ERTEST1.TXT", 0
+testfile2       BYTE    "ERTEST2.TXT", 0
+testfile3       BYTE    "ERTEST3.TXT", 0
+testfile4       BYTE    "ERTEST4.TXT", 0
+testfile5       BYTE    "ERTEST5.TXT", 0
+testdir1        BYTE    "ERTDIR1", 0
+testdir2        BYTE    "NONEXIST", 0
+badPath1        BYTE    "NOEXIST/CHILD", 0    ' parent doesn't exist
+testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
+
+' Buffer for MBR integrity check
+mbr_buf         BYTE    0[SECTOR_SIZE]
+
+readBuffer      BYTE    0[64]
+readBuffer_guard BYTE   0[16]
+
+PUB go() | workerCog, result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
+'' Main entry point for error handling regression tests
+''
+'' Tests error conditions and edge cases for the SD card driver
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Error Handling Tests")
+    debug("==============================================")
+
+    ' Mount the card first
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        debug("END_SESSION")
+        return
+
+    debug(" ")
+    debug("* SD Card mounted successfully")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+
+    ' Clean up any leftover test files/directories
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    dfs.deleteFile(dfs.DEV_SD, @testfile3)
+    dfs.deleteFile(dfs.DEV_SD, @testfile4)
+    dfs.deleteFile(dfs.DEV_SD, @testfile5)
+    dfs.deleteFile(dfs.DEV_SD, @testdir1)
+
+    ' ----------------------------------
+    ' TEST GROUP: File State Errors
+    ' ----------------------------------
+    utils.startTestGroup(@"File State Errors")
+
+    ' Test: Read/write/seek on invalid handle returns E_INVALID_HANDLE
+    ' (This complements the multihandle tests but focuses on closed handles)
+    utils.startTest(@"readHandle() on never-opened handle returns error")
+    bytesRead := dfs.readHandle(99, @readBuffer, 10)
+    utils.evaluateSingleValue(bytesRead, @"readHandle(99)", E_INVALID_HANDLE)
+
+    ' Test: E_END_OF_FILE - create small file, read past end
+    utils.startTest(@"Read past EOF returns partial data then 0")
+    ' Create a 10-byte file
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        bytesWritten := dfs.writeHandle(handle, @testContent, 10)
+        dfs.closeFileHandle(handle)
+
+    ' Reopen for read and try to read 20 bytes
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        bytefill(@readBuffer, 0, 64)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 20)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        ' Should get exactly 10 bytes (file size), not 20
+        utils.evaluateSubValue(bytesRead, @"first read gets 10 bytes", 10)
+        ' Second read should get 0 (EOF)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"second read gets 0 (EOF)", 0)
+        dfs.closeFileHandle(handle)
+
+    ' ----------------------------------
+    ' TEST GROUP: Directory Errors
+    ' ----------------------------------
+    utils.startTestGroup(@"Directory Errors")
+
+    ' Test: Create directory that already exists returns error
+    utils.startTest(@"newDirectory() on existing directory fails")
+    ' Create directory first time - should succeed
+    result := dfs.newDirectory(dfs.DEV_SD, @testdir1)
+    debug("  First newDirectory: ", sdec_(result))
+    ' Try to create same directory again - should fail
+    result := dfs.newDirectory(dfs.DEV_SD, @testdir1)
+    debug("  Second newDirectory: ", sdec_(result))
+    ' newDirectory returns boolean, not error code
+    utils.evaluateBool(result, @"second newDirectory()", false)
+
+    ' Test: Create file in non-existent directory
+    ' NOTE: This tests path handling - trying to create "NONEXIST/FILE.TXT"
+    ' The driver may not support path syntax - documenting behavior
+    utils.startTest(@"createFileNew() in non-existent dir behavior")
+    ' First try to cd to non-existent directory
+    result := dfs.changeDirectory(dfs.DEV_SD, @testdir2)
+    utils.evaluateBool(result, @"cd to non-existent dir", false)
+
+    ' ----------------------------------
+    ' TEST GROUP: Handle Reuse Patterns
+    ' ----------------------------------
+    utils.startTestGroup(@"Handle Reuse Patterns")
+
+    ' Clean up before handle tests
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    dfs.deleteFile(dfs.DEV_SD, @testfile3)
+    dfs.deleteFile(dfs.DEV_SD, @testfile4)
+    dfs.deleteFile(dfs.DEV_SD, @testfile5)
+
+    ' Create test files for handle tests
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if h1 >= 0
+        dfs.writeHandle(h1, @"File1", 5)
+        dfs.closeFileHandle(h1)
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile2)
+    if h1 >= 0
+        dfs.writeHandle(h1, @"File2", 5)
+        dfs.closeFileHandle(h1)
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile3)
+    if h1 >= 0
+        dfs.writeHandle(h1, @"File3", 5)
+        dfs.closeFileHandle(h1)
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile4)
+    if h1 >= 0
+        dfs.writeHandle(h1, @"File4", 5)
+        dfs.closeFileHandle(h1)
+    h1 := dfs.createFileNew(dfs.DEV_SD, @testfile5)
+    if h1 >= 0
+        dfs.writeHandle(h1, @"File5", 5)
+        dfs.closeFileHandle(h1)
+
+    dfs.syncDirCache()
+
+    ' Test: Handle reuse - open 4, close one, new open reuses slot
+    utils.startTest(@"Handle slot reuse after close")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile2)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @testfile3)
+    h4 := dfs.openFileRead(dfs.DEV_SD, @testfile4)
+
+    utils.evaluateSubBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0, @"opened 4 files", true)
+
+    ' Close handle 1
+    dfs.closeFileHandle(h1)
+
+    ' Open another file - should get a handle (reusing slot)
+    h5 := dfs.openFileRead(dfs.DEV_SD, @testfile5)
+    utils.evaluateSubBool(h5 >= 0, @"5th open reused slot", true)
+
+    ' Close all
+    dfs.closeFileHandle(h2)
+    dfs.closeFileHandle(h3)
+    dfs.closeFileHandle(h4)
+    dfs.closeFileHandle(h5)
+
+    ' Test: Same file can be open for write AND read simultaneously
+    utils.startTest(@"Same file open for write and read simultaneously")
+    ' Open for write first
+    h1 := dfs.openFileWrite(dfs.DEV_SD, @testfile1)
+    utils.evaluateSubBool(h1 >= 0, @"open for write", true)
+    debug("  Write handle: ", sdec_(h1))
+
+    ' Now open same file for read - this SHOULD be allowed
+    h2 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    debug("  Read handle: ", sdec_(h2))
+    ' Reader should see original data (before any new writes)
+    if h2 >= 0
+        utils.evaluateSubBool(true, @"read handle obtained", true)
+        dfs.closeFileHandle(h2)
+    else
+        ' Document if driver doesn't allow this
+        debug("  NOTE: Driver doesn't allow read while write-open")
+        utils.evaluateSubBool(h2 == E_FILE_ALREADY_OPEN, @"error is E_FILE_ALREADY_OPEN", true)
+
+    if h1 >= 0
+        dfs.closeFileHandle(h1)
+
+    ' ----------------------------------
+    ' TEST GROUP: Path Safety (MBR corruption guard)
+    ' ----------------------------------
+    utils.startTestGroup(@"Path Safety")
+
+    ' Test: newDirectory() with non-existent parent must not corrupt MBR
+    ' BUG: when searchDirectory("NOEXIST/CHILD") fails because "NOEXIST"
+    '       doesn't exist, entry_address stays 0. do_newdir then writes
+    '       a directory entry to sector 0 (MBR), corrupting the partition table.
+    utils.startTest(@"newDirectory() with bad parent path preserves MBR")
+
+    ' Read MBR before the test — save signature as ground truth
+    dfs.readSectorRaw(0, @mbr_buf)
+    utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig before", MBR_SIGNATURE)
+
+    ' Attempt to create directory with non-existent parent
+    result := dfs.newDirectory(dfs.DEV_SD, @badPath1)
+    debug("  newDirectory(NOEXIST/CHILD) returned ", sdec_(result))
+    utils.evaluateSubBool(result, @"newDirectory(bad path)", false)
+
+    ' Re-read MBR — signature MUST still be intact
+    dfs.readSectorRaw(0, @mbr_buf)
+    utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig after", MBR_SIGNATURE)
+
+    ' Also verify first bytes of MBR are not a directory entry
+    ' (directory entries start with a filename, not MBR boot code)
+    utils.evaluateSubBool(BYTE[@mbr_buf] <> $E5 and BYTE[@mbr_buf + 11] <> $10, ...
+        @"sector 0 not dir entry", true)
+
+    ' ----------------------------------
+    ' TEST GROUP: Handle Type Mismatch
+    ' ----------------------------------
+    utils.startTestGroup(@"Handle Type Mismatch")
+
+    ' Ensure test file exists for these tests
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @"TestData1", 9)
+        dfs.closeFileHandle(handle)
+
+    ' Test: writeHandle on read-only handle returns E_INVALID_HANDLE
+    utils.startTest(@"writeHandle on read-only handle returns error")
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        bytesWritten := dfs.writeHandle(handle, @testContent, 10)
+        debug("  writeHandle on read handle: ", sdec_(bytesWritten))
+        utils.evaluateSingleValue(bytesWritten, @"writeHandle()", E_INVALID_HANDLE)
+        dfs.closeFileHandle(handle)
+
+    ' Test: readHandle on write handle is allowed (documents behavior)
+    utils.startTest(@"readHandle on write handle allowed")
+    handle := dfs.openFileWrite(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        bytefill(@readBuffer, 0, 64)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 9)
+        debug("  readHandle on write handle: ", sdec_(bytesRead))
+        ' Reading from a write handle is allowed - documents this behavior
+        utils.evaluateBool(bytesRead >= 0, @"readHandle returns >= 0", true)
+        dfs.closeFileHandle(handle)
+
+    ' ----------------------------------
+    ' TEST GROUP: Rename Edge Cases
+    ' ----------------------------------
+    utils.startTestGroup(@"Rename Edge Cases")
+
+    ' Clean up and create two test files
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @"File1", 5)
+        dfs.closeFileHandle(handle)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile2)
+    if handle >= 0
+        dfs.writeHandle(handle, @"File2", 5)
+        dfs.closeFileHandle(handle)
+
+    ' Test: rename to existing destination returns false
+    utils.startTest(@"rename to existing destination returns false")
+    result := dfs.rename(dfs.DEV_SD, @testfile1, @testfile2)
+    debug("  rename(ERTEST1 -> ERTEST2): ", sdec_(result))
+    utils.evaluateBool(result, @"rename to existing", false)
+
+    ' ----------------------------------
+    ' Cleanup: Delete test files and directories
+    ' ----------------------------------
+    debug(" ")
+    debug("* Cleaning up test files...")
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    dfs.deleteFile(dfs.DEV_SD, @testfile3)
+    dfs.deleteFile(dfs.DEV_SD, @testfile4)
+    dfs.deleteFile(dfs.DEV_SD, @testfile5)
+    dfs.deleteFile(dfs.DEV_SD, @testdir1)
+
+    ' Unmount
+    dfs.unmount(dfs.DEV_SD)
+
+    ' ----------------------------------
+    ' Summary
+    ' ----------------------------------
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Error Handling Tests Complete")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

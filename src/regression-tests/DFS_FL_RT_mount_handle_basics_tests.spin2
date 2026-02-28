@@ -1,0 +1,410 @@
+'' =================================================================================================
+''
+''   File....... DFS_FL_RT_mount_handle_basics_tests.spin2
+''   Purpose.... Flash mount/handle basics tests via dual_fs unified driver
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2023
+''   Updated.... 27 FEB 2026
+''
+''   Migrated from RT_mount_handle_basics_tests.spin2 (flash_fs) to dual_fs
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 320_000_000
+     DEBUG_BAUD       = 2_000_000
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "DFS_FL_RT_utilities"
+
+CON
+    ' P2 Edge module SD slot pins (needed for dfs.init)
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+DAT
+
+testfile            BYTE    "miscTest.bin", 0
+testfile2           BYTE   "otherTest.bin", 0
+testfile3           BYTE   "yetAnotherTest.bin", 0
+testfile4           BYTE   "handle3Test.bin", 0
+testfile5           BYTE   "handle4Test.bin", 0
+testfile6           BYTE   "handle5Test.bin", 0
+testfileX           BYTE   "noHandlesTest.bin", 0
+
+usedBlocks          LONG    0
+freeBlocks          LONG    0
+fileCount           LONG    0
+handle              LONG    0
+handle1             LONG    0
+badHandle           LONG    0
+status              LONG    0
+desiredId           LONG    0
+fileSize            LONG    0
+rdCount             LONG    0
+rdValue             LONG    0
+snHi                LONG    0
+snLo                LONG    0
+endPosition         LONG    0
+writeLength         LONG    0
+filename            BYTE    0[127+1]
+
+PUB go() | workerCog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Ensure all handle calls fail before mounted
+    utils.startTestGroup(@"Attempting things while not mounted")
+    utils.startTest(@"Unmount()")
+    status := dfs.unmount(dfs.DEV_FLASH)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"serial_number()")
+    utils.setCheckCountPerTest(2)
+    snHi, snLo := dfs.serial_number(dfs.DEV_FLASH)
+    utils.evaluateSubValue(snHi, @"serial_number() hi", 0)
+    utils.evaluateSubValue(snLo, @"serial_number() lo", 0)
+
+    utils.startTest(@"serial_number() check for error")
+    status := dfs.error()
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"open()")
+    status := dfs.open(dfs.DEV_FLASH, @testfile, dfs.FILEMODE_READ)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"open_circular()")
+    status := dfs.open_circular(dfs.DEV_FLASH, @testfile2, dfs.FILEMODE_READ, 8192)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"rename()")
+    status := dfs.rename(dfs.DEV_FLASH, @testfile, @testfile2)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"delete()")
+    status := dfs.deleteFile(dfs.DEV_FLASH, @testfile)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"exists()")
+    utils.setCheckCountPerTest(2)
+    status := dfs.exists(dfs.DEV_FLASH, @testfile)
+    utils.evaluateSubValue(status, @"exists()", false)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"exists()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"file_size()")
+    status := dfs.file_size(dfs.DEV_FLASH, @testfile)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"file_size_unused()")
+    status := dfs.file_size_unused(dfs.DEV_FLASH, @testfile)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"directory()")
+    status := dfs.directory(dfs.DEV_FLASH, @desiredId, @filename, @fileSize)
+    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"stats()")
+    utils.setCheckCountPerTest(2)
+    usedBlocks, freeBlocks, fileCount := dfs.stats(dfs.DEV_FLASH)
+    utils.evaluateSubStatus(usedBlocks, @"stats()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"stats()", dfs.E_NOT_MOUNTED)
+
+    badHandle := $1234 ' ignored when filesystem not mounted
+
+    utils.startTest(@"flush()")
+    status := dfs.flush(badHandle)
+    utils.evaluateSubStatus(status, @"flush()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"flush()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"close()")
+    status := dfs.close(badHandle)
+    utils.evaluateSubStatus(status, @"close()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"close()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"create_file()")
+    status := dfs.create_file(dfs.DEV_FLASH, @"emptyFile", $00, 123)
+    utils.evaluateSubStatus(status, @"create_file()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"create_file()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"seek()")
+    endPosition := dfs.flashSeek(badHandle, 25, dfs.SK_FILE_START)
+    utils.evaluateSubStatus(endPosition, @"seek()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"seek()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"write()")
+    writeLength := dfs.writeHandle(badHandle, @"TEST", 4)
+    utils.evaluateSubStatus(writeLength, @"write()", dfs.E_INVALID_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"write()", dfs.E_INVALID_HANDLE)
+
+    utils.startTest(@"wr_byte()")
+    status := dfs.wr_byte(badHandle, 4)
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"wr_word()")
+    status := dfs.wr_word(badHandle, $fc0)
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"wr_long()")
+    status := dfs.wr_long(badHandle, $ffff_ece0)
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"wr_str()")
+    status := dfs.wr_str(badHandle, @"dummy string")
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"read()")
+    rdCount := dfs.readHandle(badHandle, @filename, 6)
+    utils.evaluateSubStatus(rdCount, @"read()", dfs.E_INVALID_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"read()", dfs.E_INVALID_HANDLE)
+
+    utils.startTest(@"rd_byte()")
+    rdValue := dfs.rd_byte(badHandle)
+    utils.evaluateSubStatus(rdValue!, @"rd_byte()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_byte()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"rd_word()")
+    rdValue := dfs.rd_word(badHandle)
+    utils.evaluateSubStatus(rdValue!, @"rd_word()", dfs.E_NOT_MOUNTED)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_word()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"rd_long()")
+    rdValue := dfs.rd_long(badHandle)
+    utils.evaluateSubStatus(rdValue, @"rd_long()", 0)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_long()", dfs.E_NOT_MOUNTED)
+
+    utils.startTest(@"rd_str()")
+    rdCount := dfs.rd_str(badHandle, @filename, 127+1)
+    utils.evaluateSubStatus(rdCount, @"rd_str()", 0)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_str()", dfs.E_NOT_MOUNTED)
+
+
+    ' Ensure all open calls fail when no more handles
+    utils.startTestGroup(@"Attempting file ops with no more handles")
+
+    utils.startTest(@"format()")
+    status := dfs.format(dfs.DEV_FLASH)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.startTest(@"mount()")
+    status := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showChipAndDriverVersion()
+
+    utils.startTest(@"open() OK")
+    handle := dfs.open(dfs.DEV_FLASH, @testfile, dfs.FILEMODE_APPEND)
+    status := dfs.error()
+    utils.evaluateSubStatus(handle, @"open()", 0)
+    utils.evaluateSubStatus(status, @"open()", dfs.SUCCESS)
+
+    utils.startTest(@"open_circular() OK")
+    handle1 := dfs.open_circular(dfs.DEV_FLASH, @testfile2, dfs.FILEMODE_APPEND, 8192)
+    status := dfs.error()
+    utils.evaluateSubValue(handle1, @"open_circular()", 1)
+    utils.evaluateSubStatus(status, @"open_circular()", dfs.SUCCESS)
+
+    ' Exhaust remaining handles (unified driver has 6 total)
+    utils.startTest(@"open() handles 2-5")
+    utils.setCheckCountPerTest(4)
+    handle := dfs.open(dfs.DEV_FLASH, @testfile3, dfs.FILEMODE_APPEND)
+    utils.evaluateSubValue(handle, @"open() h2", 2)
+    handle := dfs.open(dfs.DEV_FLASH, @testfile4, dfs.FILEMODE_APPEND)
+    utils.evaluateSubValue(handle, @"open() h3", 3)
+    handle := dfs.open(dfs.DEV_FLASH, @testfile5, dfs.FILEMODE_APPEND)
+    utils.evaluateSubValue(handle, @"open() h4", 4)
+    handle := dfs.open(dfs.DEV_FLASH, @testfile6, dfs.FILEMODE_APPEND)
+    utils.evaluateSubValue(handle, @"open() h5", 5)
+
+    ' all opens should fail from here (all 6 handles in use)
+    utils.startTest(@"open() No handles")
+    handle := dfs.open(dfs.DEV_FLASH, @testfileX, dfs.FILEMODE_READ)
+    status := dfs.error()
+    utils.evaluateSubStatus(handle, @"open()", dfs.E_FLASH_NO_HANDLE)
+    utils.evaluateSubStatus(status, @"open()", dfs.E_FLASH_NO_HANDLE)
+
+    utils.startTest(@"open_circular() No handles")
+    handle := dfs.open_circular(dfs.DEV_FLASH, @testfileX, dfs.FILEMODE_READ, 8192)
+    status := dfs.error()
+    utils.evaluateSubStatus(handle, @"open_circular()", dfs.E_FLASH_NO_HANDLE)
+    utils.evaluateSubStatus(status, @"open_circular()", dfs.E_FLASH_NO_HANDLE)
+
+    utils.startTest(@"close() without writing should leave no file")
+    handle := dfs.close(0)                            ' first file opened is 0
+    status := dfs.error()
+    utils.evaluateSubStatus(handle, @"close()", dfs.SUCCESS)
+    utils.evaluateSubStatus(status, @"close()", dfs.SUCCESS)
+
+    utils.startTest(@"close() (circular) without writing should leave no file")
+    handle := dfs.close(1)                            ' second file opened is 1
+    status := dfs.error()
+    utils.evaluateSubStatus(handle, @"close()", dfs.SUCCESS)
+    utils.evaluateSubStatus(status, @"close()", dfs.SUCCESS)
+
+    utils.startTest(@"close() handles 2-5")
+    utils.setCheckCountPerTest(4)
+    status := dfs.close(2)
+    utils.evaluateSubStatus(status, @"close() h2", dfs.SUCCESS)
+    status := dfs.close(3)
+    utils.evaluateSubStatus(status, @"close() h3", dfs.SUCCESS)
+    status := dfs.close(4)
+    utils.evaluateSubStatus(status, @"close() h4", dfs.SUCCESS)
+    status := dfs.close(5)
+    utils.evaluateSubStatus(status, @"close() h5", dfs.SUCCESS)
+
+    utils.startTest(@"directory() should be empty if no files")
+    desiredId := 0                                      ' get first file found
+    status := dfs.directory(dfs.DEV_FLASH, @desiredId, @filename, @fileSize)
+    rdCount := strsize(@filename)                       ' should be zero if no file found!
+    utils.evaluateSubValue(rdCount, @"directory()", 0)
+    utils.evaluateSubStatus(status, @"directory()", dfs.SUCCESS)
+
+
+    ' all these ops should fail with illegal handle
+    utils.startTestGroup(@"Attempting file ops with bad handle $1234")
+    badHandle := $1234
+
+    utils.startTest(@"flush()")
+    status := dfs.flush(badHandle)
+    utils.evaluateSubStatus(status, @"flush()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"flush()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"close()")
+    status := dfs.close(badHandle)
+    utils.evaluateSubStatus(status, @"close()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"close()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"seek()")
+    endPosition := dfs.flashSeek(badHandle, 25, dfs.SK_FILE_START)
+    utils.evaluateSubStatus(endPosition, @"seek()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"seek()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"write()")
+    writeLength := dfs.writeHandle(badHandle, @"TEST", 4)
+    utils.evaluateSubStatus(writeLength, @"write()", dfs.E_INVALID_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"write()", dfs.E_INVALID_HANDLE)
+
+    utils.startTest(@"wr_byte()")
+    status := dfs.wr_byte(badHandle, 4)
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"wr_word()")
+    status := dfs.wr_word(badHandle, $fc0)
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"wr_long()")
+    status := dfs.wr_long(badHandle, $ffff_ece0)
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"wr_str()")
+    status := dfs.wr_str(badHandle, @"dummy string")
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"read()")
+    rdCount := dfs.readHandle(badHandle, @filename, 6)
+    utils.evaluateSubStatus(rdCount, @"read()", dfs.E_INVALID_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"read()", dfs.E_INVALID_HANDLE)
+
+    utils.startTest(@"rd_byte()")
+    rdValue := dfs.rd_byte(badHandle)
+    utils.evaluateSubStatus(rdValue, @"rd_byte()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_byte()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"rd_word()")
+    rdValue := dfs.rd_word(badHandle)
+    utils.evaluateSubStatus(rdValue, @"rd_word()", dfs.E_FLASH_BAD_HANDLE)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_word()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"rd_long()")
+    rdValue := dfs.rd_long(badHandle)
+    utils.evaluateSubValue(rdValue, @"rd_long()", 0)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_long()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.startTest(@"rd_str()")
+    rdCount := dfs.rd_str(badHandle, @filename, 127+1)
+    utils.evaluateSubValue(rdCount, @"rd_str()", 0)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"rd_str()", dfs.E_FLASH_BAD_HANDLE)
+
+    utils.showSubTestResults()
+
+    utils.ShowStats()                   ' should have empty filesystem
+    utils.showFiles()
+
+    utils.ShowTestEndCounts()
+
+    debug("* Test Complete")
+    debug("END_SESSION")
+
+    dfs.stop()
+
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2023-2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

@@ -1,0 +1,727 @@
+'' =================================================================================================
+''
+''   File....... DFS_FL_RT_append_tests.spin2
+''   Purpose.... Flash append and flush() tests via dual_fs unified driver
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2023
+''   Updated.... 27 FEB 2026
+''
+''   Migrated from RT_write_append_tests.spin2 (flash_fs) to dual_fs
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 320_000_000
+     DEBUG_BAUD       = 2_000_000
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "DFS_FL_RT_utilities"
+
+CON
+    ' P2 Edge module SD slot pins (needed for dfs.init)
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+DAT
+
+testfile1       BYTE    "ap1010bytes.bin", 0
+testfile2       BYTE    "ap99words.bin", 0
+testfile3       BYTE    "ap1212longs.bin", 0
+testfile4       BYTE    "ap1010strings.zstr", 0
+testfile5       BYTE    "apLongsHeadBody.bin", 0
+testfile6       BYTE    "apLongsHead2xBody.bin", 0
+testfile7       BYTE    "apLongsHead3xBody.bin", 0
+
+handle          LONG    0
+testValue       LONG    0
+status          LONG    0
+expectedValue   LONG    0
+
+
+PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog
+
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    status := dfs.format(dfs.DEV_FLASH)
+    if status < 0
+        utils.showError(@"format()", status)
+        return
+
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status < 0
+        utils.showError(@"mount()", status)
+        return
+
+    utils.ShowStats()                   ' should have empty filesystem
+    utils.showFiles()
+
+    utils.showChipAndDriverVersion()
+
+    utils.startTest(@"Ensure we have no files at start")
+    utils.ensureEmptyDirectory()
+
+    ' ----------------------------------
+    ' TEST
+    '  open file for read
+    '  ensure returns error (doesn't exist)
+    utils.startTest(@"BAD: Read when file doesn't exist")
+    handle := dfs.open(dfs.DEV_FLASH, @testfile1, dfs.FILEMODE_READ)
+    utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
+
+    debug(" ")
+    debug(" - report on chip S/N and Driver version")
+    snHi, snLo := dfs.serial_number(dfs.DEV_FLASH)
+    debug("CHIP Serial Number: ", uhex_long_(snHi), "-", uhex_long_(snLo))
+
+    ' FIXME: add free block checks after each file write/append
+
+    ' Real tests start here:
+    utils.startTestGroup(@"Head block only - partially filled with 10 BYTEs then apppend 10 more")
+    testWriteBytes(@testfile1, 10, 0, 0) ' this replaces file so we start at 0,0
+    testAppendBytes(@testfile1, 10, 10, 1, 1)
+
+    utils.showFiles()
+
+    utils.startTestGroup(@"Head block only - partially filled with 9 WORDs then apppend 9 more")
+    testWriteWords(@testfile2, 9, 1, 1)
+    testAppendWords(@testfile2, 9, 9, 2, 2)
+
+    utils.showFiles()
+
+    utils.startTestGroup(@"Head block only - partially filled with 12 LONGs then apppend 12 more")
+    nbrLongs := 12
+    testWriteLongs(@testfile3, nbrLongs, 2, 2)
+    testAppendLongs(@testfile3, nbrLongs, 12, 3, 3)
+
+    utils.showFiles()
+
+    utils.startTestGroup(@"Head block only - partially filled with 10 STRINGs then apppend 10 more")
+    expectedStrFileSize := testWriteStrings(@testfile4, 10, 3, 3)
+    expectedStrFileSize := testAppendStrings(@testfile4, 10, expectedStrFileSize, 4, 4)
+
+    utils.startTestGroup(@"Read and verify the content of all 20 string")
+    testVerifyAllStrings(@testfile4, 20)
+    utils.showFiles()
+
+    utils.startTestGroup(@"Head block + body block - filled with LONGs full HEAD, 2 in BODY, append 8 more")
+    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK +2
+    testWriteLongs(@testfile5, nbrLongs, 4, 4)
+    testAppendLongs(@testfile5, nbrLongs, 8, 5, 6)
+
+    utils.startTestGroup(@"Head block + 2 x body block - filled with LONGs full HEAD & BODY, 2 in 2nd BODY, append 8 more")
+    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK +2
+    testWriteLongs(@testfile6, nbrLongs, 5, 6)
+    testAppendLongs(@testfile6, nbrLongs, 8, 6, 9)
+
+    utils.startTestGroup(@"Head block + 2 x body block - filled with LONGsfull HEAD & 2 BODY (-3), append 9 more append causes add of new body")
+    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK + (dfs.LONGS_IN_BODY_BLOCK - 3)
+    testWriteLongs(@testfile7, nbrLongs, 6, 9)
+    testAppendLongs(@testfile7, nbrLongs, 9, 7, 12)
+
+    ' --- special case - flush() testing
+    nbrLongs += 9
+    testAppendWithIntermedFlush(nbrLongs, 7, 13)
+
+    utils.showFiles()
+
+    utils.ShowTestEndCounts()
+
+    debug("* Test Complete")
+    debug("END_SESSION")
+
+    dfs.stop()
+
+
+pri testAppendWithIntermedFlush(initialLongsCount, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded
+
+    ' --- special case - flush() testing
+    utils.startTestGroup(@"Certifying Flush - appends to existing file with flush() for each")
+    bytesUsed := initialLongsCount * 4
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+    utils.startTest(@"Check F/S status before append of BYTEs")
+    utils.evaluateFileStats(@testfile7, blocksUsed, bytesUsed)
+
+
+    utils.startTest(@"Get starting length before append of BYTEs")
+    utils.setCheckCountPerTest(2)
+    startLength := dfs.file_size(dfs.DEV_FLASH, @testfile7)
+    status := dfs.error()
+    utils.evaluateSubValue(startLength, @"file_size()", initialLongsCount * 4)
+    utils.evaluateSubStatus(status, @"file_size()", dfs.SUCCESS)
+
+    bytesUsed := startLength
+
+    ' open file
+    utils.startTest(@"Open File for append")
+    handle := dfs.open(dfs.DEV_FLASH, @testfile7, dfs.FILEMODE_APPEND)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    testFlushAppendLongs(handle, @testfile7, initialLongsCount, 6) ' leaves file open after flush
+    bytesUsed += (6 * 4)
+
+    testFlushAppendLongs(handle, @testfile7, initialLongsCount + 6, 22) ' leaves file open after flush
+    bytesUsed += (22 * 4)
+
+    '  close file
+    utils.startTest(@"Close append file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(@testfile7)
+
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(@testfile7, blocksUsed, bytesUsed)
+
+    blocksAdded := blocksUsed - utils.blockCountForFileSize(startLength)
+
+    debug("- test ", udec(blocksUsed, blocksAdded, startingBlockCount))
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post dual append write")
+    utils.evaluateFSStats(@"post file write", startingFileCount, startingBlockCount + blocksAdded)
+
+
+pri testNewAppendBytes(pFilename, count, startingFileCount, startingBlockCount) | bExists, startLength, bytesUsed, blocksUsed, blocksAdded, pBlock
+
+    utils.startTest(@"Ensure file doesn't exist")
+    utils.setCheckCountPerTest(2)
+    bExists := dfs.exists(dfs.DEV_FLASH, @testfile1)
+    status := dfs.error()
+    utils.evaluateSubValue(bExists, @"exists()", false)
+    utils.evaluateSubStatus(status, @"exists()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors for exists() call ")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.startTest(@"Open File for append")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_APPEND)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"Write N BYTEs")
+    utils.setCheckCountPerTest(1)
+    testValue := 0
+    repeat count
+        testValue++
+        status := dfs.wr_byte(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_byte()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close written file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, 1, count)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post append write")
+    utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + 1)
+
+
+pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | bytesUsed, blocksUsed
+    '  open file for write
+    '  ensure returns SUCCESS
+    utils.startTest(@"Open File for write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_WRITE)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"Write N BYTEs")
+    utils.setCheckCountPerTest(1)
+    testValue := 0
+    repeat count
+        testValue++
+        status := dfs.wr_byte(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_byte()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close written file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := count
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post BYTEs initial write")
+    utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
+
+
+pri testAppendBytes(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, pBlock, blocksAdded
+
+    utils.startTest(@"Get starting length before append of BYTEs")
+    utils.setCheckCountPerTest(2)
+    startLength := dfs.file_size(dfs.DEV_FLASH, pFilename)
+    status := dfs.error()
+    utils.evaluateSubValue(startLength, @"file_size()", initialCount)
+    utils.evaluateSubStatus(handle, @"file_size()",dfs.SUCCESS)
+
+    '  open file for append
+    utils.startTest(@"Open File for append")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_APPEND)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+    '    seek to various locations and read longs validating for correct value
+
+    utils.startTest(@"Append count BYTEs")
+    utils.setCheckCountPerTest(1)
+    testValue := $40
+    repeat count
+        testValue++
+        status := dfs.wr_byte(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_byte()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close append file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := startLength + count
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats post BYTEs append")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+    blocksAdded :=  blocksUsed - utils.blockCountForFileSize(startLength)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post BYTEs append write")
+    utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
+
+
+pri testWriteWords(pFilename, count, startingFileCount, startingBlockCount) | blocksUsed, bytesUsed
+
+    '  open file for write
+    '  ensure returns SUCCESS
+    utils.startTest(@"Open File for write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_WRITE)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"Write N WORDs")
+    utils.setCheckCountPerTest(1)
+    testValue := 0
+    repeat count
+        testValue++
+        status := dfs.wr_word(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_word()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close written file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := count * 2
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+   '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post WORDs write")
+    utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
+
+
+pri testAppendWords(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, pBlock, blocksAdded, blocksUsed
+
+    utils.startTest(@"Get starting length before append of WORDs")
+    utils.setCheckCountPerTest(2)
+    startLength := dfs.file_size(dfs.DEV_FLASH, pFilename)
+    status := dfs.error()
+    utils.evaluateSubValue(startLength, @"file_size()", initialCount * 2)
+    utils.evaluateSubStatus(status, @"file_size()", dfs.SUCCESS)
+
+    '  open file for append
+    utils.startTest(@"Open File for append")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_APPEND)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+    '    seek to various locations and read longs validating for correct value
+
+    utils.startTest(@"Append count WORDs")
+    utils.setCheckCountPerTest(1)
+    testValue := $40
+    repeat count
+        testValue++
+        status := dfs.wr_word(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_word()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close append file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := startLength + (count * 2)
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+   '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats post WORDs append")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+    blocksAdded := blocksUsed - utils.blockCountForFileSize(startLength)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post WORDs append write")
+    utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
+
+
+pri testWriteLongs(pFilename, count, startingFileCount, startingBlockCount) | bytesUsed, blocksUsed
+
+    '  open file for write
+    '  ensure returns SUCCESS
+    utils.startTest(@"Open File for write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_WRITE)
+    utils.evaluateResultNegError(handle, 0)
+
+    utils.startTest(@"Write N LONGs")
+    utils.setCheckCountPerTest(1)
+    testValue := 0
+    repeat count
+        testValue++
+        status := dfs.wr_long(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_long()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close written file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := (count * 4)
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post LONGs write")
+    utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
+
+
+pri testAppendLongs(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded
+
+    utils.startTest(@"Get starting length before append of LONGs")
+    utils.setCheckCountPerTest(2)
+    startLength := dfs.file_size(dfs.DEV_FLASH, pFilename)
+    status := dfs.error()
+    utils.evaluateSubValue(startLength, @"file_size()", initialCount * 4)
+    utils.evaluateSubStatus(status, @"file_size()", dfs.SUCCESS)
+
+    '  open file for append
+    utils.startTest(@"Open File for append")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_APPEND)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+    '    seek to various locations and read longs validating for correct value
+
+    utils.startTest(@"Append count LONGs")
+    utils.setCheckCountPerTest(1)
+    testValue := $40
+    repeat count
+        testValue++
+        status := dfs.wr_long(handle, testValue)
+        utils.evaluateSubStatus(status, @"wr_long()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close append file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := startLength + (count * 4)
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats post LONGs append")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+    blocksAdded := blocksUsed - utils.blockCountForFileSize(startLength)
+
+    debug("- test ", udec(blocksUsed, blocksAdded, startingBlockCount))
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post LONGs append write")
+    utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
+
+
+pri testFlushAppendLongs(appendHandle, pFilename, initialLongCount, count) | startLength, bytesUsed, blocksUsed, blocksAdded
+
+    utils.showFileDetails(pFilename)
+
+    utils.startTest(@"Get starting length before append of LONGs")
+    utils.setCheckCountPerTest(2)
+    startLength := dfs.file_size(dfs.DEV_FLASH, pFilename)
+    status := dfs.error()
+    utils.evaluateSubValue(startLength, @"file_size()", initialLongCount * 4)
+    utils.evaluateSubStatus(status, @"file_size()", dfs.SUCCESS)
+
+    utils.startTest(@"Append count LONGs")
+    utils.setCheckCountPerTest(1)
+    testValue := $40
+    repeat count
+        testValue++
+        status := dfs.wr_long(appendHandle, testValue)
+        utils.evaluateSubStatus(status, @"wr_long()", dfs.SUCCESS)
+        if(status <> dfs.SUCCESS)
+          quit
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  flush changes to file
+    utils.startTest(@"Flush append file")
+    status := dfs.flush(appendHandle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    bytesUsed := startLength + (count * 4)
+    blocksUsed := utils.blockCountForFileSize(bytesUsed)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats post append flush")
+    utils.evaluateFileStats(pFilename, blocksUsed, bytesUsed)
+
+
+DAT { test strings }
+
+    testString01     BYTE "This is a test string", 0
+    testString02     BYTE "This is a test", 0
+    testString03     BYTE "This is a test string, how fun!", 0
+    testString04     BYTE "this is something!", 0
+    testString05     BYTE "I wonder what?", 0
+    testString06     BYTE "Tiny", 0
+    testString07     BYTE "Longer", 0
+    testString08     BYTE "Ok, let's get really long with this string!", 0
+    testString09     BYTE "Members: Jenny, Jisoo, Lisa, Rose", 0
+    testString10     BYTE "BlackPink - Blinks", 0
+
+
+    stringIdTable    ' 1st table-entry must follow immediately
+                WORD    @testString01
+                WORD    @testString02
+                WORD    @testString03
+                WORD    @testString04
+                WORD    @testString05
+                WORD    @testString06
+                WORD    @testString07
+                WORD    @testString08
+                WORD    @testString09
+                WORD    @testString10
+    stringIdTableEnd ' last entry must be immediately above this line
+' ------------------------------------------------------------
+stringIdCt       BYTE    (@stringIdTableEnd-@stringIdTable) >> 1   ' div by 2
+' ------------------------------------------------------------
+
+con
+
+    MAX_STRING_SIZE = (9*16)+1
+    MAX_STRINGS_WRITTEN = 30 ' we use 20 for tests, this is larger
+dat
+
+testStrBuffer       BYTE    0[MAX_STRING_SIZE]
+idxStringWritten    BYTE    0[MAX_STRINGS_WRITTEN]               ' index to strings in order written
+expectedStrFileSize LONG    0
+
+pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): strFileSize | strIdx, pString, readWriteIdx, blocksUsed, pBlock
+
+    '  open file for write
+    '  ensure returns SUCCESS
+    utils.startTest(@"Open File for write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_WRITE)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"Write N STRINGs")
+    utils.setCheckCountPerTest(1)
+    strFileSize := 0
+    repeat count with readWriteIdx                                                    'program 16 pages within 4KB block
+        strIdx := (GETRND() +// stringIdCt)
+        pString := WORD[@stringIdTable][strIdx] ' get ptr to string
+        BYTE[@idxStringWritten][readWriteIdx] := strIdx
+        strFileSize += strsize(pString) + 1
+        status := dfs.wr_str(handle, pString)
+        utils.evaluateSubStatus(status, @"wr_str()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close written file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    blocksUsed := utils.blockCountForFileSize(strFileSize)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, blocksUsed, strFileSize)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post STRINGs write")
+    utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
+
+
+pri testAppendStrings(pFilename, count, initialFileSize, startingFileCount, startingBlockCount) : strFileSize | startLength, readWriteIdx, strIdx, pString, pBlock, blocksAdded, blocksUsed
+
+    utils.startTest(@"Get starting length before append of STRINGs")
+    utils.setCheckCountPerTest(2)
+    startLength := dfs.file_size(dfs.DEV_FLASH, pFilename)
+    status := dfs.error()
+    utils.evaluateSubValue(startLength, @"file_size()", initialFileSize)
+    utils.evaluateSubStatus(status, @"file_size()", dfs.SUCCESS)
+
+    '  open file for append
+    utils.startTest(@"Open File for append")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_APPEND)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+    '    seek to various locations and read longs validating for correct value
+
+    strFileSize := initialFileSize
+    utils.startTest(@"Append N STRINGs")
+    utils.setCheckCountPerTest(1)
+    repeat readWriteIdx from 10 to 10 + count - 1
+        strIdx := (GETRND() +// stringIdCt)
+        pString := WORD[@stringIdTable][strIdx] ' get ptr to string
+        BYTE[@idxStringWritten][readWriteIdx] := strIdx
+        strFileSize += strsize(pString) + 1
+        status := dfs.wr_str(handle, pString)
+        utils.evaluateSubStatus(status, @"wr_str()", dfs.SUCCESS)
+
+    utils.startTest(@"ensure no errors on append writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close append file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.showFileDetails(pFilename)
+
+    blocksUsed := utils.blockCountForFileSize(strFileSize)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats post STRINGs append")
+    utils.evaluateFileStats(pFilename, blocksUsed, strFileSize)
+
+    blocksAdded := blocksUsed - utils.blockCountForFileSize(initialFileSize)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes post STRINGs append write")
+    utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
+
+
+pri testVerifyAllStrings(pFilename, stringCount) | foundFileSize, strIdx, pString, readWriteIdx, expectedLength, rdLength, compareResult
+    '  open file for read
+    utils.startTest(@"Open File for read")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+    '    seek to various locations and read longs validating for correct value
+
+    utils.startTest(@"read expected N STRINGs")
+    utils.setCheckCountPerTest(2)
+    foundFileSize := 0
+    repeat stringCount with readWriteIdx                                                    'program 16 pages within 4KB block
+        strIdx := BYTE[@idxStringWritten][readWriteIdx]
+        pString := WORD[@stringIdTable][strIdx] ' get ptr to string
+        ' the read call doesn't count terminator in length
+        expectedLength := strsize(pString)
+        rdLength := dfs.rd_str(handle, @testStrBuffer, MAX_STRING_SIZE)
+        if rdLength < 0
+            status := rdLength
+            quit
+        ' ensure length is same as expected
+        utils.evaluateSubValue(rdLength, @"rd_str()", expectedLength)
+        ' ensure string is same as expected
+        compareResult := strcomp(@testStrBuffer, pString)
+        utils.evaluateSubValue(compareResult, @"rd_str()", true)
+
+    utils.startTest(@"ensure no errors on reads")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  read past end of file to verify read returns error
+    utils.startTest(@"BAD: read one more STRING than written")
+    dfs.rd_str(handle, @testStrBuffer, MAX_STRING_SIZE)
+    status := dfs.error()
+    utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
+
+    '  close file
+    utils.startTest(@"Close read file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2023-2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

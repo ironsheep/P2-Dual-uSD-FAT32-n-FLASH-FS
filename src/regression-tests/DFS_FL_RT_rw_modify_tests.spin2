@@ -1,0 +1,503 @@
+'' =================================================================================================
+''
+''   File....... DFS_FL_RT_rw_modify_tests.spin2
+''   Purpose.... Flash read/modify/write tests via dual_fs unified driver
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... DEC 2023
+''   Updated.... 27 FEB 2026
+''
+''   Migrated from RT_read_modify_write_tests.spin2 (flash_fs) to dual_fs
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 320_000_000
+     DEBUG_BAUD       = 2_000_000
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "DFS_FL_RT_utilities"
+
+CON
+    RECORD_LEN = 384 ' just for fun, tiny but even number of longs
+    RECORD_DATA_LEN = RECORD_LEN - 12
+
+    ' P2 Edge module SD slot pins (needed for dfs.init)
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+DAT
+
+testfile         BYTE    "rw4blocks.bin", 0
+testfile2        BYTE    "rw2blocks.bin", 0
+testfile3        BYTE    "rw3blocks.bin", 0
+testfile4        BYTE    "rwxblocks.bin", 0
+
+record
+recordMARK       LONG    $adbeedfe              ' visual start of record marker (FEED BEED in memory)
+recordID         LONG    0
+recordData       LONG    0[RECORD_DATA_LEN/4]
+recordCRC        LONG    0
+recordEnd
+
+writeLength     LONG    0
+recordsThisTest LONG    0
+
+
+PUB go() | status, handle, testValue, expectedValue, bytePattern, endPosn, recordOffset, expectedFileBlocks, expectedFileSize, workerCog
+
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    status := dfs.format(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+        utils.showError(@"format()", status)
+        return
+
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+        utils.showError(@"mount()", status)
+        return
+
+    utils.ShowStats()                                   ' should have empty filesystem
+    utils.showFiles()
+
+    utils.showChipAndDriverVersion()
+
+    ' test specs:
+    ' ----------------------------------------
+    ' TEST #1  R+ (file exists)
+    utils.startTestGroup(@"TEST #1  R+ (file exists) - replace three")
+    recordsThisTest := 40
+    expectedFileSize := recordsThisTest * RECORD_LEN
+    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+    '  open for modify replace record that spans blocks
+    testWriteRecords(@testfile, recordsThisTest, 0, 0)
+    ' verify that file is correct
+    testVerifyRecords(@testfile, recordsThisTest)
+    '  replace 1st record
+    handle := testReplaceWithinFile(@testfile, recordsThisTest)
+    '  seek away from location so block is written
+    recordOffset := (recordsThisTest - 3) * RECORD_LEN
+    seekAwayFromWrite(handle, recordOffset)
+    '  ensure close does NOT write again
+    ' close file (effect should be nothing since earlier seek caused update
+    utils.startTest(@"Close written file (no further block updates)")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(@testfile, expectedFileBlocks, expectedFileSize)
+    '  re-open for read and verify all records
+    testVerifyRecordsAfterReplace(@testfile, recordsThisTest, 1, 4)
+
+
+    ' ----------------------------------------
+    ' TEST #2  R+ (file exists)
+    utils.startTestGroup(@"TEST #2  R+ (file exists) - replace span")
+    recordsThisTest := 20
+    expectedFileSize := recordsThisTest * RECORD_LEN
+    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+    '  create file open/create/close
+    testWriteRecords(@testfile2, recordsThisTest, 1, 4)
+    ' verify that file is correct
+    testVerifyRecords(@testfile2, recordsThisTest)
+    '  open for modify
+    '  replace record that spans blocks
+    handle := testReplaceRecordWithinFile(@testfile2, recordsThisTest, 4)
+    '  close file ensure that change gets written
+    utils.startTest(@"Close written file (should write last updated block!)")
+    ' close file (effect should be nothing since earlier seek caused update
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(@testfile2, expectedFileBlocks, expectedFileSize)
+    '  re-open for read and verify all records
+    testVerifyRecordsAfterReplace(@testfile2, recordsThisTest, 2, 6)
+
+
+
+    ' ----------------------------------------
+    ' TEST #3  R+ (file exists)
+    utils.startTestGroup(@"TEST #3  R+ (file exists) - replace span, last block")
+    recordsThisTest := 21
+    expectedFileSize := recordsThisTest * RECORD_LEN
+    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+    '  create file open/create/close
+    testWriteRecords(@testfile3, recordsThisTest, 2, 6)
+    ' verify that file is correct
+    testVerifyRecords(@testfile3, recordsThisTest)
+    '  open for modify
+    '  replace record that spans blocks (last record in file spans blocks)
+    handle := testReplaceRecordWithinFile(@testfile3, recordsThisTest, 8)
+    '  seek away from location so block is written
+    recordOffset := 0
+    seekAwayFromWrite(handle, recordOffset)
+    ' close file (effect should be nothing since earlier seek caused update
+    utils.startTest(@"Close written file (no further block updates)")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+     '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(@testfile3, expectedFileBlocks, expectedFileSize)
+
+   '  re-open for read and verify all records
+    testVerifyRecordsAfterReplace(@testfile3, recordsThisTest, 3, 9)
+
+    utils.ShowStats()
+    utils.showFiles()
+
+    ' ------------------------------------------
+    ' TEST #4  W+ (new file over the top of old)
+    utils.startTestGroup(@"TEST #4  W+ (file exists) - replace earliest span")
+    recordsThisTest := 32
+    expectedFileSize := recordsThisTest * RECORD_LEN
+    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+    '  open for modify replace record that spans blocks
+    testWriteRecords(@testfile2, recordsThisTest, 3 - 1, 9 - 2) ' overwrite replaces existing 2-block file
+    ' verify that file is correct
+    testVerifyRecords(@testfile2, recordsThisTest)
+    '  replace 1st record
+    handle := testReplaceWithinFile(@testfile2, recordsThisTest)
+    '  close file ensure that change gets written
+    utils.startTest(@"Close written file (should write last updated block!)")
+    ' close file (effect should be nothing since earlier seek caused update
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(@testfile2, expectedFileBlocks, expectedFileSize)
+    '  re-open for read and verify all records
+    testVerifyRecordsAfterReplace(@testfile2, recordsThisTest, 3, 11)
+
+    utils.ShowStats()
+    utils.showFiles()
+
+    utils.ShowTestEndCounts()
+
+    debug("* Test Complete")
+    debug("END_SESSION")
+
+    dfs.stop()
+    repeat
+
+
+PRI seekAwayFromWrite(handle, seekOffset) | status, endPosn
+  ' seek to another location causing record to be written
+    utils.startTest(@"seek away from write location (should update block)")
+    utils.setCheckCountPerTest(2)
+    endPosn := dfs.flashSeek(handle, seekOffset, dfs.SK_FILE_START)
+    utils.evaluateSubValue(endPosn, @"seek()", seekOffset)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @"seek()", dfs.SUCCESS)
+
+
+PRI buildRecord(recordNbr) | testValue
+    ' fill in buffer with well formatted buffer
+    testValue := $40 + recordNbr                    ' A, B, C, etc.
+    recordId := recordNbr
+    bytefill(@recordData, testValue, RECORD_DATA_LEN)
+    recordCRC := utils.record_crc(@record, RECORD_LEN)
+
+
+PRI replaceRecord(handle, rcdNumber) | endPosn, recordOffset, status
+    utils.setCheckCountPerTest(4)
+    recordOffset := (rcdNumber - 1) * RECORD_LEN
+    setMsgRcdNbr(rcdNumber)
+    endPosn := dfs.flashSeek(handle, recordOffset, dfs.SK_FILE_START)
+    utils.evaluateSubValue(endPosn, @seekMsg, recordOffset)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @seekMsg, dfs.SUCCESS)
+    writeLength := dfs.writeHandle(handle, @record, RECORD_LEN)
+    utils.evaluateSubValue(writeLength, @writeMsg, RECORD_LEN)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @writeMsg, dfs.SUCCESS)
+    debug("  ")
+
+
+DAT ' verifyMessages
+
+readMsg       BYTE  "Read() Rcd #"
+readNbr       BYTE  "xx",0
+writeMsg      BYTE  "Write() Rcd #"
+writeNbr      BYTE  "xx",0
+seekMsg       BYTE  "Seek() Rcd #"
+seekNbr       BYTE  "xx",0
+idMsg         BYTE  "recordID Rcd #"
+idNbr         BYTE  "xx",0
+crcMsg        BYTE  "recordCRC Rcd #"
+crcNbr        BYTE  "xx",0
+
+PRI setMsgRcdNbr(rcdNumber) | units, tens
+  tens := (rcdNumber / 10) + $30
+  units := (rcdNumber +// 10) + $30
+  if(tens == $30)
+    ' no leading zero
+    BYTE[@readNbr][0] := units
+    BYTE[@readNbr][1] := 0
+    BYTE[@writeNbr][0] := units
+    BYTE[@writeNbr][1] := 0
+    BYTE[@seekNbr][0] := units
+    BYTE[@seekNbr][1] := 0
+    BYTE[@idNbr][0] := units
+    BYTE[@idNbr][1] := 0
+    BYTE[@crcNbr][0] := units
+    BYTE[@crcNbr][1] := 0
+  else
+    BYTE[@readNbr][0] := tens
+    BYTE[@readNbr][1] := units
+    BYTE[@writeNbr][0] := tens
+    BYTE[@writeNbr][1] := units
+    BYTE[@seekNbr][0] := tens
+    BYTE[@seekNbr][1] := units
+    BYTE[@idNbr][0] := tens
+    BYTE[@idNbr][1] := units
+    BYTE[@crcNbr][0] := tens
+    BYTE[@crcNbr][1] := units
+
+
+PRI testWriteRecords(pFilename, recordCount, initialFiles, initialBlocks) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize
+    ' ----------------------------------
+    ' TEST
+        '  open file for write
+    debug("  ")
+    debug(" ---------- Write Records ------------ ")
+    '  ensure returns SUCCESS
+    utils.startTest(@"Open File for write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_WRITE)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"Write Records")
+    utils.setCheckCountPerTest(2)
+    status := dfs.SUCCESS
+    repeat recordNbr from 1 to recordCount
+        buildRecord(recordNbr)
+        setMsgRcdNbr(recordNbr)
+        writeLength := dfs.writeHandle(handle, @record, RECORD_LEN)
+        utils.evaluateSubValue(writeLength, @writeMsg, RECORD_LEN)
+        status := dfs.error()
+        utils.evaluateSubStatus(status, @writeMsg, dfs.SUCCESS)
+        if status <> dfs.SUCCESS
+            quit ' abort on first failure
+
+    utils.startTest(@"ensure no errors on Record writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close written file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    expectedFileSize := recordCount * RECORD_LEN
+    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+    allocatedFileSize := utils.bytesAllocatedInBlocks(expectedFileBlocks)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes")
+    utils.evaluateFSStats(@"post file write", initialFiles + 1, initialBlocks + expectedFileBlocks)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
+
+    utils.startTest(@"Ensure expected unused bytes stats")
+    sizeUnused := dfs.file_size_unused(dfs.DEV_FLASH, pFilename)
+    utils.evaluateSingleValue(sizeUnused, @"file_size_unused()", allocatedFileSize - expectedFileSize)
+
+    utils.startTest(@"Ensure no error on size unused call")
+    status := dfs.error()
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+
+PRI testVerifyRecords(pFilename, recordCount) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize
+
+    debug("  ")
+    debug(" ------------ Verify Original Records ---------------- ")
+    '  open file for read
+    utils.startTest(@"Open File for read")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"read expected RECORDs")
+    utils.setCheckCountPerTest(3)
+    repeat recordNbr from 1 to recordCount
+        setMsgRcdNbr(recordNbr)
+        rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
+        if rdLength <> RECORD_LEN
+            status := dfs.error()
+            quit
+        ' ensure length is same as expected
+        utils.evaluateSubValue(rdLength, @readMsg, RECORD_LEN)
+        ' ensure record ID is same as expected
+        utils.evaluateSubValue(recordId, @idMsg, recordNbr)
+        ' ensure record CRC is same as expected
+        calcCRC := utils.record_crc(@record, RECORD_LEN)
+        utils.evaluateSubValue(calcCRC, @crcMsg, recordCRC)
+
+    utils.startTest(@"ensure no errors on reads")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  read past end of file to verify read returns error
+    utils.startTest(@"BAD: read one more Record than written")
+    utils.setCheckCountPerTest(2)
+    setMsgRcdNbr(999)
+    rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
+    utils.evaluateSubValue(rdLength, @readMsg, 0)
+    status := dfs.error()
+    utils.evaluateSubStatus(status, @readMsg, dfs.E_END_OF_FILE)
+
+    '  close file
+    utils.startTest(@"Close read file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+
+PRI testReplaceRecordWithinFile(pFilename, maxRecords, recordNumber) : handle | status, newRecordNbr, recordOffset
+    debug("  ")
+    debug(" ----------- Overwrite single Record ----------- ")
+    '  open file for modify writes
+    utils.startTest(@"Open File for modify write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ_EXTENDED)
+    status := dfs.error()
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+    if status <> dfs.SUCCESS
+      handle := dfs.E_FLASH_NO_HANDLE
+      debug("* ERROR failed to open file for modify")
+      return
+
+
+    ' replace first, random middle and last records
+    ' - FIRST
+    utils.startTest(@"Write Record")
+    newRecordNbr := recordNumber + maxRecords
+    buildRecord(newRecordNbr)
+    replaceRecord(handle, recordNumber)
+
+    status := dfs.error()
+    utils.startTest(@"ensure no errors on Record writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+
+
+PRI testReplaceWithinFile(pFilename, maxRecords) : handle | status, recordNbr, recordOffset, newRecordNbr
+
+    debug("  ")
+    debug(" ----------- Overwrite 1st/mid/last Records ----------- ")
+    '  open file for modify writes
+    utils.startTest(@"Open File for modify write")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ_EXTENDED)
+    status := dfs.error()
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+    if status <> dfs.SUCCESS
+      handle := dfs.E_FLASH_NO_HANDLE
+      debug("* ERROR failed to open file for modify")
+      return
+
+
+    ' replace first, random middle and last records
+    ' - FIRST
+    utils.startTest(@"Write 1st Record")
+    recordNbr := 1
+    newRecordNbr := recordNbr + maxRecords
+    buildRecord(newRecordNbr)
+    replaceRecord(handle, recordNbr)
+
+    ' - MID-somewhere
+    utils.startTest(@"Write Mid Record")
+    recordNbr := maxRecords / 2
+    newRecordNbr := recordNbr + maxRecords
+    buildRecord(newRecordNbr)
+    replaceRecord(handle, recordNbr)
+
+    ' - LAST
+     utils.startTest(@"Write LAST Record")
+   recordNbr := maxRecords
+    newRecordNbr := recordNbr + maxRecords
+    buildRecord(newRecordNbr)
+    replaceRecord(handle, recordNbr)
+
+    status := dfs.error()
+    utils.startTest(@"ensure no errors on Record writes")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+
+PRI testVerifyRecordsAfterReplace(pFilename, recordCount, initialFiles, initialBlocks) | handle, recordNbr, rdLength, status, calcCRC, testRecordNbr, expectedFileSize, expectedFileBlocks
+
+    debug("  ")
+    debug(" ------------ Verify Replaced Records ------------- ")
+    '  open file for read
+    utils.startTest(@"Open File for read")
+    handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
+
+    utils.startTest(@"read expected RECORDs")
+    utils.setCheckCountPerTest(3)
+    repeat recordNbr from 1 to recordCount
+        setMsgRcdNbr(recordNbr)
+        rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
+        if rdLength <> RECORD_LEN
+            status := dfs.error()
+            quit
+        ' ensure length is same as expected
+        utils.evaluateSubValue(rdLength, @readMsg, RECORD_LEN)
+        ' ensure record ID is same as expected
+        testRecordNbr := (recordId <> recordNbr) ? recordNbr + recordCount : recordNbr
+        utils.evaluateSubValue(recordId, @idMsg, testRecordNbr)
+        ' ensure record CRC is same as expected
+        calcCRC := utils.record_crc(@record, RECORD_LEN)
+        utils.evaluateSubValue(calcCRC, @crcMsg, recordCRC)
+
+    utils.startTest(@"ensure no errors on reads")
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  close file
+    utils.startTest(@"Close read file")
+    status := dfs.close(handle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    '  get filesystem stats and verify against expectation
+    utils.startTest(@"Ensure expected file system changes")
+    utils.evaluateFSStats(@"post file write", initialFiles, initialBlocks)
+
+    expectedFileSize := recordCount * RECORD_LEN
+    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+
+    '  get single file stats and verify against expectation
+    utils.startTest(@"Ensure expected file stats")
+    utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
+
+
+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2023-2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

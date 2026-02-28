@@ -147,8 +147,12 @@ _relpath() {
 SRC_PATH="$(_relpath "$PROJECT_ROOT/src" "$TEST_DIR")/"
 UTILS_PATH="$(_relpath "$PROJECT_ROOT/src/UTILS" "$TEST_DIR")/"
 DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$TEST_DIR")/"
-REGTEST_PATH="$(_relpath "$PROJECT_ROOT/regression-tests" "$TEST_DIR")/"
-COMPILE_CMD="pnut-ts -d -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
+REGTEST_PATH="$(_relpath "$PROJECT_ROOT/src/regression-tests" "$TEST_DIR")/"
+# Reference driver paths (needed for format test which uses isp_format_utility)
+REF_SD_SRC="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src" "$TEST_DIR")/"
+REF_SD_UTILS="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src/UTILS" "$TEST_DIR")/"
+REF_SD_DEMO="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src/DEMO" "$TEST_DIR")/"
+COMPILE_CMD="pnut-ts -d -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH -I $REF_SD_SRC -I $REF_SD_UTILS -I $REF_SD_DEMO $BASENAME.spin2"
 echo "  Command: $COMPILE_CMD"
 
 if ! $COMPILE_CMD; then

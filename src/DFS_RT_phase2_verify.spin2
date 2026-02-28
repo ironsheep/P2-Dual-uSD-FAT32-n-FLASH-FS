@@ -1,6 +1,6 @@
 '' =================================================================================================
 ''
-''   File....... DUAL_RT_phase2_verify.spin2
+''   File....... DFS_RT_phase2_verify.spin2
 ''   Purpose.... Phase 2 verification: exercise dual_fs.spin2 Flash mount + bus switching
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
@@ -21,11 +21,18 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
 '' Enable debug diagnostics
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
 
 OBJ
-    fs    : "dual_fs"
+    dfs   : "dual_fs"
     utils : "isp_rt_utilities"
 
 DAT
@@ -35,7 +42,7 @@ testdata        BYTE    "Hello from dual_fs Phase 2!", 0
 readBuffer      BYTE    0[512]
 readBuf_guard   BYTE    0[16]
 
-PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo
+PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo
 '' Main entry point for Phase 2 verification tests
 ''
 '' Tests dual_fs.spin2 Flash mount, serial number, and bus switching
@@ -52,19 +59,19 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"SD regression: init and mount")
 
     utils.startTest(@"init() with valid pins")
-    result := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     utils.evaluateRange(result, @"init() returns cog ID", 0, 7)
 
     utils.startTest(@"mount(DEV_SD)")
-    result := fs.mount(fs.DEV_SD)
-    utils.evaluateBool(result, @"mount(DEV_SD)", true)
+    status := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(status, @"mount(DEV_SD)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_SD) after mount")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", true)
 
     ' Save SD free space for later regression check
-    freeSpace := fs.freeSpace(fs.DEV_SD)
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
     debug(" ")
     debug("  SD freeSpace before Flash mount: ", udec_(freeSpace), " sectors")
 
@@ -74,19 +81,19 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"Flash mount")
 
     utils.startTest(@"mounted(DEV_FLASH) before mount")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
 
     utils.startTest(@"mount(DEV_FLASH)")
-    result := fs.mount(fs.DEV_FLASH)
-    utils.evaluateBool(result, @"mount(DEV_FLASH)", true)
+    status := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(status, @"mount(DEV_FLASH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_FLASH) after mount")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
 
     utils.startTest(@"mounted(DEV_SD) still true after Flash mount")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", true)
 
     ' ----------------------------------
@@ -95,7 +102,7 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"Flash serial number")
 
     utils.startTest(@"serial_number(DEV_FLASH) returns non-zero")
-    sn_hi, sn_lo := fs.serial_number(fs.DEV_FLASH)
+    sn_hi, sn_lo := dfs.serial_number(dfs.DEV_FLASH)
     utils.evaluateBool(sn_hi <> 0 or sn_lo <> 0, @"serial_number non-zero", true)
 
     debug(" ")
@@ -107,38 +114,38 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"SD ops after Flash mount (bus switching)")
 
     utils.startTest(@"freeSpace(DEV_SD) still valid")
-    result := fs.freeSpace(fs.DEV_SD)
+    result := dfs.freeSpace(dfs.DEV_SD)
     utils.evaluateRange(result, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
 
     utils.startTest(@"volumeLabel(DEV_SD) still works")
-    pLabel := fs.volumeLabel(fs.DEV_SD)
+    pLabel := dfs.volumeLabel(dfs.DEV_SD)
     utils.evaluateNotZero(pLabel, @"volumeLabel() pointer")
 
     ' Write/read round-trip on SD after Flash mount
-    fs.deleteFile(fs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
 
     utils.startTest(@"createFileNew(DEV_SD) after Flash mount")
-    handle := fs.createFileNew(fs.DEV_SD, @testfile1)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
     utils.evaluateRange(handle, @"createFileNew() handle", 0, 5)
 
     if handle >= 0
       utils.startTest(@"writeHandle() test data")
-      bytesWritten := fs.writeHandle(handle, @testdata, strsize(@testdata))
+      bytesWritten := dfs.writeHandle(handle, @testdata, strsize(@testdata))
       utils.evaluateSingleValue(bytesWritten, @"writeHandle() bytes", strsize(@testdata))
 
       utils.startTest(@"closeFileHandle() after write")
-      result := fs.closeFileHandle(handle)
+      result := dfs.closeFileHandle(handle)
       utils.evaluateSingleValue(result, @"closeFileHandle()", 0)
 
     utils.startTest(@"openFileRead(DEV_SD) after Flash mount")
-    handle := fs.openFileRead(fs.DEV_SD, @testfile1)
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
     utils.evaluateRange(handle, @"openFileRead() handle", 0, 5)
 
     if handle >= 0
       utils.startTest(@"readHandle() returns correct data")
       utils.initGuard(@readBuf_guard)
       bytefill(@readBuffer, 0, 512)
-      bytesRead := fs.readHandle(handle, @readBuffer, 512)
+      bytesRead := dfs.readHandle(handle, @readBuffer, 512)
       utils.checkGuard(@readBuf_guard, @"readBuf guard")
       utils.evaluateSingleValue(bytesRead, @"readHandle() bytes", strsize(@testdata))
 
@@ -146,11 +153,11 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
       utils.evaluateBufferMatch(@readBuffer, @testdata, strsize(@testdata), @"read vs written")
 
       utils.startTest(@"closeFileHandle() after read")
-      result := fs.closeFileHandle(handle)
+      result := dfs.closeFileHandle(handle)
       utils.evaluateSingleValue(result, @"closeFileHandle()", 0)
 
     ' Clean up
-    fs.deleteFile(fs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
 
     ' ----------------------------------
     ' TEST GROUP: Flash unmount/remount
@@ -158,19 +165,19 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"Flash unmount and remount")
 
     utils.startTest(@"unmount(DEV_FLASH)")
-    result := fs.unmount(fs.DEV_FLASH)
-    utils.evaluateBool(result, @"unmount(DEV_FLASH)", true)
+    status := dfs.unmount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(status, @"unmount(DEV_FLASH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_FLASH) after unmount")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
 
     utils.startTest(@"mount(DEV_FLASH) again")
-    result := fs.mount(fs.DEV_FLASH)
-    utils.evaluateBool(result, @"mount(DEV_FLASH)", true)
+    status := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(status, @"mount(DEV_FLASH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_FLASH) after remount")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
 
     ' ----------------------------------
@@ -179,26 +186,26 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"mount(DEV_BOTH) in one call")
 
     ' First unmount both
-    fs.unmount(fs.DEV_BOTH)
+    dfs.unmount(dfs.DEV_BOTH)
 
     utils.startTest(@"mounted(DEV_SD) after unmount both")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", false)
 
     utils.startTest(@"mounted(DEV_FLASH) after unmount both")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
 
     utils.startTest(@"mount(DEV_BOTH)")
-    result := fs.mount(fs.DEV_BOTH)
-    utils.evaluateBool(result, @"mount(DEV_BOTH)", true)
+    status := dfs.mount(dfs.DEV_BOTH)
+    utils.evaluateSingleValue(status, @"mount(DEV_BOTH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_SD) after mount both")
-    result := fs.mounted(fs.DEV_SD)
+    result := dfs.mounted(dfs.DEV_SD)
     utils.evaluateBool(result, @"mounted(DEV_SD)", true)
 
     utils.startTest(@"mounted(DEV_FLASH) after mount both")
-    result := fs.mounted(fs.DEV_FLASH)
+    result := dfs.mounted(dfs.DEV_FLASH)
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
 
     ' ----------------------------------
@@ -207,12 +214,12 @@ PUB go() | result, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn
     utils.startTestGroup(@"Worker cog health")
 
     utils.startTest(@"checkStackGuard() intact")
-    result := fs.checkStackGuard()
+    result := dfs.checkStackGuard()
     utils.evaluateBool(result, @"stack guard intact", true)
 
     ' Final cleanup
-    fs.unmount(fs.DEV_BOTH)
-    fs.stop()
+    dfs.unmount(dfs.DEV_BOTH)
+    dfs.stop()
 
     ' ----------------------------------
     ' Summary

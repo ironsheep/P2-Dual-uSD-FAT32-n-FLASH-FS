@@ -1,0 +1,213 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_crc_validation_tests.spin2
+''   Purpose.... This object exercises CRC error injection hooks for SD card I/O validation
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 28 FEB 2026
+''
+'' =================================================================================================
+''
+'' This test file validates CRC error injection hooks (added for test infrastructure):
+''   - setTestForceReadError(count) injects N read CRC mismatches
+''   - setTestForceWriteError(enabled) injects a single write CRC mismatch
+''   - getTestErrorCount() tracks total injected errors
+''   - clearTestErrors() resets all hooks and counters
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' Error codes
+     E_NOT_MOUNTED   = -20
+
+' Enable raw sector access and debug features
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+crcTestFile     BYTE    "CRCVAL.TXT", 0
+
+' Buffers
+writeBuffer     BYTE    0[512]
+readBuffer      BYTE    0[64]
+readBuffer_guard BYTE   0[16]
+
+PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, mismatchAfter, errorCount, bytesRead
+'' Main entry point for CRC validation regression tests
+''
+'' Tests CRC error injection hooks for the SD card driver
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - CRC Validation Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    debug(" ")
+    debug("* SD Card mounted successfully")
+
+    ' ----------------------------------
+    ' TEST GROUP: Error Hook State
+    ' ----------------------------------
+    utils.startTestGroup(@"CRC Error Hook State")
+
+    ' Test: Initial error count is 0
+    utils.startTest(@"Initial error count is 0")
+    dfs.clearTestErrors()
+    errorCount := dfs.getTestErrorCount()
+    utils.evaluateSingleValue(errorCount, @"getTestErrorCount()", 0)
+
+    ' Test: clearTestErrors resets count
+    utils.startTest(@"clearTestErrors() resets all hooks")
+    dfs.setTestForceReadError(5)
+    dfs.clearTestErrors()
+    errorCount := dfs.getTestErrorCount()
+    utils.evaluateSingleValue(errorCount, @"errorCount after clear", 0)
+
+    ' ----------------------------------
+    ' TEST GROUP: Read CRC Injection
+    ' ----------------------------------
+    utils.startTestGroup(@"Read CRC Error Injection")
+
+    ' Create a test file for read tests
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        bytefill(@writeBuffer, $AA, 512)
+        dfs.writeHandle(handle, @writeBuffer, 512)
+        dfs.closeFileHandle(handle)
+
+    ' Test: Force 1 read CRC error increments mismatch counter
+    utils.startTest(@"Forced read CRC error increments mismatch count")
+    mismatchBefore := dfs.getCRCMismatchCount()
+    dfs.clearTestErrors()
+    dfs.setTestForceReadError(1)
+    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        bytesRead := dfs.readHandle(handle, @readBuffer, 10)
+        dfs.closeFileHandle(handle)
+    mismatchAfter := dfs.getCRCMismatchCount()
+    debug("  Mismatch before: ", udec_(mismatchBefore), " after: ", udec_(mismatchAfter))
+    utils.evaluateBool(mismatchAfter > mismatchBefore, @"mismatch count grew", true)
+
+    ' Test: Error count reflects injected error
+    utils.startTest(@"getTestErrorCount() reflects injection")
+    errorCount := dfs.getTestErrorCount()
+    utils.evaluateSingleValue(errorCount, @"injected error count", 1)
+
+    ' ----------------------------------
+    ' TEST GROUP: Write CRC Injection
+    ' ----------------------------------
+    utils.startTestGroup(@"Write CRC Error Injection")
+
+    ' Test: Force write CRC error (one-shot)
+    utils.startTest(@"Forced write CRC error is one-shot")
+    dfs.clearTestErrors()
+    dfs.setTestForceWriteError(true)
+    ' Write a file to trigger the hook
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        bytefill(@writeBuffer, $BB, 512)
+        dfs.writeHandle(handle, @writeBuffer, 512)
+        dfs.closeFileHandle(handle)
+    errorCount := dfs.getTestErrorCount()
+    debug("  Write error count: ", udec_(errorCount))
+    utils.evaluateSingleValue(errorCount, @"write error injected", 1)
+
+    ' Test: Second write has no injection (one-shot cleared)
+    utils.startTest(@"One-shot clears after first write")
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        bytefill(@writeBuffer, $CC, 512)
+        dfs.writeHandle(handle, @writeBuffer, 512)
+        dfs.closeFileHandle(handle)
+    ' Error count should still be 1 (no new injection)
+    errorCount := dfs.getTestErrorCount()
+    utils.evaluateSingleValue(errorCount, @"no second injection", 1)
+
+    ' ----------------------------------
+    ' Cleanup
+    ' ----------------------------------
+    dfs.clearTestErrors()
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+
+    dfs.unmount(dfs.DEV_SD)
+
+    ' ----------------------------------
+    ' Summary
+    ' ----------------------------------
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* CRC Validation Tests Complete")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

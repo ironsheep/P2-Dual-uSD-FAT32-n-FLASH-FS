@@ -1,0 +1,499 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_directory_tests.spin2
+''   Purpose.... This object exercises directory operations (create, change, list)
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 16 JAN 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     STRESS_COUNT = 20
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test directory and file names
+testDir1        BYTE    "RTDIR1", 0
+testDir2        BYTE    "RTDIR2", 0
+subDir1         BYTE    "SUBDIR1", 0
+testFile1       BYTE    "FILE1.TXT", 0
+testFile2       BYTE    "FILE2.TXT", 0
+testContent     BYTE    "Test file content", 0
+
+' Deep nesting directory names
+deepDir1        BYTE    "DEEP1", 0
+deepDir2        BYTE    "DEEP2", 0
+deepDir3        BYTE    "DEEP3", 0
+deepDir4        BYTE    "DEEP4", 0
+deepDir5        BYTE    "DEEP5", 0
+
+' Max filename (8.3 format)
+maxNameFile     BYTE    "12345678.123", 0
+
+' Many files test directory
+manyFilesDir    BYTE    "RTMANY", 0
+
+' Stress test
+stressDir       BYTE    "RTSTRESS", 0
+stressContent   BYTE    "Stress file data", 0
+
+' Buffer for generated filenames
+genFileName     BYTE    0[16]
+
+PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, created
+'' Main entry point for directory regression tests
+''
+'' Tests directory creation, navigation, listing, and nested directories
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Directory Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount the card first
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    ' Show card info
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+
+    ' Clean up any existing test directories/files
+    cleanupTestItems()
+
+    ' ----------------------------------
+    ' TEST GROUP: Directory creation
+    ' ----------------------------------
+    utils.startTestGroup(@"Directory Creation")
+
+    utils.startTest(@"newDirectory() creates a directory")
+    result := dfs.newDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateBool(result, @"newDirectory()", true)
+
+    utils.startTest(@"newDirectory() fails if directory exists")
+    result := dfs.newDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateBool(result, @"newDirectory() existing", false)
+
+    utils.startTest(@"Create second directory")
+    result := dfs.newDirectory(dfs.DEV_SD, @testDir2)
+    utils.evaluateBool(result, @"newDirectory() second", true)
+
+    ' ----------------------------------
+    ' TEST GROUP: Change directory
+    ' ----------------------------------
+    utils.startTestGroup(@"Change Directory")
+
+    utils.startTest(@"changeDirectory() to new directory")
+    result := dfs.changeDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateBool(result, @"changeDirectory()", true)
+
+    utils.startTest(@"Create file in subdirectory")
+    handle := dfs.createFileNew(dfs.DEV_SD, @testFile1)
+    utils.evaluateBool(handle >= 0, @"newFile() in subdir", true)
+    dfs.writeHandle(handle, @testContent, strsize(@testContent))
+    dfs.closeFileHandle(handle)
+
+    utils.startTest(@"changeDirectory() back to parent with ..")
+    result := dfs.changeDirectory(dfs.DEV_SD, @"..")
+    utils.evaluateBool(result, @"changeDirectory(..) ", true)
+
+    utils.startTest(@"changeDirectory() to root with /")
+    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateBool(result, @"changeDirectory(/)", true)
+
+    utils.startTest(@"changeDirectory() fails for non-existent")
+    result := dfs.changeDirectory(dfs.DEV_SD, @"NOEXIST")
+    utils.evaluateBool(result, @"changeDirectory() non-existent", false)
+
+    utils.startTest(@"changeDirectory() fails on a file (not a directory)")
+    dfs.changeDirectory(dfs.DEV_SD, @testDir1)                                               ' Go to RTDIR1 where FILE1.TXT exists
+    result := dfs.changeDirectory(dfs.DEV_SD, @testFile1)                                    ' Should fail - FILE1.TXT is not a directory
+    utils.evaluateBool(result, @"changeDirectory() on file", false)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")                                                    ' Return to root
+
+    ' ----------------------------------
+    ' TEST GROUP: Nested directories
+    ' ----------------------------------
+    utils.startTestGroup(@"Nested Directories")
+
+    utils.startTest(@"Change to first directory")
+    result := dfs.changeDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateBool(result, @"changeDirectory()", true)
+
+    utils.startTest(@"Create subdirectory")
+    result := dfs.newDirectory(dfs.DEV_SD, @subDir1)
+    utils.evaluateBool(result, @"newDirectory() nested", true)
+
+    utils.startTest(@"Change to nested subdirectory")
+    result := dfs.changeDirectory(dfs.DEV_SD, @subDir1)
+    utils.evaluateBool(result, @"changeDirectory() nested", true)
+
+    utils.startTest(@"Create file in nested directory")
+    handle := dfs.createFileNew(dfs.DEV_SD, @testFile2)
+    utils.evaluateBool(handle >= 0, @"newFile() nested", true)
+    dfs.writeHandle(handle, @"Nested file content", strsize(@"Nested file content"))
+    dfs.closeFileHandle(handle)
+
+    utils.startTest(@"Navigate back to root")
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    result := dfs.changeDirectory(dfs.DEV_SD, @"/")  ' Should succeed
+    utils.evaluateBool(result, @"changeDirectory(/)", true)
+
+    ' ----------------------------------
+    ' TEST GROUP: Path navigation
+    ' ----------------------------------
+    utils.startTestGroup(@"Path Navigation")
+
+    utils.startTest(@"Open file with path: /RTDIR1/FILE1.TXT")
+    handle := dfs.openFileRead(dfs.DEV_SD, @"/RTDIR1/FILE1.TXT")
+    utils.evaluateBool(handle >= 0, @"openFile() with path", true)
+    dfs.closeFileHandle(handle)
+
+    utils.startTest(@"Open nested file: /RTDIR1/SUBDIR1/FILE2.TXT")
+    handle := dfs.openFileRead(dfs.DEV_SD, @"/RTDIR1/SUBDIR1/FILE2.TXT")
+    utils.evaluateBool(handle >= 0, @"openFile() nested path", true)
+    dfs.closeFileHandle(handle)
+
+    utils.startTest(@"Ensure back at root after path operations")
+    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateBool(result, @"changeDirectory(/)", true)
+
+    ' ----------------------------------
+    ' TEST GROUP: Directory listing
+    ' ----------------------------------
+    utils.startTestGroup(@"Directory Listing")
+
+    utils.startTest(@"readDirectory() enumerates entries")
+    fileCount := 0
+    idx := 0
+    repeat
+        pEntry := dfs.readDirectory(idx)
+        if pEntry == 0
+            quit
+        pFilename := dfs.fileName()
+        attrs := dfs.attributes()
+        debug("  Entry ", udec_(idx), ": [", zstr_(pFilename), "] attr=$", uhex_(attrs))
+        fileCount++
+        idx++
+    utils.evaluateRange(fileCount, @"directory entries found", 2, 100)  ' At least our 2 test dirs
+
+    utils.startTest(@"List subdirectory contents")
+    dfs.changeDirectory(dfs.DEV_SD, @testDir1)
+    fileCount := 0
+    idx := 0
+    repeat
+        pEntry := dfs.readDirectory(idx)
+        if pEntry == 0
+            quit
+        pFilename := dfs.fileName()
+        attrs := dfs.attributes()
+        debug("  Entry ", udec_(idx), ": [", zstr_(pFilename), "] attr=$", uhex_(attrs))
+        fileCount++
+        idx++
+    ' Should have FILE1.TXT and SUBDIR1
+    utils.evaluateRange(fileCount, @"subdir entries", 2, 10)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' ----------------------------------
+    ' TEST GROUP: Move file between directories
+    ' ----------------------------------
+    utils.startTestGroup(@"Move File")
+
+    ' Create a file in root to move
+    utils.startTest(@"Create file in root to move")
+    handle := dfs.createFileNew(dfs.DEV_SD, @"MOVEME.TXT")
+    utils.evaluateBool(handle >= 0, @"createFileNew()", true)
+    dfs.writeHandle(handle, @"File to be moved", strsize(@"File to be moved"))
+    dfs.closeFileHandle(handle)
+
+    utils.startTest(@"moveFile() to subdirectory")
+    result := dfs.moveFile(dfs.DEV_SD, @"MOVEME.TXT", @testDir2)
+    utils.evaluateBool(result, @"moveFile()", true)
+
+    utils.startTest(@"File no longer in root")
+    handle := dfs.openFileRead(dfs.DEV_SD, @"MOVEME.TXT")
+    utils.evaluateBool(handle >= 0, @"openFile() old location", false)
+
+    utils.startTest(@"File exists in new location")
+    dfs.changeDirectory(dfs.DEV_SD, @testDir2)
+    handle := dfs.openFileRead(dfs.DEV_SD, @"MOVEME.TXT")
+    utils.evaluateBool(handle >= 0, @"openFile() new location", true)
+    dfs.closeFileHandle(handle)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' ----------------------------------
+    ' TEST GROUP: Directory Boundary Conditions
+    ' ----------------------------------
+    utils.startTestGroup(@"Directory Boundary Conditions")
+
+    ' Test: Deep nesting (5 levels)
+    utils.startTest(@"Deep nesting - create 5-level directory structure")
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    result := dfs.newDirectory(dfs.DEV_SD, @deepDir1)
+    utils.evaluateSubBool(result, @"create DEEP1", true)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir1)
+    result := dfs.newDirectory(dfs.DEV_SD, @deepDir2)
+    utils.evaluateSubBool(result, @"create DEEP2", true)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir2)
+    result := dfs.newDirectory(dfs.DEV_SD, @deepDir3)
+    utils.evaluateSubBool(result, @"create DEEP3", true)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir3)
+    result := dfs.newDirectory(dfs.DEV_SD, @deepDir4)
+    utils.evaluateSubBool(result, @"create DEEP4", true)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir4)
+    result := dfs.newDirectory(dfs.DEV_SD, @deepDir5)
+    utils.evaluateSubBool(result, @"create DEEP5", true)
+
+    utils.startTest(@"Navigate to deepest level and create file")
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir5)
+    handle := dfs.createFileNew(dfs.DEV_SD, @"DEEP.TXT")
+    utils.evaluateSubBool(handle >= 0, @"create file at depth 5", true)
+    dfs.writeHandle(handle, @"Deep file", strsize(@"Deep file"))
+    dfs.closeFileHandle(handle)
+
+    utils.startTest(@"Navigate back to root using ..")
+    dfs.changeDirectory(dfs.DEV_SD, @"..")  ' DEEP4
+    dfs.changeDirectory(dfs.DEV_SD, @"..")  ' DEEP3
+    dfs.changeDirectory(dfs.DEV_SD, @"..")  ' DEEP2
+    dfs.changeDirectory(dfs.DEV_SD, @"..")  ' DEEP1
+    dfs.changeDirectory(dfs.DEV_SD, @"..")  ' root
+    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateBool(result, @"back at root", true)
+
+    ' Test: Empty directory listing
+    utils.startTest(@"Empty directory listing")
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    result := dfs.newDirectory(dfs.DEV_SD, @manyFilesDir)
+    dfs.changeDirectory(dfs.DEV_SD, @manyFilesDir)
+    fileCount := 0
+    idx := 0
+    repeat
+        pEntry := dfs.readDirectory(idx)
+        if pEntry == 0
+            quit
+        fileCount++
+        idx++
+    ' FAT32 empty directories contain . and .. entries (2 entries)
+    utils.evaluateSingleValue(fileCount, @"empty dir entries (. and ..)", 2)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' Test: Max filename length (8.3 format)
+    utils.startTest(@"Max filename length (8.3)")
+    dfs.changeDirectory(dfs.DEV_SD, @manyFilesDir)
+    handle := dfs.createFileNew(dfs.DEV_SD, @maxNameFile)
+    utils.evaluateSubBool(handle >= 0, @"create 12345678.123", true)
+    dfs.writeHandle(handle, @"Max name file content", strsize(@"Max name file content"))
+    dfs.closeFileHandle(handle)
+
+    ' Verify can open and read it
+    handle := dfs.openFileRead(dfs.DEV_SD, @maxNameFile)
+    utils.evaluateSubBool(handle >= 0, @"open 12345678.123", true)
+    dfs.closeFileHandle(handle)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' Clean up boundary test items
+    dfs.changeDirectory(dfs.DEV_SD, @manyFilesDir)
+    dfs.deleteFile(dfs.DEV_SD, @maxNameFile)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    dfs.deleteFile(dfs.DEV_SD, @manyFilesDir)
+
+    ' Clean up deep directories (must delete from deepest first)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir1)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir2)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir3)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir4)
+    dfs.changeDirectory(dfs.DEV_SD, @deepDir5)
+    dfs.deleteFile(dfs.DEV_SD, @"DEEP.TXT")
+    dfs.changeDirectory(dfs.DEV_SD, @"..")
+    dfs.deleteFile(dfs.DEV_SD, @deepDir5)
+    dfs.changeDirectory(dfs.DEV_SD, @"..")
+    dfs.deleteFile(dfs.DEV_SD, @deepDir4)
+    dfs.changeDirectory(dfs.DEV_SD, @"..")
+    dfs.deleteFile(dfs.DEV_SD, @deepDir3)
+    dfs.changeDirectory(dfs.DEV_SD, @"..")
+    dfs.deleteFile(dfs.DEV_SD, @deepDir2)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    dfs.deleteFile(dfs.DEV_SD, @deepDir1)
+
+    ' ----------------------------------
+    ' TEST GROUP: Many File Stress Test
+    ' ----------------------------------
+    utils.startTestGroup(@"Many File Stress Test")
+
+    ' Create stress test directory
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    dfs.deleteFile(dfs.DEV_SD, @stressDir)
+    result := dfs.newDirectory(dfs.DEV_SD, @stressDir)
+    utils.evaluateSubBool(result, @"create stress dir", true)
+    dfs.changeDirectory(dfs.DEV_SD, @stressDir)
+
+    ' Create 20 files: STR00.TXT through STR19.TXT
+    utils.startTest(@"Create 20 files in stress directory")
+    created := 0
+    repeat idx from 0 to STRESS_COUNT - 1
+        makeStressName(idx)
+        handle := dfs.createFileNew(dfs.DEV_SD, @genFileName)
+        if handle >= 0
+            dfs.writeHandle(handle, @stressContent, strsize(@stressContent))
+            dfs.closeFileHandle(handle)
+            created++
+    utils.evaluateSingleValue(created, @"files created", STRESS_COUNT)
+
+    ' Enumerate and count files
+    utils.startTest(@"Enumerate finds all 20 files")
+    fileCount := 0
+    handle := dfs.openDirectory(dfs.DEV_SD, @".")
+    if handle >= 0
+        repeat
+            pEntry := dfs.readDirectory(handle)
+            if pEntry == 0
+                quit
+            pFilename := dfs.fileName()
+            attrs := BYTE[pEntry + 11]
+            if attrs & $10 == 0 and BYTE[pFilename] <> "."
+                fileCount++
+        dfs.closeDirectoryHandle(handle)
+    utils.evaluateSingleValue(fileCount, @"enumerated files", STRESS_COUNT)
+
+    ' Verify each file can be opened
+    utils.startTest(@"All 20 files can be opened for read")
+    created := 0
+    repeat idx from 0 to STRESS_COUNT - 1
+        makeStressName(idx)
+        handle := dfs.openFileRead(dfs.DEV_SD, @genFileName)
+        if handle >= 0
+            created++
+            dfs.closeFileHandle(handle)
+    utils.evaluateSingleValue(created, @"files opened", STRESS_COUNT)
+
+    ' Clean up stress test files
+    repeat idx from 0 to STRESS_COUNT - 1
+        makeStressName(idx)
+        dfs.deleteFile(dfs.DEV_SD, @genFileName)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    dfs.deleteFile(dfs.DEV_SD, @stressDir)
+
+    ' ----------------------------------
+    ' Cleanup
+    ' ----------------------------------
+    debug(" ")
+    debug("* Cleaning up test items...")
+    cleanupTestItems()
+
+    ' Unmount
+    dfs.unmount(dfs.DEV_SD)
+
+    ' ----------------------------------
+    ' Summary
+    ' ----------------------------------
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Directory Tests Complete")
+    debug("END_SESSION")
+
+
+PRI cleanupTestItems()
+' Delete test files and directories
+'
+' Note: Must delete files before directories, and nested items first
+
+    ' Clean nested items
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    dfs.changeDirectory(dfs.DEV_SD, @testDir1)
+    dfs.changeDirectory(dfs.DEV_SD, @subDir1)
+    dfs.deleteFile(dfs.DEV_SD, @testFile2)
+    dfs.changeDirectory(dfs.DEV_SD, @"..")
+    dfs.deleteFile(dfs.DEV_SD, @testFile1)
+    dfs.deleteFile(dfs.DEV_SD, @subDir1)  ' Try to delete as file (won't work for dir, but harmless)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' Clean testDir2 contents
+    dfs.changeDirectory(dfs.DEV_SD, @testDir2)
+    dfs.deleteFile(dfs.DEV_SD, @"MOVEME.TXT")
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' Delete root-level test items
+    dfs.deleteFile(dfs.DEV_SD, @testDir1)  ' Try (won't work if has contents)
+    dfs.deleteFile(dfs.DEV_SD, @testDir2)
+
+
+PRI makeStressName(n)
+' Generate stress test filename "STRnn.TXT" into genFileName buffer.
+'
+' @param n - File number (0-99)
+
+    genFileName[0] := "S"
+    genFileName[1] := "T"
+    genFileName[2] := "R"
+    genFileName[3] := "0" + (n / 10)
+    genFileName[4] := "0" + (n // 10)
+    genFileName[5] := "."
+    genFileName[6] := "T"
+    genFileName[7] := "X"
+    genFileName[8] := "T"
+    genFileName[9] := 0
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

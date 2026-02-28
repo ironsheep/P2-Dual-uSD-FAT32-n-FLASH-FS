@@ -1,0 +1,237 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_register_tests.spin2
+''   Purpose.... This object tests CSD register access and timeout value APIs
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 18 FEB 2026
+''
+'' =================================================================================================
+''
+'' Tests the following APIs:
+''   - readCSDRaw() - CSD register raw read
+''   - getReadTimeout() / getWriteTimeout() - timeout values
+''   - cardSizeSectors() - capacity cross-check
+''   - getCardMaxSpeed() - TRAN_SPEED cross-check
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 270_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_SPEED
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_SPEED
+#ELSE
+'' Enable register and raw access
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' CSD register buffer (16 bytes)
+csdBuf          BYTE    0[16]
+csdBuf_guard    BYTE    0[16]
+
+PUB go() | workerCog, result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed
+'' Main entry point for register access regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Register & Timeout Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount the card first
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    ' Show card info
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+
+    ' ======================================================================
+    ' TEST GROUP: readCSDRaw
+    ' ======================================================================
+    utils.startTestGroup(@"readCSDRaw")
+
+    ' Test: readCSDRaw returns data
+    utils.startTest(@"readCSDRaw() returns data successfully")
+    bytefill(@csdBuf, 0, 16)
+    utils.initGuard(@csdBuf_guard)
+    result := dfs.readCSDRaw(@csdBuf)
+    utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
+    utils.evaluateBool(result, @"readCSDRaw()", true)
+
+    ' Test: CSD version is valid (0 for SDSC, 1 for SDHC/SDXC)
+    utils.startTest(@"CSD version is valid (0 or 1)")
+    csdVer := (csdBuf[0] >> 6) & $03
+    debug("   CSD version: ", udec_(csdVer))
+    utils.evaluateRange(csdVer, @"CSD_STRUCTURE", 0, 1)
+
+    ' Test: TRAN_SPEED is valid (byte 3 of CSD)
+    utils.startTest(@"TRAN_SPEED is valid ($32-$5A)")
+    tranSpeed := csdBuf[3]
+    debug("   TRAN_SPEED: $", uhex_(tranSpeed))
+    ' $32 = 25 MHz, $5A = 50 MHz - standard values for SD cards
+    utils.evaluateRange(tranSpeed, @"TRAN_SPEED byte", $32, $5A)
+
+    ' Test: Capacity > 0
+    utils.startTest(@"Card capacity > 0 sectors")
+    cardSectors := dfs.cardSizeSectors()
+    debug("   Card sectors: ", udec(cardSectors))
+    utils.evaluateSubBool(cardSectors > 0, @"capacity > 0", true)
+
+    ' Test: Capacity matches cardSizeSectors()
+    utils.startTest(@"CSD capacity consistent with cardSizeSectors()")
+    ' For CSD v1 (SDHC/SDXC), capacity = (C_SIZE + 1) * 1024 sectors
+    if csdVer == 1
+        ' C_SIZE is in CSD bytes 7-9 (bits 69:48)
+        capacity := ((csdBuf[7] & $3F) << 16) | (csdBuf[8] << 8) | csdBuf[9]
+        capacity := (capacity + 1) * 1024
+        debug("   CSD computed sectors: ", udec(capacity))
+        ' Should match within rounding
+        utils.evaluateSingleValue(capacity, @"CSD vs cardSizeSectors", cardSectors)
+    else
+        ' SDSC: more complex calculation, just verify non-zero
+        utils.evaluateSubBool(cardSectors > 0, @"SDSC capacity > 0", true)
+
+    ' Test: readCSDRaw works via initCardOnly path (unmounted)
+    utils.startTest(@"readCSDRaw() works after initCardOnly")
+    dfs.unmount(dfs.DEV_SD)
+    result := dfs.initCardOnly()
+    utils.evaluateSubBool(result, @"initCardOnly()", true)
+    bytefill(@csdBuf, 0, 16)
+    utils.initGuard(@csdBuf_guard)
+    result := dfs.readCSDRaw(@csdBuf)
+    utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
+    utils.evaluateSubBool(result, @"readCSDRaw() unmounted", true)
+    ' Verify same version
+    result := (csdBuf[0] >> 6) & $03
+    utils.evaluateSubValue(result, @"CSD version matches", csdVer)
+    dfs.stop()
+
+    ' Remount for timeout tests
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not remount!")
+        dfs.stop()
+
+    utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
+    ' ======================================================================
+    ' TEST GROUP: Timeout Values
+    ' ======================================================================
+    utils.startTestGroup(@"Timeout Values")
+
+    ' Test: getReadTimeout() is reasonable (50-500ms)
+    utils.startTest(@"getReadTimeout() in reasonable range")
+    readTimeout := dfs.getReadTimeout()
+    debug("   Read timeout: ", udec(readTimeout), " ms")
+    utils.evaluateRange(readTimeout, @"read timeout ms", 50, 500)
+
+    ' Test: getWriteTimeout() is reasonable (100-1000ms)
+    utils.startTest(@"getWriteTimeout() in reasonable range")
+    writeTimeout := dfs.getWriteTimeout()
+    debug("   Write timeout: ", udec(writeTimeout), " ms")
+    utils.evaluateRange(writeTimeout, @"write timeout ms", 100, 1000)
+
+    ' Test: Write timeout >= read timeout
+    utils.startTest(@"Write timeout >= read timeout")
+    utils.evaluateSubBool(writeTimeout >= readTimeout, @"write >= read", true)
+
+    ' Test: TRAN_SPEED matches getCardMaxSpeed()
+    utils.startTest(@"TRAN_SPEED consistent with getCardMaxSpeed()")
+    maxSpeed := dfs.getCardMaxSpeed()
+    debug("   Card max speed: ", udec(maxSpeed), " Hz")
+    ' 25 MHz = $32 TRAN_SPEED, 50 MHz = $5A TRAN_SPEED
+    if tranSpeed == $32
+        utils.evaluateSingleValue(maxSpeed, @"25 MHz from $32", 25_000_000)
+    elseif tranSpeed == $5A
+        utils.evaluateSingleValue(maxSpeed, @"50 MHz from $5A", 50_000_000)
+    else
+        ' Other TRAN_SPEED values - just check range
+        utils.evaluateRange(maxSpeed, @"max speed Hz", 25_000_000, 50_000_000)
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+    dfs.unmount(dfs.DEV_SD)
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  =================================================================================================
+}}

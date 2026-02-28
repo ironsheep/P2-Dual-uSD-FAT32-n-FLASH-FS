@@ -1,0 +1,300 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_crc_diag_tests.spin2
+''   Purpose.... This object tests the CRC diagnostic and validation toggle APIs
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 18 FEB 2026
+''
+'' =================================================================================================
+''
+'' Tests the following APIs:
+''   - getCRCMatchCount()
+''   - getCRCMismatchCount()
+''   - getCRCRetryCount()
+''   - getLastReceivedCRC()
+''   - getLastCalculatedCRC()
+''   - getLastSentCRC()
+''   - setCRCValidation()
+''   - getLastCMD13()
+''   - getLastCMD13Error()
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 270_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     BUFFER_SIZE = 512
+
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
+'' Enable debug/diagnostic features
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
+
+OBJ
+    dfs   : "dual_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+crcTestFile     BYTE    "CRCTEST1.BIN", 0
+crcTestFile2    BYTE    "CRCTEST2.BIN", 0
+
+' Buffers
+writeBuffer     BYTE    0[BUFFER_SIZE]
+readBuffer      BYTE    0[BUFFER_SIZE]
+readBuffer_guard BYTE   0[16]
+
+PUB go() | workerCog, result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
+'' Main entry point for CRC diagnostic regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - CRC Diagnostic Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount the card first
+    result := dfs.mount(dfs.DEV_SD)
+    if result == false
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    ' Show card info
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+
+    ' Clean up any existing test files
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile2)
+
+    ' ======================================================================
+    ' TEST GROUP: CRC Counter Initial State
+    ' ======================================================================
+    utils.startTestGroup(@"CRC Counter Initial State")
+
+    ' Test: Match count > 0 after mount (mount reads sectors)
+    utils.startTest(@"CRC match count > 0 after mount")
+    matchCount := dfs.getCRCMatchCount()
+    debug("   CRC match count: ", udec(matchCount))
+    utils.evaluateSubBool(matchCount > 0, @"match count > 0", true)
+
+    ' Test: Mismatch count == 0 on healthy card
+    utils.startTest(@"CRC mismatch count == 0 on healthy card")
+    mismatchCount := dfs.getCRCMismatchCount()
+    debug("   CRC mismatch count: ", udec(mismatchCount))
+    utils.evaluateSingleValue(mismatchCount, @"mismatch count", 0)
+
+    ' Test: Retry count == 0 on healthy card
+    utils.startTest(@"CRC retry count == 0 on healthy card")
+    retryCount := dfs.getCRCRetryCount()
+    debug("   CRC retry count: ", udec(retryCount))
+    utils.evaluateSingleValue(retryCount, @"retry count", 0)
+
+    ' Test: lastReceivedCRC == lastCalculatedCRC (mount performed clean reads)
+    utils.startTest(@"lastReceivedCRC matches lastCalculatedCRC after mount")
+    lastRecvCRC := dfs.getLastReceivedCRC()
+    lastCalcCRC := dfs.getLastCalculatedCRC()
+    debug("   Last received CRC: $", uhex_(lastRecvCRC), "  Last calculated CRC: $", uhex_(lastCalcCRC))
+    utils.evaluateSingleValue(lastRecvCRC, @"recvCRC == calcCRC", lastCalcCRC)
+
+    ' ======================================================================
+    ' TEST GROUP: CRC Values After Operations
+    ' ======================================================================
+    utils.startTestGroup(@"CRC Values After Operations")
+
+    ' Record match count before reads
+    matchBefore := dfs.getCRCMatchCount()
+
+    ' Perform a read operation to generate CRC activity
+    utils.startTest(@"CRC match count increases after reads")
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $30)
+    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+
+    matchAfter := dfs.getCRCMatchCount()
+    debug("   Match before: ", udec(matchBefore), " after: ", udec(matchAfter))
+    utils.evaluateSubBool(matchAfter > matchBefore, @"match count increased", true)
+
+    ' Test: lastCalculatedCRC != 0 after reads
+    utils.startTest(@"lastCalculatedCRC != 0 after reads")
+    lastCalcCRC := dfs.getLastCalculatedCRC()
+    debug("   Last calculated CRC: $", uhex_(lastCalcCRC))
+    utils.evaluateNotZero(lastCalcCRC, @"lastCalculatedCRC")
+
+    ' Test: lastSentCRC != 0 after write
+    utils.startTest(@"lastSentCRC != 0 after write")
+    lastSentCRC := dfs.getLastSentCRC()
+    debug("   Last sent CRC: $", uhex_(lastSentCRC))
+    utils.evaluateNotZero(lastSentCRC, @"lastSentCRC")
+
+    ' Test: Counters after unmount/remount
+    utils.startTest(@"CRC counters reset after unmount/remount")
+    dfs.unmount(dfs.DEV_SD)
+    result := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSubBool(result, @"remount succeeds", true)
+    matchCount := dfs.getCRCMatchCount()
+    debug("   Match count after remount: ", udec(matchCount))
+    ' After remount, count should be > 0 (mount reads sectors) but less than before
+    utils.evaluateSubBool(matchCount > 0, @"match count > 0 after remount", true)
+
+    ' ======================================================================
+    ' TEST GROUP: setCRCValidation Toggle
+    ' ======================================================================
+    utils.startTestGroup(@"setCRCValidation Toggle")
+
+    ' Test: Enable CRC validation, count increases on read
+    utils.startTest(@"CRC enabled: count increases on read")
+    dfs.setCRCValidation(true)
+    matchBefore := dfs.getCRCMatchCount()
+    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+    matchAfter := dfs.getCRCMatchCount()
+    debug("   CRC enabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
+    utils.evaluateSubBool(matchAfter > matchBefore, @"enabled: count increased", true)
+
+    ' Test: Disable CRC validation, count unchanged on read
+    utils.startTest(@"CRC disabled: count unchanged on read")
+    dfs.setCRCValidation(false)
+    matchBefore := dfs.getCRCMatchCount()
+    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+    matchAfter := dfs.getCRCMatchCount()
+    debug("   CRC disabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
+    utils.evaluateSingleValue(matchAfter, @"disabled: count unchanged", matchBefore)
+
+    ' Test: Reads work correctly with CRC disabled
+    utils.startTest(@"Reads work with CRC disabled")
+    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
+    utils.evaluateBool(result, @"data correct with CRC off", true)
+
+    ' Test: Reads work after re-enabling CRC
+    utils.startTest(@"Reads work after CRC re-enabled")
+    dfs.setCRCValidation(true)
+    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        dfs.closeFileHandle(handle)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
+    utils.evaluateBool(result, @"data correct with CRC on", true)
+
+    ' ======================================================================
+    ' TEST GROUP: CMD13 Diagnostic
+    ' ======================================================================
+    utils.startTestGroup(@"CMD13 Diagnostic")
+
+    ' Test: getLastCMD13() returns valid value
+    utils.startTest(@"getLastCMD13() returns valid value")
+    cmd13val := dfs.getLastCMD13()
+    debug("   Last CMD13: $", uhex_(cmd13val))
+    ' CMD13 R2 response: $0000 means no error, $FFFF means timeout
+    ' Any value is valid - just check it's accessible
+    utils.recordPass()
+
+    ' Test: getLastCMD13Error() == 0 on healthy card
+    utils.startTest(@"getLastCMD13Error() == 0 on healthy card")
+    cmd13err := dfs.getLastCMD13Error()
+    debug("   Last CMD13 error: $", uhex_(cmd13err))
+    utils.evaluateSingleValue(cmd13err, @"CMD13 error", 0)
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+
+    ' Re-enable CRC validation before cleanup
+    dfs.setCRCValidation(true)
+
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+    dfs.deleteFile(dfs.DEV_SD, @crcTestFile2)
+
+    dfs.unmount(dfs.DEV_SD)
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  =================================================================================================
+}}
