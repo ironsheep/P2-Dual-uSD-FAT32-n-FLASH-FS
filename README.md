@@ -1,5 +1,11 @@
 # P2 Dual uSD FAT32 n FLASH FS
 
+---
+
+**This is NOT a released driver!!!** Much of the code is not yet here as I'm still certifying it. The driver you are looking for (which is released and announced in the forum post is the [P2 microSD FAT32 Filesystem](https://github.com/ironsheep/P2-uSD-FAT32-FS)
+
+---
+
 A unified filesystem driver for the Parallax Propeller 2 (P2) that provides simultaneous access to both the onboard 16MB FLASH chip and a microSD card through a single cog and a single API.
 
 ![Project Status](https://img.shields.io/badge/status-active-brightgreen)
