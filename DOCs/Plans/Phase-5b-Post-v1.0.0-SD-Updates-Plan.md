@@ -2,7 +2,7 @@
 
 ## Context
 
-The unified driver (`dual_fs.spin2`) was based on the SD reference driver at v1.0.0 (`54121d8`, Feb 25, 2026). Since then, 15 commits have landed in the reference driver adding bug fixes, enhancements, and V1 API removal. This phase ports ALL 18 items from `REF-FLASH-uSD/UPDATES/POST-V1.0.0-PORTING-GUIDE.md` into the unified driver and updates the migrated SD test suites accordingly.
+The unified driver (`dual_sd_fat32_flash_fs.spin2`) was based on the SD reference driver at v1.0.0 (`54121d8`, Feb 25, 2026). Since then, 15 commits have landed in the reference driver adding bug fixes, enhancements, and V1 API removal. This phase ports ALL 18 items from `REF-FLASH-uSD/UPDATES/POST-V1.0.0-PORTING-GUIDE.md` into the unified driver and updates the migrated SD test suites accordingly.
 
 **Code style guide** (`REF-FLASH-uSD/UPDATES/CODE-STYLE-GUIDE.md`): Applied to all new code written in this phase. Full codebase restyle deferred to a later sweeping pass.
 
@@ -35,7 +35,7 @@ The unified driver (`dual_fs.spin2`) was based on the SD reference driver at v1.
 
 ## Wave 1: Critical Bug Fixes
 
-All changes to `src/dual_fs.spin2`. No test changes needed — all existing tests still pass after these fixes.
+All changes to `src/dual_sd_fat32_flash_fs.spin2`. No test changes needed — all existing tests still pass after these fixes.
 
 ### 1A. Unsigned FAT32 end-of-chain comparisons (#2)
 
@@ -99,24 +99,24 @@ PUB readVBRRaw(p_buf) : result
 ## Wave 2: Enhancements + Documentation
 
 ### 2A. Volume label root directory scan (#3)
-**File**: `src/dual_fs.spin2`, `do_mount()` after line 1498
+**File**: `src/dual_sd_fat32_flash_fs.spin2`, `do_mount()` after line 1498
 
 Add locals: `i, p_entry, cluster, sector, sec_idx, next_cluster, found`
 
 Change debug to: `"VBR volume label:"`. Insert root directory scan code per porting guide Section 3. Uses unsigned `+<` comparison per fix 1A. Scans cluster chain for `ATTR_VOLUME_ID` ($08) entry.
 
 ### 2B. Struct accessor doc comments (#5)
-**File**: `src/dual_fs.spin2`
+**File**: `src/dual_sd_fat32_flash_fs.spin2`
 
 Add single-apostrophe `'` doc comments to all 22+ PRI struct accessor methods (partType, partLbaStart, vbrBytesPerSec, etc.) following the code style guide pattern for PRI methods.
 
 ### 2C. CON section doc comment cleanup (#6)
-**File**: `src/dual_fs.spin2`
+**File**: `src/dual_sd_fat32_flash_fs.spin2`
 
 Change all `CON ''` and standalone `'' ═══` lines in CON sections to `CON '` and `' ═══`. ~26 locations. Also strip indentation from `#IFDEF SD_INCLUDE_ALL` block directives.
 
 ### 2D. Version/administrative (#13)
-**File**: `src/dual_fs.spin2`
+**File**: `src/dual_sd_fat32_flash_fs.spin2`
 - Update header version string
 - Ensure `.txt` not tracked (check .gitignore)
 
@@ -127,7 +127,7 @@ Change all `CON ''` and standalone `'' ═══` lines in CON sections to `CON 
 ## Wave 3: Cross-Compiler Support + CRC Hooks
 
 ### 3A. Cross-compiler PRAGMA blocks (#8)
-**Files**: `src/dual_fs.spin2` + all migrated test files that use `#PRAGMA EXPORTDEF`
+**Files**: `src/dual_sd_fat32_flash_fs.spin2` + all migrated test files that use `#PRAGMA EXPORTDEF`
 
 Wrap every `#PRAGMA EXPORTDEF` in compiler-detection blocks:
 ```spin2
@@ -142,7 +142,7 @@ Wrap every `#PRAGMA EXPORTDEF` in compiler-detection blocks:
 ```
 
 **Affected files** (check each for `#PRAGMA EXPORTDEF`):
-- `src/dual_fs.spin2` — SD_INCLUDE_ALL expansion
+- `src/dual_sd_fat32_flash_fs.spin2` — SD_INCLUDE_ALL expansion
 - All `DFS_SD_RT_*.spin2` test files that export pragma flags
 - `DFS_FL_RT_utilities.spin2` — MAX_OPEN_FILES
 - `DFS_FL_RT_8cog_tests.spin2` — MAX_OPEN_FILES
@@ -153,7 +153,7 @@ Wrap every `#PRAGMA EXPORTDEF` in compiler-detection blocks:
 Wrap 3 multi-line `debug()` calls in `#IFDEF __FLEXSPIN__` blocks with single-line alternatives. Only needed if format utility is used in unified project tests.
 
 ### 3C. CRC error injection hooks (#15)
-**File**: `src/dual_fs.spin2`
+**File**: `src/dual_sd_fat32_flash_fs.spin2`
 
 **DAT additions**: `test_force_read_crc_error BYTE 0`, `test_force_write_crc_error BYTE 0`, `test_error_count LONG 0`
 
@@ -193,7 +193,7 @@ V1→V3 mapping:
 
 **Verify**: All 4 files compile + pass on hardware with same test counts.
 
-### 4E. Remove V1 from dual_fs.spin2 (#16)
+### 4E. Remove V1 from dual_sd_fat32_flash_fs.spin2 (#16)
 
 **Remove 9 PUB methods**: `newFile`, `openFile`, `closeFile`, `read`, `readByte`, `write`, `writeByte`, `writeString`, `seek`
 **Keep**: `fileSize()` (used by `readDirectory()` context)
@@ -304,7 +304,7 @@ Final: Full regression pass across all phases.
 
 | File | Waves |
 |---|---|
-| `src/dual_fs.spin2` | 1, 2, 3C, 4E |
+| `src/dual_sd_fat32_flash_fs.spin2` | 1, 2, 3C, 4E |
 | `src/regression-tests/DFS_SD_RT_seek_tests.spin2` | 4A |
 | `src/regression-tests/DFS_SD_RT_directory_tests.spin2` | 4B, 5D |
 | `src/regression-tests/DFS_SD_RT_mount_tests.spin2` | 4C |

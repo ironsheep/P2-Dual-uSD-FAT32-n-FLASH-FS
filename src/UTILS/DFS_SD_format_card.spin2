@@ -1,0 +1,66 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_format_card.spin2
+''   Purpose.... Simple format utility runner for SD cards
+''   Author..... Stephen M Moraco
+''   Started.... JAN 2026
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 270_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' External SD header (base pin 16)
+    'SD_CS   = 20
+    'SD_MOSI = 19
+    'SD_MISO = 18
+    'SD_SCK  = 21
+
+' Enable full driver features (inherited through isp_format_utility)
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+OBJ
+    fmt : "isp_format_utility"
+
+PUB go() | result
+'' Main entry point - formats SD card with label "P2-BENCH".
+'' WARNING: This will ERASE ALL DATA on the card!
+
+    debug(" ")
+    debug("======================================================")
+    debug("  SD Card Format Utility")
+    debug("======================================================")
+    debug(" ")
+    debug("WARNING: This will ERASE ALL DATA on the card!")
+    debug(" ")
+
+    debug("Formatting card with label 'P2-BENCH'...")
+    result := fmt.formatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, @label)
+
+    if result
+        debug(" ")
+        debug("FORMAT SUCCESSFUL!")
+    else
+        debug(" ")
+        debug("FORMAT FAILED!")
+
+    debug(" ")
+    debug("END_SESSION")
+
+DAT
+
+label   BYTE    "P2-BENCH", 0

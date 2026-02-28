@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
 ''   File....... DFS_RT_phase3_verify.spin2
-''   Purpose.... Phase 3 verification: exercise dual_fs.spin2 Flash file operations
+''   Purpose.... Phase 3 verification: exercise dual_sd_fat32_flash_fs.spin2 Flash file operations
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -32,7 +32,7 @@ CON
 #ENDIF
 
 OBJ
-    dfs   : "dual_fs"
+    dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
 
 DAT

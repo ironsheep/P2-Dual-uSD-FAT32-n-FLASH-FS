@@ -1,14 +1,14 @@
 '' =================================================================================================
 ''
 ''   File....... DFS_FL_RT_8cog_tests.spin2
-''   Purpose.... Flash multi-cog read/write tests via dual_fs unified driver
+''   Purpose.... Flash multi-cog read/write tests via dual_sd_fat32_flash_fs unified driver
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... AUG 2023
 ''   Updated.... 27 FEB 2026
 ''
-''   Migrated from RT_read_write_8cog_tests.spin2 (flash_fs) to dual_fs
+''   Migrated from RT_read_write_8cog_tests.spin2 (flash_fs) to dual_sd_fat32_flash_fs
 ''
 ''   ARCHITECTURE CHANGE: The unified driver serializes all operations through
 ''   a single worker cog. Spawned cogs do NOT call mount — only the main cog
@@ -34,7 +34,7 @@ CON
 #ENDIF
 
 OBJ
-    dfs   : "dual_fs"
+    dfs   : "dual_sd_fat32_flash_fs"
     utils : "DFS_FL_RT_utilities"
 
 CON
@@ -726,7 +726,7 @@ pri openWaitOnHandle(pFilename, mode) : handle, status | pErr
         status := dfs.error()
         if handle < 0 and status == dfs.SUCCESS
             pErr := dfs.string_for_error(handle)
-            debug("**** BAD EXIT from dual_fs()  handle=[", zstr_(pErr), "] status=[SUCCESS]")
+            debug("**** BAD EXIT from dual_sd_fat32_flash_fs()  handle=[", zstr_(pErr), "] status=[SUCCESS]")
             status := handle
         if status == dfs.E_FLASH_NO_HANDLE
             waitms(10)

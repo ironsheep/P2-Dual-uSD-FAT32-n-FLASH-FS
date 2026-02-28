@@ -114,7 +114,7 @@ CON { command enums }
 
 OBJ
 
-  dfs      : "dual_fs"                                           '   Dual filesystem driver (SD + Flash)
+  dfs      : "dual_sd_fat32_flash_fs"                                           '   Dual filesystem driver (SD + Flash)
   serial   : "isp_serial_singleton"                              '   serial IO for terminal (singleton)
   fmt      : "isp_mem_strings"                                   '   string formatting (for card display)
   fsckUtil : "isp_fsck_utility"                                  '   FSCK/audit library (cog-based)

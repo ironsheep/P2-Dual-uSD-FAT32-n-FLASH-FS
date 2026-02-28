@@ -32,7 +32,7 @@
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
 ''
 ''   OBJ
-''       fs : "dual_fs"
+''       fs : "dual_sd_fat32_flash_fs"
 ''
 '' Or define SD_INCLUDE_ALL to include everything:
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_ALL
@@ -142,6 +142,10 @@ CON ' command codes for worker cog
   CMD_READ_DIR_H  = 44      ' Read next dir entry: param0=handle, returns data0=ptr
   CMD_CLOSE_DIR_H = 45      ' Close directory handle: param0=handle
   CMD_SET_VOL_LABEL = 46    ' Set volume label: param0=new label string ptr
+  CMD_SD_EXISTS     = 47    ' Check if SD file exists: param0=name ptr, returns data0=true/false
+  CMD_SD_FILE_SIZE  = 48    ' Get SD file size by name: param0=name ptr, returns data0=size
+  CMD_SD_FILE_SIZE_UNUSED = 49 ' Get SD file slack space: param0=name ptr, returns data0=unused bytes
+  ' Note: CMD 50+ reserved for Flash commands
 
   ' ═══════════════════════════════════════════════════════════════════════════
   ' Flash-Specific Commands (Phase 2+)
@@ -509,6 +513,7 @@ DAT '' singleton control - SHARED across all object instances
   ' ADAPTIVE TIMING (Phase 2 - Card identification and speed adjustment)
   ' ═══════════════════════════════════════════════════════════════════════
   card_mfr_id   LONG    0               ' Manufacturer ID from CID (byte 0)
+  card_serial_number LONG 0            ' Product serial number from CID (PSN, bytes 9-12)
   card_max_speed_hz LONG 0              ' Maximum speed from CSD TRAN_SPEED (Hz)
   card_is_slow  LONG    0               ' Flag: 1 = card requires conservative timing (e.g., PNY)
   saved_acmd41_arg LONG 0              ' ACMD41 argument saved from initial init (for reinitCard)
@@ -640,6 +645,13 @@ DAT '' singleton control - SHARED across all object instances
 
   ' Flash serial number buffer (DAT for reliable wrfast target)
   fl_sn_buf        LONG    0[2]
+
+  ' Per-cog Flash CWD prefix string (128 bytes per cog, 8 cogs = 1KB)
+  ' Empty string = root directory. Example: "subdir" or "dir1/dir2"
+  fl_cog_cwd       BYTE    0[8 * FL_FILENAME_SIZE]
+
+  ' Temporary full-path filename buffer used by Flash directory listing worker commands
+  fl_dir_entry_name BYTE   0[FL_FILENAME_SIZE]
 
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
@@ -913,8 +925,8 @@ PRI fs_worker() | cur_cmd
     ' File system commands require MODE_FILESYSTEM
     ' Raw sector commands are allowed in both MODE_RAW and MODE_FILESYSTEM
     ' Mode transitions (MOUNT, UNMOUNT, INIT_CARD_ONLY) have their own logic
-    ' V3: Include handle-based commands (CMD_OPEN_READ through CMD_CLOSE_DIR_H)
-    if (cur_cmd >= CMD_NEWDIR and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SET_VOL_LABEL)
+    ' V3: Include handle-based commands (CMD_OPEN_READ through CMD_SD_FILE_SIZE_UNUSED)
+    if (cur_cmd >= CMD_NEWDIR and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SD_FILE_SIZE_UNUSED)
       if driver_mode <> MODE_FILESYSTEM
         debug("  [fs_worker] REJECTED: File operation requires MODE_FILESYSTEM")
         pb_status := E_NOT_MOUNTED
@@ -1122,6 +1134,21 @@ PRI fs_worker() | cur_cmd
 
       CMD_CLOSE_DIR_H:
         pb_status := do_close_dir_h(pb_param0)
+
+      CMD_SD_EXISTS:
+        pb_data0 := searchDirectory(pb_param0) ? 1 : 0
+        pb_status := SUCCESS
+
+      CMD_SD_FILE_SIZE:
+        if searchDirectory(pb_param0)
+          pb_data0 := BYTE[@entry_buffer][28] | BYTE[@entry_buffer][29] << 8 | BYTE[@entry_buffer][30] << 16 | BYTE[@entry_buffer][31] << 24
+          pb_status := SUCCESS
+        else
+          pb_data0 := 0
+          pb_status := E_FILE_NOT_FOUND
+
+      CMD_SD_FILE_SIZE_UNUSED:
+        pb_data0, pb_status := do_sd_file_size_unused(pb_param0)
 
       CMD_SET_VOL_LABEL:
         pb_status := do_set_vol_label(pb_param0)
@@ -2699,6 +2726,38 @@ PRI do_delete(name_ptr) : result | cluster, p_cluster, fat_sector, loop_count
     until cluster +>= $0FFF_FFF8
   return SUCCESS
 
+PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cluster_count, loop_count
+' Calculate unused (slack) bytes in last cluster of an SD file.
+' Walks the FAT chain to count allocated clusters, then subtracts actual file size.
+'
+' @param name_ptr - Pointer to null-terminated filename string
+' @returns unused_bytes - Allocated space minus file size, or 0 on error
+' @returns status - SUCCESS or error code
+
+  if not searchDirectory(name_ptr)
+    return 0, E_FILE_NOT_FOUND
+
+  fsize := dirEntFileSize(@entry_buffer)
+  cluster := firstCluster()
+
+  ' Empty file (no clusters allocated)
+  if cluster < 2
+    return 0, SUCCESS
+
+  ' Walk FAT chain counting clusters
+  cluster_count := 0
+  loop_count := 0
+  repeat
+    cluster_count++
+    cluster := long[readFAT(cluster)]
+    loop_count++
+    if loop_count > 100000
+      return 0, E_IO_ERROR
+  until cluster +>= $0FFF_FFF8
+
+  unused_bytes := (cluster_count * sec_per_clus * 512) - fsize
+  status := SUCCESS
+
 PRI do_chdir(name_ptr) : result
 ' Internal change directory operation - changes current directory.
 '
@@ -3565,6 +3624,125 @@ PRI do_flash_serial_number() : sn_hi, sn_lo
   end
 
   debug("  [do_flash_serial_number] ID: $", uhex_long_(sn_hi), "_", uhex_long_(sn_lo))
+
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' FLASH DIRECTORY EMULATION (caller-cog helpers)
+    ' These PRI methods run in the calling cog, using COGID() to index per-cog CWD.
+    ' Flash filenames support "/" characters (up to 127 chars). CWD is stored as a
+    ' prefix string that gets prepended to filenames transparently.
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+PRI fl_get_cwd() : p_cwd
+' Return pointer to the calling cog's Flash CWD prefix string.
+'
+' @returns p_cwd - Pointer to null-terminated CWD string in fl_cog_cwd
+
+  p_cwd := @fl_cog_cwd + COGID() << FL_FILENAME_SIZE_EXP
+
+PRI fl_prepend_cwd(p_dest, p_name) | p_cwd, cwd_len, name_len
+' Build full Flash path by prepending the calling cog's CWD prefix to a filename.
+' Result is stored in p_dest (must be FL_FILENAME_SIZE bytes).
+' If CWD is empty (root), p_name is copied directly.
+' If CWD is "dir1", result is "dir1/name".
+'
+' @param p_dest - Destination buffer (FL_FILENAME_SIZE bytes)
+' @param p_name - Filename to prepend CWD to
+
+  p_cwd := fl_get_cwd()
+  cwd_len := strsize(p_cwd)
+  name_len := strsize(p_name)
+  bytefill(p_dest, 0, FL_FILENAME_SIZE)
+
+  if cwd_len == 0
+    ' At root — just copy the filename
+    strcopy(p_dest, p_name, FL_FILENAME_SIZE - 1)
+  else
+    ' Build: CWD + "/" + name
+    strcopy(p_dest, p_cwd, FL_FILENAME_SIZE - 1)
+    if cwd_len + 1 + name_len < FL_FILENAME_SIZE
+      BYTE[p_dest][cwd_len] := "/"
+      strcopy(p_dest + cwd_len + 1, p_name, FL_FILENAME_SIZE - cwd_len - 2)
+
+PRI fl_change_cwd(p_path) | p_cwd, cwd_len, path_len, idx
+' Change the calling cog's Flash CWD prefix.
+' "/" navigates to root (empty prefix).
+' ".." strips the last path segment.
+' Any other path appends to the current CWD with "/" separator.
+'
+' @param p_path - Pointer to path string
+
+  p_cwd := fl_get_cwd()
+  cwd_len := strsize(p_cwd)
+
+  ' "/" = navigate to root
+  if BYTE[p_path] == "/" and BYTE[p_path][1] == 0
+    BYTE[p_cwd] := 0
+    return
+
+  ' ".." = strip last path segment
+  if BYTE[p_path] == "." and BYTE[p_path][1] == "." and BYTE[p_path][2] == 0
+    if cwd_len == 0
+      return                                                                      ' already at root
+    ' Find last "/" in CWD
+    idx := cwd_len - 1
+    repeat while idx > 0
+      if BYTE[p_cwd][idx] == "/"
+        BYTE[p_cwd][idx] := 0
+        return
+      idx--
+    ' No "/" found — CWD is a single segment, clear to root
+    BYTE[p_cwd] := 0
+    return
+
+  ' Relative path — append to CWD
+  path_len := strsize(p_path)
+  if cwd_len == 0
+    ' At root — set CWD to this path directly
+    strcopy(p_cwd, p_path, FL_FILENAME_SIZE - 1)
+  else
+    ' Append: CWD + "/" + path
+    if cwd_len + 1 + path_len < FL_FILENAME_SIZE
+      BYTE[p_cwd][cwd_len] := "/"
+      strcopy(p_cwd + cwd_len + 1, p_path, FL_FILENAME_SIZE - cwd_len - 2)
+
+PRI fl_cwd_matches(p_stored_name, p_bare_name) : matches | p_cwd, cwd_len, name_len, idx
+' Check if a stored Flash filename is a direct child of the current CWD.
+' If it matches, copies the bare (stripped) filename into p_bare_name.
+' A "direct child" means the name after the CWD prefix has no further "/" separators.
+'
+' @param p_stored_name - Full stored filename from Flash
+' @param p_bare_name - Buffer to receive the stripped bare filename (FL_FILENAME_SIZE bytes)
+' @returns matches - TRUE if the file is a direct child of CWD
+
+  p_cwd := fl_get_cwd()
+  cwd_len := strsize(p_cwd)
+  name_len := strsize(p_stored_name)
+
+  if cwd_len == 0
+    ' At root — match files that have no "/" in their name
+    repeat idx from 0 to name_len - 1
+      if BYTE[p_stored_name][idx] == "/"
+        return false
+    strcopy(p_bare_name, p_stored_name, FL_FILENAME_SIZE - 1)
+    return true
+
+  ' Check if stored name starts with CWD prefix + "/"
+  if name_len <= cwd_len + 1
+    return false
+  repeat idx from 0 to cwd_len - 1
+    if BYTE[p_stored_name][idx] <> BYTE[p_cwd][idx]
+      return false
+  if BYTE[p_stored_name][cwd_len] <> "/"
+    return false
+
+  ' Check the remainder has no further "/" (direct child, not deeper subdirectory)
+  repeat idx from cwd_len + 1 to name_len - 1
+    if BYTE[p_stored_name][idx] == "/"
+      return false
+
+  ' It's a direct child — extract the bare name
+  strcopy(p_bare_name, p_stored_name + cwd_len + 1, FL_FILENAME_SIZE - 1)
+  return true
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
     ' PHASE 3: FLASH FILE OPERATIONS (worker cog internal methods)
@@ -5418,9 +5596,12 @@ PRI identifyCard() | cid[4], csd[4]
 
   debug("  [identifyCard] Reading card registers...")
 
-  ' Read CID to identify manufacturer
+  ' Read CID to identify manufacturer and serial number
   if readCID(@cid)
     card_mfr_id := parseMfrId(@cid)
+    ' Extract PSN (Product Serial Number) from CID bytes 9-12 (big-endian)
+    card_serial_number := BYTE[@cid][9] << 24 | BYTE[@cid][10] << 16 | BYTE[@cid][11] << 8 | BYTE[@cid][12]
+    debug("  [identifyCard] PSN=$", uhex_(card_serial_number))
     case card_mfr_id
       $1D:                                                                      ' AData/PNY
         card_is_slow := true
@@ -5437,6 +5618,7 @@ PRI identifyCard() | cid[4], csd[4]
   else
     debug("  [identifyCard] WARNING: Could not read CID")
     card_mfr_id := 0
+    card_serial_number := 0
     card_is_slow := false
 
   ' Read CSD to get maximum speed and timeouts
@@ -5898,31 +6080,60 @@ PRI readSDStatus(p_buf) : result | t, i
   debug("  [readSDStatus] Success")
   return true
 
-PUB newDirectory(dev, name_ptr) : result
+PUB newDirectory(dev, name_ptr) : ok
 '' Create a new directory (multi-cog safe) in current directory.
+'' SD: creates a FAT32 directory entry.
+'' Flash: no-op success (directories are implicit from path-segmented filenames).
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated directory name string
-'' @returns result - TRUE on success, FALSE if directory exists or error
+'' @returns ok - TRUE on success, FALSE if directory exists or error
 
-  result := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
+  case dev
+    DEV_SD:
+      ok := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
+      if ok == SUCCESS
+        return true
+      else
+        set_error(ok)
+        return false
+    DEV_FLASH:
+      ' Flash directories are implicit — they exist when files with matching path prefixes exist.
+      ' mkdir just validates the request and succeeds. Empty directories vanish naturally.
+      ifnot flash_mounted
+        set_error(E_NOT_MOUNTED)
+        return false
+      return true
+    other:
+      set_error(E_BAD_DEVICE)
+      return false
 
-PUB changeDirectory(dev, name_ptr) : result
+PUB changeDirectory(dev, name_ptr) : ok
 '' Change directory (multi-cog safe) - changes current directory.
+'' SD: navigates FAT32 directory tree via worker cog.
+'' Flash: updates per-cog CWD prefix string (caller-side, no worker command).
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated directory name string
-'' @returns result - TRUE on success, FALSE if not found
+'' @returns ok - TRUE on success, FALSE if not found
 
-  result := send_command(CMD_CHDIR, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
+  case dev
+    DEV_SD:
+      ok := send_command(CMD_CHDIR, name_ptr, 0, 0, 0)
+      if ok == SUCCESS
+        return true
+      else
+        set_error(ok)
+        return false
+    DEV_FLASH:
+      ifnot flash_mounted
+        set_error(E_NOT_MOUNTED)
+        return false
+      fl_change_cwd(name_ptr)
+      return true
+    other:
+      set_error(E_BAD_DEVICE)
+      return false
 
 PUB unmount(dev) : status | did_unmount
 '' Unmount one or both filesystems (multi-cog safe).
@@ -5973,9 +6184,10 @@ PUB sync() : result
 ' Multi-file support with independent file handles
 ' ═══════════════════════════════════════════════════════════════════════════
 
-PUB openFileRead(dev, p_path) : handle
+PUB openFileRead(dev, p_path) : handle | fl_path[32]
 '' Open file for reading (V3 multi-file) - opens existing file and returns handle.
 '' Multiple files can be open simultaneously with independent positions.
+'' Flash: CWD prefix is automatically prepended to the filename.
 '' Use closeFileHandle() when done.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
@@ -5987,7 +6199,8 @@ PUB openFileRead(dev, p_path) : handle
       send_command(CMD_OPEN_READ, p_path, 0, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
-      send_command(CMD_FLASH_OPEN, p_path, FILEMODE_READ, 0, 0)
+      fl_prepend_cwd(@fl_path, p_path)
+      send_command(CMD_FLASH_OPEN, @fl_path, FILEMODE_READ, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     other:
       return set_error(E_BAD_DEVICE)
@@ -5998,9 +6211,10 @@ PUB openFileRead(dev, p_path) : handle
     set_error(handle)
   return handle
 
-PUB openFileWrite(dev, p_path) : handle
+PUB openFileWrite(dev, p_path) : handle | fl_path[32]
 '' Open file for writing/append (V3 multi-file) - opens for appending.
 '' SD: opens for append. Flash: opens for write (overwrites).
+'' Flash: CWD prefix is automatically prepended to the filename.
 '' Use closeFileHandle() when done to flush data.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
@@ -6012,7 +6226,8 @@ PUB openFileWrite(dev, p_path) : handle
       send_command(CMD_OPEN_WRITE, p_path, 0, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
-      send_command(CMD_FLASH_OPEN, p_path, FILEMODE_WRITE, 0, 0)
+      fl_prepend_cwd(@fl_path, p_path)
+      send_command(CMD_FLASH_OPEN, @fl_path, FILEMODE_WRITE, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     other:
       return set_error(E_BAD_DEVICE)
@@ -6023,9 +6238,10 @@ PUB openFileWrite(dev, p_path) : handle
     set_error(handle)
   return handle
 
-PUB createFileNew(dev, p_path) : handle
+PUB createFileNew(dev, p_path) : handle | fl_path[32]
 '' Create new file for writing (V3 multi-file) - creates and opens for writing.
 '' SD: returns error if file exists. Flash: opens for write (overwrites if exists).
+'' Flash: CWD prefix is automatically prepended to the filename.
 '' Use closeFileHandle() when done to flush data and finalize size.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
@@ -6037,7 +6253,8 @@ PUB createFileNew(dev, p_path) : handle
       send_command(CMD_CREATE, p_path, 0, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
-      send_command(CMD_FLASH_OPEN, p_path, FILEMODE_WRITE, 0, 0)
+      fl_prepend_cwd(@fl_path, p_path)
+      send_command(CMD_FLASH_OPEN, @fl_path, FILEMODE_WRITE, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     other:
       return set_error(E_BAD_DEVICE)
@@ -6142,29 +6359,49 @@ PUB seekHandle(handle, position) : status
     set_error(status)
   return status
 
+PUB seek(handle, position, whence) : end_position | abs_pos
+'' Seek within a file with whence parameter (SD or Flash).
+'' SK_FILE_START: absolute seek to position.
+'' SK_CURRENT_POSN: relative seek by offset from current position.
+''
+'' @param handle - Valid file handle
+'' @param position - Byte position (absolute) or offset (relative)
+'' @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
+'' @returns end_position - Resulting position, or negative error code
+
+  ifnot validateHandle(handle)
+    return set_error(E_INVALID_HANDLE)
+
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FLASH_SEEK, handle, position, whence, 0)
+    end_position := LONG[@saved_data0][COGID()]
+  else
+    ' SD: compute absolute position based on whence
+    if whence == SK_CURRENT_POSN
+      abs_pos := tellHandle(handle)
+      if abs_pos < 0
+        return abs_pos
+      abs_pos += position
+    else
+      abs_pos := position
+    if send_command(CMD_SEEK_H, handle, abs_pos, 0, 0) == SUCCESS
+      end_position := abs_pos
+    else
+      end_position := error()
+  if end_position < 0
+    set_error(end_position)
+  return end_position
+
 PUB flashSeek(handle, position, whence) : end_position
 '' Seek within a Flash file with whence parameter (SK_FILE_START or SK_CURRENT_POSN).
-'' Flash-only — SD files should use seekHandle() which is absolute-only.
+'' Deprecated — use seek(handle, position, whence) instead (works for both devices).
 ''
 '' @param handle - Valid Flash file handle
 '' @param position - Byte position (absolute) or offset (relative)
 '' @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
 '' @returns end_position - Resulting position, or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
-  ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
-
-  if h_device[handle] <> DEV_FLASH
-    return set_error(E_BAD_DEVICE)
-
-  send_command(CMD_FLASH_SEEK, handle, position, whence, 0)
-  end_position := LONG[@saved_data0][COGID()]
-  if end_position < 0
-    debug("  [flashSeek] Failed: ", sdec_(end_position))
-    set_error(end_position)
-  return end_position
+  return seek(handle, position, whence)
 
 PUB tellHandle(handle) : position | cmd_status
 '' Get current position (V3 multi-file) - returns current byte position in file.
@@ -6327,8 +6564,9 @@ PRI countFreeClusters() : count | fat_idx, entry
     fat_idx += 4
   fat_sec_in_buf := -1                                                          '  invalidate FAT buffer
 
-PUB deleteFile(dev, name_ptr) : deleted | status
+PUB deleteFile(dev, name_ptr) : deleted | status, fl_path[32]
 '' Delete file (multi-cog safe) - deletes file from current directory.
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated filename string
@@ -6340,7 +6578,8 @@ PUB deleteFile(dev, name_ptr) : deleted | status
     DEV_FLASH:
       ifnot flash_mounted
         return set_error(E_NOT_MOUNTED)
-      status := send_command(CMD_FLASH_DELETE, name_ptr, 0, 0, 0)
+      fl_prepend_cwd(@fl_path, name_ptr)
+      status := send_command(CMD_FLASH_DELETE, @fl_path, 0, 0, 0)
     other:
       set_error(E_BAD_DEVICE)
       return false
@@ -6350,8 +6589,9 @@ PUB deleteFile(dev, name_ptr) : deleted | status
     set_error(status)
     return false
 
-PUB rename(dev, old_name, new_name) : renamed | status
+PUB rename(dev, old_name, new_name) : renamed | status, fl_old[32], fl_new[32]
 '' Rename file or directory (multi-cog safe).
+'' Flash: CWD prefix is automatically prepended to both names.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param old_name - Pointer to current name string
@@ -6364,7 +6604,9 @@ PUB rename(dev, old_name, new_name) : renamed | status
     DEV_FLASH:
       ifnot flash_mounted
         return set_error(E_NOT_MOUNTED)
-      status := send_command(CMD_FLASH_RENAME, old_name, new_name, 0, 0)
+      fl_prepend_cwd(@fl_old, old_name)
+      fl_prepend_cwd(@fl_new, new_name)
+      status := send_command(CMD_FLASH_RENAME, @fl_old, @fl_new, 0, 0)
     other:
       set_error(E_BAD_DEVICE)
       return false
@@ -6374,19 +6616,30 @@ PUB rename(dev, old_name, new_name) : renamed | status
     set_error(status)
     return false
 
-PUB moveFile(dev, name_ptr, dest_folder) : result
+PUB moveFile(dev, name_ptr, dest_folder) : ok | status
 '' Move file to another directory (multi-cog safe).
+'' SD: moves file via FAT32 directory manipulation.
+'' Flash: not supported (use rename with full path instead).
 ''
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to filename to move
 '' @param dest_folder - Pointer to destination folder name
-'' @returns result - TRUE on success, FALSE on error
+'' @returns ok - TRUE on success, FALSE on error
 
-  result := send_command(CMD_MOVEFILE, name_ptr, dest_folder, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
+  case dev
+    DEV_SD:
+      status := send_command(CMD_MOVEFILE, name_ptr, dest_folder, 0, 0)
+      if status == SUCCESS
+        return true
+      else
+        set_error(status)
+        return false
+    DEV_FLASH:
+      set_error(E_NOT_SUPPORTED)
+      return false
+    other:
+      set_error(E_BAD_DEVICE)
+      return false
 
 PUB freeSpace(dev) : free_count
 '' Get free space (multi-cog safe).
@@ -6439,16 +6692,26 @@ PUB readDirectory(entry) : result
 
 PUB openDirectory(dev, p_path) : handle
 '' Open directory for enumeration (multi-cog safe) - returns handle for iterating entries.
-'' Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
+'' SD only. Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
 '' Pass "" or "." to enumerate calling cog's current working directory.
 '' Handles share the existing file handle pool (MAX_OPEN_FILES total).
+'' Flash: Not supported — use directory() for Flash file iteration with CWD filtering.
 ''
+'' @param dev - DEV_SD only (DEV_FLASH returns E_NOT_SUPPORTED)
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - Handle on success, negative error code on failure
 
-  send_command(CMD_OPEN_DIR, p_path, 0, 0, 0)
-  handle := LONG[@saved_data0][COGID()]
-  return handle
+  case dev
+    DEV_SD:
+      send_command(CMD_OPEN_DIR, p_path, 0, 0, 0)
+      handle := LONG[@saved_data0][COGID()]
+      return handle
+    DEV_FLASH:
+      set_error(E_NOT_SUPPORTED)
+      return E_NOT_SUPPORTED
+    other:
+      set_error(E_BAD_DEVICE)
+      return E_BAD_DEVICE
 
 PUB readDirectoryHandle(handle) : p_entry
 '' Read next entry from directory handle (multi-cog safe) - returns pointer to entry data.
@@ -6484,9 +6747,8 @@ PUB serial_number(dev) : sn_hi, sn_lo | status
 
   case dev
     DEV_SD:
-      ' TODO: read CID serial via CMD_READ_CID (requires SD_INCLUDE_REGISTERS)
       sn_hi := 0
-      sn_lo := 0
+      sn_lo := card_serial_number
     DEV_FLASH:
       if not flash_mounted
         set_error(E_NOT_MOUNTED)
@@ -6533,142 +6795,156 @@ PUB format(dev) : status
       set_error(E_BAD_DEVICE)
       return E_BAD_DEVICE
 
-PUB wr_byte(handle, byte_value) : status
-'' Write a byte to Flash file handle.
+PUB wr_byte(handle, byte_value) : status | bytes_written
+'' Write a byte to file handle (SD or Flash).
 ''
 '' @param handle - Handle to file open for write
 '' @param byte_value - Byte value to write
 '' @returns status - SUCCESS or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
-  status := send_command(CMD_FL_WR_BYTE, handle, byte_value, 0, 0)
+    return set_error(E_INVALID_HANDLE)
+  if h_device[handle] == DEV_FLASH
+    status := send_command(CMD_FL_WR_BYTE, handle, byte_value, 0, 0)
+  else
+    bytes_written := writeHandle(handle, @byte_value, 1)
+    status := bytes_written < 0 ? bytes_written : SUCCESS
 
 PUB rd_byte(handle) : byte_value
-'' Read next byte from Flash file handle.
+'' Read next byte from file handle (SD or Flash).
 ''
 '' @param handle - Handle to file open for read
 '' @returns byte_value - Byte [0-255] or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
-  send_command(CMD_FL_RD_BYTE, handle, 0, 0, 0)
-  byte_value := LONG[@saved_data0][COGID()]
+    return set_error(E_INVALID_HANDLE)
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FL_RD_BYTE, handle, 0, 0, 0)
+    byte_value := LONG[@saved_data0][COGID()]
+  else
+    byte_value := 0
+    if readHandle(handle, @byte_value, 1) < 0
+      byte_value := error()
 
 PUB wr_word(handle, word_value) : status | bytes_written
-'' Write WORD (16-bit, little-endian) to Flash file handle.
+'' Write WORD (16-bit, little-endian) to file handle (SD or Flash).
 ''
 '' @param handle - Handle to file open for write
 '' @param word_value - 16-bit value to write
 '' @returns status - SUCCESS or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
   bytes_written := writeHandle(handle, @word_value, 2)
   status := bytes_written < 0 ? bytes_written : SUCCESS
 
 PUB rd_word(handle) : word_value | bytes_read
-'' Read next WORD (16-bit) from Flash file handle.
+'' Read next WORD (16-bit) from file handle (SD or Flash).
 ''
 '' @param handle - Handle to file open for read
 '' @returns word_value - WORD value or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
   word_value := 0
   bytes_read := readHandle(handle, @word_value, 2)
   if bytes_read <> 2
     return error()
 
 PUB wr_long(handle, long_value) : status | bytes_written
-'' Write LONG (32-bit, little-endian) to Flash file handle.
+'' Write LONG (32-bit, little-endian) to file handle (SD or Flash).
 ''
 '' @param handle - Handle to file open for write
 '' @param long_value - 32-bit value to write
 '' @returns status - SUCCESS or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
   bytes_written := writeHandle(handle, @long_value, 4)
   status := bytes_written < 0 ? bytes_written : SUCCESS
 
 PUB rd_long(handle) : long_value
-'' Read next LONG (32-bit) from Flash file handle.
+'' Read next LONG (32-bit) from file handle (SD or Flash).
 '' NOTE: Negative LONGs are valid data. Check error() after call.
 ''
 '' @param handle - Handle to file open for read
 '' @returns long_value - LONG value read from file
 
-  ifnot flash_mounted
-    set_error(E_NOT_MOUNTED)
-    return 0
   ifnot validateHandle(handle)
-    set_error(E_FLASH_BAD_HANDLE)
+    set_error(E_INVALID_HANDLE)
     return 0
   long_value := 0
   readHandle(handle, @long_value, 4)
 
 PUB wr_str(handle, p_str) : status | bytes_written
-'' Write string including terminator to Flash file handle.
+'' Write string including null terminator to file handle (SD or Flash).
 ''
 '' @param handle - Handle to file open for write
 '' @param p_str - Pointer to zero-terminated string
 '' @returns status - SUCCESS or negative error code
 
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
   ifnot validateHandle(handle)
-    return set_error(E_FLASH_BAD_HANDLE)
+    return set_error(E_INVALID_HANDLE)
   bytes_written := writeHandle(handle, p_str, strsize(p_str) + 1)
   status := bytes_written < 0 ? bytes_written : SUCCESS
 
-PUB rd_str(handle, p_str, count) : bytes_read
-'' Read zero-terminated string from Flash file handle.
-'' Reads byte by byte until terminator found or count reached.
+PUB rd_str(handle, p_str, count) : bytes_read | ch
+'' Read zero-terminated string from file handle (SD or Flash).
+'' Reads byte by byte until null terminator found or count reached.
 ''
 '' @param handle - Handle to file open for read
 '' @param p_str - Pointer to destination buffer
 '' @param count - Maximum bytes to read (including terminator)
 '' @returns bytes_read - String length (not including terminator), or negative on error
 
-  ifnot flash_mounted
-    set_error(E_NOT_MOUNTED)
-    return 0
   ifnot validateHandle(handle)
-    set_error(E_FLASH_BAD_HANDLE)
+    set_error(E_INVALID_HANDLE)
     return 0
-  send_command(CMD_FL_RD_STR, handle, p_str, count, 0)
-  bytes_read := LONG[@saved_data0][COGID()]
+  if h_device[handle] == DEV_FLASH
+    send_command(CMD_FL_RD_STR, handle, p_str, count, 0)
+    bytes_read := LONG[@saved_data0][COGID()]
+  else
+    ' SD: read byte-by-byte until null terminator or count reached
+    bytes_read := 0
+    repeat count
+      ch := rd_byte(handle)
+      if ch < 0
+        return ch                                                               ' Error
+      BYTE[p_str][bytes_read] := ch
+      if ch == 0
+        return bytes_read                                                       ' Found terminator
+      bytes_read++
+    BYTE[p_str][bytes_read] := 0                                                ' Ensure null termination
+    return bytes_read
 
-PUB file_size_unused(dev, p_filename) : size_unused
-'' Get unused bytes in last block of a Flash file.
+PUB file_size_unused(dev, p_filename) : size_unused | fl_path[32]
+'' Get unused (slack) bytes for a file.
+'' SD: allocated cluster space minus actual file size.
+'' Flash: unused bytes in last block. CWD prefix is automatically prepended.
 ''
-'' @param dev - Must be DEV_FLASH
+'' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
 '' @returns size_unused - Unused byte count, or negative error code
 
-  if dev <> DEV_FLASH
-    return set_error(E_BAD_DEVICE)
-  if cog_id == -1
-    return set_error(E_NOT_MOUNTED)
-  ifnot flash_mounted
-    return set_error(E_NOT_MOUNTED)
-  send_command(CMD_FL_FILE_SIZE_UNUSED, p_filename, 0, 0, 0)
-  size_unused := LONG[@saved_data0][COGID()]
+  case dev
+    DEV_SD:
+      if send_command(CMD_SD_FILE_SIZE_UNUSED, p_filename, 0, 0, 0) == SUCCESS
+        size_unused := LONG[@saved_data0][COGID()]
+      else
+        size_unused := error()
+    DEV_FLASH:
+      ifnot flash_mounted
+        return set_error(E_NOT_MOUNTED)
+      fl_prepend_cwd(@fl_path, p_filename)
+      send_command(CMD_FL_FILE_SIZE_UNUSED, @fl_path, 0, 0, 0)
+      size_unused := LONG[@saved_data0][COGID()]
+    other:
+      size_unused := set_error(E_BAD_DEVICE)
 
-PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count
+PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count | fl_path[32]
 '' Diagnostic: count bytes in Flash file by filename.
 '' Used by test utilities for file statistics validation.
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param p_filename - Pointer to filename string
 '' @returns bytes_used - Bytes written to file (or E_FILE_NOT_FOUND)
@@ -6678,26 +6954,37 @@ PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count
   ifnot flash_mounted
     bytes_used := set_error(E_NOT_MOUNTED)
     return
-  send_command(CMD_FL_COUNT_BYTES, p_filename, 0, 0, 0)
+  fl_prepend_cwd(@fl_path, p_filename)
+  send_command(CMD_FL_COUNT_BYTES, @fl_path, 0, 0, 0)
   bytes_used := LONG[@saved_data0][COGID()]
   bytes_free := LONG[@saved_data1][COGID()]
   block_count := LONG[@saved_data2][COGID()]
 
-PUB stats(dev) : used, free_ct, file_count
+PUB stats(dev) : used, free_ct, file_count | dirHandle, p_entry
 '' Get device statistics.
-'' SD: used/free sectors, file count (not implemented).
-'' Flash: used/free blocks, file count (Phase 2+).
+'' SD: used/free sectors, file count in CWD.
+'' Flash: used/free blocks, file count.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @returns used - Used blocks/sectors
 '' @returns free_ct - Free blocks/sectors
-'' @returns file_count - Number of files
+'' @returns file_count - Number of files in CWD
 
   case dev
     DEV_SD:
       free_ct := freeSpace(DEV_SD)
-      used := 0
+      used := 0                                                                 ' Total - free requires SD_INCLUDE_RAW
+      ' Count files in current working directory
       file_count := 0
+      dirHandle := openDirectory(DEV_SD, @".")
+      if dirHandle >= 0
+        repeat
+          p_entry := readDirectoryHandle(dirHandle)
+          if p_entry == 0
+            quit
+          if not (BYTE[p_entry][11] & $10)                                      ' Skip directories (., .., subdirs)
+            file_count++
+        closeDirectoryHandle(dirHandle)
     DEV_FLASH:
       ifnot flash_mounted
         used := set_error(E_NOT_MOUNTED)
@@ -6711,14 +6998,16 @@ PUB stats(dev) : used, free_ct, file_count
       free_ct := 0
       file_count := 0
 
-PUB directory(dev, p_block_id, p_filename, p_file_size) : status
-'' Get next Flash directory entry (iterates files).
+PUB directory(dev, p_block_id, p_filename, p_file_size) : status | tmpName[32]
+'' Get next Flash directory entry (iterates files), filtered by CWD.
 '' Flash only — caller sets LONG[p_block_id] to 0 before first call, auto-incremented.
 '' When no more files, p_filename[0] will be 0.
+'' Only returns files that are direct children of the current working directory.
+'' The CWD prefix is stripped — p_filename receives the bare filename only.
 ''
 '' @param dev - Must be DEV_FLASH
 '' @param p_block_id - Pointer to LONG block ID counter (auto-advanced)
-'' @param p_filename - Pointer to 128-byte buffer for filename
+'' @param p_filename - Pointer to 128-byte buffer for filename (receives bare name)
 '' @param p_file_size - Pointer to LONG receiving file size
 '' @returns status - SUCCESS or error code
 
@@ -6729,11 +7018,20 @@ PUB directory(dev, p_block_id, p_filename, p_file_size) : status
   ifnot flash_mounted
     return set_error(E_NOT_MOUNTED)
 
-  send_command(CMD_FLASH_DIRECTORY, p_block_id, p_filename, p_file_size, 0)
-  return SUCCESS
+  ' Loop until we find a CWD-matching file or exhaust directory
+  repeat
+    send_command(CMD_FLASH_DIRECTORY, p_block_id, @tmpName, p_file_size, 0)
+    if BYTE[@tmpName][0] == 0
+      ' No more files
+      BYTE[p_filename][0] := 0
+      return SUCCESS
+    if fl_cwd_matches(@tmpName, p_filename)
+      ' Match found — p_filename now has the bare (CWD-stripped) name
+      return SUCCESS
 
-PUB exists(dev, p_filename) : found
+PUB exists(dev, p_filename) : found | fl_path[32]
 '' Check if file exists on device.
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
@@ -6741,23 +7039,25 @@ PUB exists(dev, p_filename) : found
 
   case dev
     DEV_SD:
-      ' For SD, attempt to open for read and close — if succeeds, file exists
-      ' TODO: more efficient implementation using searchDirectory
-      found := false
+      if send_command(CMD_SD_EXISTS, p_filename, 0, 0, 0) == SUCCESS
+        found := LONG[@saved_data0][COGID()] <> 0
+      else
+        found := false
     DEV_FLASH:
       ifnot flash_mounted
         set_error(E_NOT_MOUNTED)
         return false
-      if send_command(CMD_FLASH_EXISTS, p_filename, 0, 0, 0) == SUCCESS
+      fl_prepend_cwd(@fl_path, p_filename)
+      if send_command(CMD_FLASH_EXISTS, @fl_path, 0, 0, 0) == SUCCESS
         found := LONG[@saved_data0][COGID()] <> 0
       else
         found := false
     other:
       found := false
 
-PUB file_size(dev, p_filename) : size | cmd_status
+PUB file_size(dev, p_filename) : size | cmd_status, fl_path[32]
 '' Get file size by name (without opening).
-'' Flash-style by-name size query (Phase 2+).
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
@@ -6765,12 +7065,16 @@ PUB file_size(dev, p_filename) : size | cmd_status
 
   case dev
     DEV_SD:
-      ' Not directly supported for SD (use openFileRead + fileSizeHandle)
-      size := E_NOT_SUPPORTED
+      cmd_status := send_command(CMD_SD_FILE_SIZE, p_filename, 0, 0, 0)
+      if cmd_status == SUCCESS
+        size := LONG[@saved_data0][COGID()]
+      else
+        size := cmd_status
     DEV_FLASH:
       ifnot flash_mounted
         return set_error(E_NOT_MOUNTED)
-      cmd_status := send_command(CMD_FLASH_FILE_SIZE, p_filename, 0, 0, 0)
+      fl_prepend_cwd(@fl_path, p_filename)
+      cmd_status := send_command(CMD_FLASH_FILE_SIZE, @fl_path, 0, 0, 0)
       if cmd_status == SUCCESS
         size := LONG[@saved_data0][COGID()]
       else
@@ -6784,9 +7088,10 @@ CON ' ════════════════════════�
     ' SD operations mapped to SD handle commands where applicable.
     ' ═══════════════════════════════════════════════════════════════════════════
 
-PUB open(dev, p_filename, mode) : handle
+PUB open(dev, p_filename, mode) : handle | fl_path[32]
 '' Open file with mode (Flash-style). Modes: FILEMODE_READ, FILEMODE_WRITE,
 '' FILEMODE_APPEND, FILEMODE_READ_EXTENDED, FILEMODE_WRITE_EXTENDED.
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
@@ -6799,7 +7104,11 @@ PUB open(dev, p_filename, mode) : handle
       case mode
         FILEMODE_READ:
           return openFileRead(DEV_SD, p_filename)
-        FILEMODE_WRITE, FILEMODE_APPEND:
+        FILEMODE_WRITE:
+          ' Truncate: delete existing file (if any), then create fresh
+          deleteFile(DEV_SD, p_filename)                                        ' Ignore error (file may not exist)
+          return createFileNew(DEV_SD, p_filename)
+        FILEMODE_APPEND:
           return openFileWrite(DEV_SD, p_filename)
         other:
           set_error(E_NOT_SUPPORTED)
@@ -6807,7 +7116,8 @@ PUB open(dev, p_filename, mode) : handle
     DEV_FLASH:
       ifnot flash_mounted
         return set_error(E_NOT_MOUNTED)
-      send_command(CMD_FLASH_OPEN, p_filename, mode, 0, 0)
+      fl_prepend_cwd(@fl_path, p_filename)
+      send_command(CMD_FLASH_OPEN, @fl_path, mode, 0, 0)
       handle := LONG[@saved_data0][COGID()]
       if handle < 0
         set_error(handle)
@@ -6816,8 +7126,9 @@ PUB open(dev, p_filename, mode) : handle
       set_error(E_BAD_DEVICE)
       return E_BAD_DEVICE
 
-PUB open_circular(dev, p_filename, mode, max_file_length) : handle
+PUB open_circular(dev, p_filename, mode, max_file_length) : handle | fl_path[32]
 '' Open circular file (Flash-specific, Phase 2+).
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_FLASH only
 '' @param p_filename - Pointer to filename string
@@ -6830,14 +7141,16 @@ PUB open_circular(dev, p_filename, mode, max_file_length) : handle
     return E_NOT_SUPPORTED
   ifnot flash_mounted
     return set_error(E_NOT_MOUNTED)
-  send_command(CMD_FLASH_OPEN_CIRC, p_filename, mode, max_file_length, 0)
+  fl_prepend_cwd(@fl_path, p_filename)
+  send_command(CMD_FLASH_OPEN_CIRC, @fl_path, mode, max_file_length, 0)
   handle := LONG[@saved_data0][COGID()]
   if handle < 0
     set_error(handle)
   return handle
 
-PUB create_file(dev, p_filename, fill_value, byte_count) : status
+PUB create_file(dev, p_filename, fill_value, byte_count) : status | fl_path[32]
 '' Pre-allocate Flash file (Flash-specific, Phase 2+).
+'' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_FLASH only
 '' @param p_filename - Pointer to filename string
@@ -6850,7 +7163,8 @@ PUB create_file(dev, p_filename, fill_value, byte_count) : status
     return E_NOT_SUPPORTED
   ifnot flash_mounted
     return set_error(E_NOT_MOUNTED)
-  status := send_command(CMD_FLASH_CREATE_FILE, p_filename, fill_value, byte_count, 0)
+  fl_prepend_cwd(@fl_path, p_filename)
+  status := send_command(CMD_FLASH_CREATE_FILE, @fl_path, fill_value, byte_count, 0)
   if status <> SUCCESS
     set_error(status)
   return status
@@ -7509,7 +7823,7 @@ PRI initSPIPins()
   ' Configure with FLTL -> WRPIN, then WXPIN/DRVL in setSPISpeed()
   ' ════════════════════════════════════════════════════════════════════
   pinfloat(sck)                                                                 ' FLTL - reset smart pin
-  wrpin(sck, spi_clk_mode)                                                      ' P_TRANSITION | P_OE | P_INVERT_OUTPUT
+  wrpin(sck, spi_clk_mode)                                                      ' P_TRANSITION | P_OE
   ' X register (half-period) will be set by setSPISpeed()
   debug("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting setSPISpeed)")
 

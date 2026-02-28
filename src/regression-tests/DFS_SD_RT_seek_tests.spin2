@@ -30,7 +30,7 @@ CON
      TEST_FILE_SIZE = 2048    ' 4 sectors worth
 
 OBJ
-    dfs   : "dual_fs"
+    dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
 
 DAT

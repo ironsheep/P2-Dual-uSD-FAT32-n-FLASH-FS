@@ -1,0 +1,88 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_FAT32_audit.spin2
+''   Purpose.... FAT32 filesystem audit tool (thin wrapper around isp_fsck_utility)
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 21 FEB 2026
+''
+'' =================================================================================================
+''
+''  Thin wrapper that launches the Audit library in a temporary cog
+''  and displays output via debug(). Read-only — does not modify card.
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 320_000_000
+
+    ' Pin configuration for P2 Edge with SD card
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+OBJ
+
+    fsck : "isp_fsck_utility"
+
+PUB go() | pStr
+'' Main entry point - runs FAT32 filesystem audit.
+
+    debug("==============================================")
+    debug("  FAT32 Audit (via isp_fsck_utility)")
+    debug("==============================================")
+    debug(" ")
+
+    if not fsck.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("FATAL: Could not start Audit cog")
+        debug("END_SESSION")
+        return
+
+    ' Pump FIFO output to debug
+    repeat
+        pStr := fsck.getOutput()
+        if pStr
+            debug(zstr_(pStr))
+        elseif fsck.isDone()
+            ' Drain any remaining output
+            repeat while (pStr := fsck.getOutput())
+                debug(zstr_(pStr))
+            quit
+
+    fsck.stop()
+
+    debug(" ")
+    debug("END_SESSION")
+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

@@ -40,7 +40,7 @@ CON
      STATUS_FAIL      = -1
 
 OBJ
-    dfs   : "dual_fs"
+    dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
 
 DAT

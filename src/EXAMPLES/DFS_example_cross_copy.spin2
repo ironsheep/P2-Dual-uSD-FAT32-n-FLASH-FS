@@ -30,7 +30,7 @@ CON
 
 OBJ
 
-    dfs : "dual_fs"
+    dfs : "dual_sd_fat32_flash_fs"
 
 DAT
 

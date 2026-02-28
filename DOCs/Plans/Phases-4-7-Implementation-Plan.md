@@ -14,7 +14,7 @@
 | Both/cross-device tests | `DFS_RT_` | `DFS_RT_phase6_cross_device.spin2` |
 | Utilities/demos | `DFS_` | `DFS_demo_shell.spin2` |
 
-OBJ instance name: `dfs : "dual_fs"` (all `dfs.` prefixes throughout).
+OBJ instance name: `dfs : "dual_sd_fat32_flash_fs"` (all `dfs.` prefixes throughout).
 
 ### Existing Phase 1-3 Test Renames (housekeeping)
 
@@ -24,7 +24,7 @@ OBJ instance name: `dfs : "dual_fs"` (all `dfs.` prefixes throughout).
 | `DUAL_RT_phase2_verify.spin2` | `DFS_RT_phase2_verify.spin2` | Both devices |
 | `DUAL_RT_phase3_verify.spin2` | `DFS_RT_phase3_verify.spin2` | Both devices |
 
-Also update OBJ inside each: `fs : "dual_fs"` → `dfs : "dual_fs"`, and all `fs.` → `dfs.`
+Also update OBJ inside each: `fs : "dual_sd_fat32_flash_fs"` → `dfs : "dual_sd_fat32_flash_fs"`, and all `fs.` → `dfs.`
 
 ---
 
@@ -32,11 +32,11 @@ Also update OBJ inside each: `fs : "dual_fs"` → `dfs : "dual_fs"`, and all `fs
 
 ## Context
 
-19 SD regression test suites (345+ tests) in `REF-FLASH-uSD/uSD-FAT32/regression-tests/` currently test against `micro_sd_fat32_fs.spin2` directly. Phase 4 copies each suite, renames it, and adapts it to test against `dual_fs.spin2`. No driver changes are needed — the unified driver already has full SD support.
+19 SD regression test suites (345+ tests) in `REF-FLASH-uSD/uSD-FAT32/regression-tests/` currently test against `micro_sd_fat32_fs.spin2` directly. Phase 4 copies each suite, renames it, and adapts it to test against `dual_sd_fat32_flash_fs.spin2`. No driver changes are needed — the unified driver already has full SD support.
 
 ## Key Files
 
-- `src/dual_fs.spin2` — Target driver (unchanged in this phase)
+- `src/dual_sd_fat32_flash_fs.spin2` — Target driver (unchanged in this phase)
 - `REF-FLASH-uSD/uSD-FAT32/regression-tests/SD_RT_*.spin2` — Source tests
 - `regression-tests/DFS_SD_RT_*.spin2` — Destination (new directory at project root)
 
@@ -49,7 +49,7 @@ Create `regression-tests/` at the project root. Rename prefix `SD_RT_` to `DFS_S
 ### OBJ change (all files)
 ```spin2
 ' OLD:  sd    : "micro_sd_fat32_fs"
-' NEW:  dfs   : "dual_fs"
+' NEW:  dfs   : "dual_sd_fat32_flash_fs"
 ```
 All `sd.` prefixes become `dfs.` throughout.
 
@@ -98,7 +98,7 @@ Call `init()` once at top of `go()`. Then `mount(DEV_SD)` / `unmount(DEV_SD)` fo
 | 5 | raw_sector_tests | ~17 | MED | Custom framework (recordPass/recordFail) |
 | 5 | multiblock_tests | ~5 | MED | Large VAR buffers (64KB) — check compile size |
 | 6 | multicog_tests | 14 | HIGH | Singleton init pattern, worker cog legacy API |
-| 7 | format_tests | 46 | HIGH | Dual-driver binary (format utility + dual_fs) |
+| 7 | format_tests | 46 | HIGH | Dual-driver binary (format utility + dual_sd_fat32_flash_fs) |
 | 8 | testcard_validation | ~20 | MED | Requires pre-formatted test card |
 
 **Excluded**: `SD_RT_fifo_tests.spin2` — tests `isp_string_fifo`, not the SD driver.
@@ -106,7 +106,7 @@ Call `init()` once at top of `go()`. Then `mount(DEV_SD)` / `unmount(DEV_SD)` fo
 ## Per-File Migration Procedure
 
 1. Copy + rename (`SD_RT_xxx` → `DFS_SD_RT_xxx`)
-2. Update OBJ: `sd : "micro_sd_fat32_fs"` → `dfs : "dual_fs"`
+2. Update OBJ: `sd : "micro_sd_fat32_fs"` → `dfs : "dual_sd_fat32_flash_fs"`
 3. Add `DEBUG_BAUD = 2_000_000` to CON
 4. Add `dfs.init()` before first mount
 5. Global replace `sd.` → `dfs.`
@@ -124,7 +124,7 @@ Keep `isp_format_utility.spin2` using the reference driver (it runs in its own c
 ```spin2
 OBJ
   fmt  : "isp_format_utility"    ' Uses micro_sd_fat32_fs internally
-  dfs  : "dual_fs"               ' For verification
+  dfs  : "dual_sd_fat32_flash_fs"               ' For verification
 ```
 Format via `fmt`, then verify via `dfs`. Call `fmt.stop()` before `dfs.init()`.
 
@@ -141,11 +141,11 @@ Format via `fmt`, then verify via `dfs`. Call `fmt.stop()` before `dfs.init()`.
 
 ## Context
 
-9 Flash test suites (419+ tests) in `REF-FLASH-uSD/FLASH/RegresssionTests/` test against `flash_fs.spin2`. Phase 5 migrates them to `dual_fs.spin2`. This is significantly more complex than Phase 4 because: (1) several Flash APIs are missing from the unified driver, (2) the test utility is tightly coupled to Flash internals, and (3) error codes have different values.
+9 Flash test suites (419+ tests) in `REF-FLASH-uSD/FLASH/RegresssionTests/` test against `flash_fs.spin2`. Phase 5 migrates them to `dual_sd_fat32_flash_fs.spin2`. This is significantly more complex than Phase 4 because: (1) several Flash APIs are missing from the unified driver, (2) the test utility is tightly coupled to Flash internals, and (3) error codes have different values.
 
 ## Key Files
 
-- `src/dual_fs.spin2` — Must be extended with missing APIs
+- `src/dual_sd_fat32_flash_fs.spin2` — Must be extended with missing APIs
 - `REF-FLASH-uSD/FLASH/RegresssionTests/RT_*.spin2` — Source tests
 - `REF-FLASH-uSD/FLASH/RegresssionTests/RT_utilities.spin2` — Flash test utility (817 lines)
 - `src/isp_rt_utilities.spin2` — SD test utility (base framework)
@@ -211,7 +211,7 @@ Create `src/DFS_FL_RT_utilities.spin2` — a superset of `isp_rt_utilities.spin2
 - All basic test methods (startTest, evaluateBool, evaluateSingleValue, etc.)
 - Adapted Flash methods: evaluateSubStatus, evaluateHandle, evaluateFSStats, evaluateFileStats, ShowStats, showFiles, showError, ensureEmptyDirectory, blockCountForFileSize, bytesAllocatedFor, ReadFile
 - Stubbed/simplified: showPendingCommitChain, showFileChain, showMountSignatures (depend on unported TEST_ methods)
-- Uses `dfs : "dual_fs"` instead of `flash : "flash_fs"`
+- Uses `dfs : "dual_sd_fat32_flash_fs"` instead of `flash : "flash_fs"`
 
 ## Part C: API Transformation Rules
 
@@ -296,7 +296,7 @@ The power of this driver is that callers write device-agnostic code. Every API t
 
 ## Key Files
 
-- `src/dual_fs.spin2` — Directory emulation, file_size_unused(DEV_SD), readRawBlock, copyFile
+- `src/dual_sd_fat32_flash_fs.spin2` — Directory emulation, file_size_unused(DEV_SD), readRawBlock, copyFile
 - `src/regression-tests/DFS_RT_phase6_cross_device.spin2` — Cross-device test suite
 - `src/regression-tests/DFS_RT_phase6_flash_dir.spin2` — Flash directory emulation tests
 
@@ -468,7 +468,7 @@ Phase 7 creates user-facing tools that leverage the unified driver: an interacti
 
 ## Key Files
 
-- `src/dual_fs.spin2` — Add Flash format dispatch (if not done in Phase 5)
+- `src/dual_sd_fat32_flash_fs.spin2` — Add Flash format dispatch (if not done in Phase 5)
 - `src/DFS_demo_shell.spin2` — New dual-device shell (~2000 lines)
 - `src/DFS_format.spin2` — Format utility wrapper
 - `src/DFS_benchmark.spin2` — Performance measurement
@@ -600,7 +600,7 @@ Defer to post-1.0. Document the API so it can be added without breaking changes.
 Execute phases **sequentially**. Each phase gates on the previous:
 
 1. **Phase 4** — SD test migration (mechanical transforms, no driver changes)
-2. **Phase 5 Prerequisites** — Add missing APIs to `dual_fs.spin2` (format, byte I/O, etc.)
+2. **Phase 5 Prerequisites** — Add missing APIs to `dual_sd_fat32_flash_fs.spin2` (format, byte I/O, etc.)
 3. **Phase 5** — Flash test migration (utility creation + test adaptation)
 4. **Phase 6** — API symmetry (Flash directory emulation, file_size_unused(SD), readRawBlock(Flash), copyFile) + cross-device tests
 5. **Phase 7** — Shell, utilities, examples

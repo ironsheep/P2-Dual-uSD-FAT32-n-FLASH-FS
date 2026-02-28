@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
 ''   File....... DFS_FL_RT_utilities.spin2
-''   Purpose.... Regression test utilities for Flash tests against dual_fs unified driver
+''   Purpose.... Regression test utilities for Flash tests against dual_sd_fat32_flash_fs unified driver
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -14,7 +14,7 @@
 '' adapted from RT_utilities.spin2 (Flash reference test utility).
 ''
 '' Key differences from RT_utilities.spin2:
-''   - Uses dfs : "dual_fs" instead of flash : "flash_fs"
+''   - Uses dfs : "dual_sd_fat32_flash_fs" instead of flash : "flash_fs"
 ''   - Per-cog VAR arrays (indexed by cogid()) for multi-cog test safety
 ''   - All flash.* calls replaced with dfs.* equivalents
 ''   - Error codes use unified dfs.E_* namespace
@@ -24,7 +24,7 @@
 
 CON
 
-  MAX_OPEN_FILES = 6          ' Default (match dual_fs default); overridable by parent OBJ
+  MAX_OPEN_FILES = 6          ' Default (match dual_sd_fat32_flash_fs default); overridable by parent OBJ
 
 #IFDEF __SPINTOOLS__
 #DEFINE MAX_OPEN_FILES
@@ -48,7 +48,7 @@ CON
 
 OBJ
 
-  dfs : "dual_fs"
+  dfs : "dual_sd_fat32_flash_fs"
 
 VAR { test stats vars }
 

@@ -1,0 +1,189 @@
+'' =================================================================================================
+''
+''   File....... isp_string_fifo.spin2
+''   Purpose.... Lock-free SPSC slot-based string FIFO for inter-cog communication
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 21 FEB 2026
+''   Updated.... 21 FEB 2026
+''
+'' =================================================================================================
+''
+''  Lock-free single-producer single-consumer (SPSC) string FIFO.
+''  Uses DAT storage (singleton) so both producer and consumer cogs
+''  see the same head/tail/slots data in hub RAM.
+''
+''  Design:
+''    - 16 slots x 128 bytes = 2 KB
+''    - Producer calls put() / putFmtN() — blocks (spin-waits) when full
+''    - Consumer calls hasOutput() / getOutput()
+''    - One slot is always kept empty to distinguish full from empty
+''      (usable capacity = NUM_SLOTS - 1 = 15)
+''
+''  IMPORTANT: Only one utility runs at a time. Call init() before each use.
+''
+'' =================================================================================================
+
+CON { suppress debug output }
+
+  DEBUG_DISABLE = 1
+
+CON { fifo dimensions }
+
+  NUM_SLOTS  = 16
+  SLOT_SIZE  = 128
+  FIFO_BYTES = NUM_SLOTS * SLOT_SIZE   ' 2048 bytes
+
+OBJ
+
+  sfmt : "isp_mem_strings"
+
+DAT { singleton FIFO state }
+
+head        LONG    0                   ' producer write index (0..NUM_SLOTS-1)
+tail        LONG    0                   ' consumer read index (0..NUM_SLOTS-1)
+slots       BYTE    0[FIFO_BYTES]       ' slot buffer
+
+PUB null()
+'' This is not a top level object
+
+'' =========================================================================
+'' Producer API (call from utility cog)
+'' =========================================================================
+
+PUB init()
+'' Reset FIFO to empty state
+'' Must be called before starting a new utility session
+
+    head := 0
+    tail := 0
+
+PUB put(pStr) | pSlot, nLen
+'' Copy a zero-terminated string into the next available FIFO slot.
+'' Blocks (spin-waits) if the FIFO is full until the consumer drains a slot.
+''
+'' @param pStr - pointer to source string (zero-terminated)
+
+    ' spin-wait while full: (head + 1) mod NUM_SLOTS == tail
+    repeat while ((head + 1) & (NUM_SLOTS - 1)) == tail
+
+    pSlot := @slots + (head * SLOT_SIZE)
+
+    ' copy up to SLOT_SIZE-1 chars, then terminate
+    nLen := strsize(pStr) <# (SLOT_SIZE - 1)
+    bytemove(pSlot, pStr, nLen)
+    byte[pSlot + nLen] := 0
+
+    ' advance head (publish to consumer)
+    head := (head + 1) & (NUM_SLOTS - 1)
+
+PUB putFmt0(pFmt) | pSlot
+'' Format a string with 0 arguments directly into a FIFO slot
+''
+'' @param pFmt - pointer to format string
+
+    repeat while ((head + 1) & (NUM_SLOTS - 1)) == tail
+
+    pSlot := @slots + (head * SLOT_SIZE)
+    sfmt.sFormatStr0(pSlot, SLOT_SIZE, pFmt)
+
+    head := (head + 1) & (NUM_SLOTS - 1)
+
+PUB putFmt1(pFmt, arg1) | pSlot
+'' Format a string with 1 argument directly into a FIFO slot
+''
+'' @param pFmt - pointer to format string
+'' @param arg1 - first argument
+
+    repeat while ((head + 1) & (NUM_SLOTS - 1)) == tail
+
+    pSlot := @slots + (head * SLOT_SIZE)
+    sfmt.sFormatStr1(pSlot, SLOT_SIZE, pFmt, arg1)
+
+    head := (head + 1) & (NUM_SLOTS - 1)
+
+PUB putFmt2(pFmt, arg1, arg2) | pSlot
+'' Format a string with 2 arguments directly into a FIFO slot
+''
+'' @param pFmt - pointer to format string
+'' @param arg1 - first argument
+'' @param arg2 - second argument
+
+    repeat while ((head + 1) & (NUM_SLOTS - 1)) == tail
+
+    pSlot := @slots + (head * SLOT_SIZE)
+    sfmt.sFormatStr2(pSlot, SLOT_SIZE, pFmt, arg1, arg2)
+
+    head := (head + 1) & (NUM_SLOTS - 1)
+
+PUB putFmt3(pFmt, arg1, arg2, arg3) | pSlot
+'' Format a string with 3 arguments directly into a FIFO slot
+''
+'' @param pFmt - pointer to format string
+'' @param arg1 - first argument
+'' @param arg2 - second argument
+'' @param arg3 - third argument
+
+    repeat while ((head + 1) & (NUM_SLOTS - 1)) == tail
+
+    pSlot := @slots + (head * SLOT_SIZE)
+    sfmt.sFormatStr3(pSlot, SLOT_SIZE, pFmt, arg1, arg2, arg3)
+
+    head := (head + 1) & (NUM_SLOTS - 1)
+
+'' =========================================================================
+'' Consumer API (call from main cog)
+'' =========================================================================
+
+PUB hasOutput() : yes
+'' Check if data is waiting in the FIFO
+''
+'' @returns yes - TRUE if at least one slot is available to read
+
+    yes := (head <> tail)
+
+PUB getOutput() : pStr | pSlot
+'' Get pointer to the next string in the FIFO and advance tail.
+'' Returns 0 if FIFO is empty.
+''
+'' @returns pStr - pointer to string in slot (valid until next getOutput call on that slot wraps around), or 0 if empty
+
+    if head == tail
+        return 0
+
+    pSlot := @slots + (tail * SLOT_SIZE)
+    pStr := pSlot
+
+    ' advance tail (release slot for producer)
+    tail := (tail + 1) & (NUM_SLOTS - 1)
+
+
+CON { license }
+
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ -------------------------------------------------------------------------------------------------
+}}

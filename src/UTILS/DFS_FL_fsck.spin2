@@ -1,0 +1,127 @@
+'' =================================================================================================
+''
+''   File....... DFS_FL_fsck.spin2
+''   Purpose.... Flash filesystem check and repair utility
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 28 FEB 2026
+''
+'' =================================================================================================
+''
+''  Check and repair Flash filesystem.
+''  Phase 1: Read-only audit via canMount() to detect issues.
+''  Phase 2: If issues found, remount to trigger automatic repair.
+''  The Flash mount process already performs repair (resolves duplicate IDs,
+''  cancels orphaned blocks, validates CRC-32).
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 320_000_000
+
+    ' P2 Edge module SD slot pins (Flash shares SPI bus)
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+OBJ
+
+    dfs : "dual_sd_fat32_flash_fs"
+
+PUB go() | status, used_before, free_before, files_before, used_after, free_after, files_after
+'' Main entry point - runs Flash filesystem check and repair.
+
+    debug(" ")
+    debug("======================================================")
+    debug("  Flash Filesystem Check & Repair (FSCK)")
+    debug("======================================================")
+    debug(" ")
+
+    ' Initialize driver
+    dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' --- Phase 1: Non-destructive health check ---
+    debug("Phase 1: Read-only health check (canMount)...")
+    status := dfs.canMount(dfs.DEV_FLASH)
+    if status == dfs.SUCCESS
+        debug("  Health check: PASS (no issues detected)")
+        debug(" ")
+        debug("  Mounting to verify file statistics...")
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status == dfs.SUCCESS
+            used_before, free_before, files_before := dfs.stats(dfs.DEV_FLASH)
+            debug("  Used blocks:  ", udec_(used_before))
+            debug("  Free blocks:  ", udec_(free_before))
+            debug("  File count:   ", udec_(files_before))
+            dfs.unmount(dfs.DEV_FLASH)
+            debug(" ")
+            debug("======================================================")
+            debug("  FSCK COMPLETE - No repairs needed")
+            debug("======================================================")
+        else
+            debug("  Mount failed despite canMount pass (status=", sdec_(status), ")")
+    else
+        debug("  Health check: ISSUES DETECTED (status=", sdec_(status), ")")
+        debug(" ")
+
+        ' --- Phase 2: Repair via mount ---
+        debug("Phase 2: Repairing via mount (resolves duplicates, orphans, bad CRC)...")
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status == dfs.SUCCESS
+            debug("  Mount/repair: SUCCESS")
+            used_after, free_after, files_after := dfs.stats(dfs.DEV_FLASH)
+            debug(" ")
+            debug("  Post-repair statistics:")
+            debug("  Used blocks:  ", udec_(used_after))
+            debug("  Free blocks:  ", udec_(free_after))
+            debug("  File count:   ", udec_(files_after))
+            dfs.unmount(dfs.DEV_FLASH)
+            debug(" ")
+            debug("======================================================")
+            debug("  FSCK COMPLETE - Repairs applied")
+            debug("======================================================")
+        else
+            debug("  Mount/repair FAILED (status=", sdec_(status), ")")
+            debug("  Flash may need format() to recover.")
+            debug(" ")
+            debug("======================================================")
+            debug("  FSCK FAILED - Manual intervention required")
+            debug("======================================================")
+
+    dfs.stop()
+
+    debug(" ")
+    debug("END_SESSION")
+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

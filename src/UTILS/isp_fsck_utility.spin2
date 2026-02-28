@@ -1,0 +1,1282 @@
+'' =================================================================================================
+''
+''   File....... isp_fsck_utility.spin2
+''   Purpose.... Combined FSCK (repair) + Audit (read-only) library for FAT32 filesystems
+''               Uses the dual_sd_fat32_flash_fs unified driver. Runs in a temporary cog, communicates via FIFO strings
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 21 FEB 2026
+''   Updated.... 26 FEB 2026
+''
+'' =================================================================================================
+''
+''  Reusable library that runs FSCK or Audit in a temporary cog.
+''  Output is sent via isp_string_fifo for the caller to display.
+''
+''  Two modes:
+''    MODE_AUDIT - Read-only filesystem integrity check
+''    MODE_FSCK  - Full check and repair (4-pass)
+''
+''  Usage:
+''    caller: dfs.stop()
+''    caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit()
+''    caller: repeat
+''              if fsck.hasOutput()
+''                display(fsck.getOutput())
+''              if fsck.isDone()
+''                drain remaining, quit
+''    caller: fsck.stop()
+''    caller: dfs.init(cs, mosi, miso, sck)
+''    caller: dfs.mount(dfs.DEV_SD)
+''
+'' =================================================================================================
+
+CON { suppress debug output }
+
+  DEBUG_DISABLE = 1
+
+CON { operation modes }
+
+  MODE_AUDIT = 0
+  MODE_FSCK  = 1
+
+CON { FAT32 structure constants }
+
+  ' Signatures
+  MBR_SIGNATURE               = $AA55
+  PARTITION_TYPE_FAT32_LBA    = $0C
+  FSINFO_SIG1                 = $41615252      ' "RRaA"
+  FSINFO_SIG2                 = $61417272      ' "rrAa"
+  FSINFO_TRAIL_SIG            = $AA550000      ' Trail signature
+  EXT_BOOT_SIG                = $29            ' Extended boot signature
+
+  ' FAT entry constants
+  FAT_MASK        = $0FFFFFFF     ' Lower 28 bits (cluster value)
+  FAT_EOC_MIN     = $0FFFFFF8     ' Minimum end-of-chain marker
+  FAT_EOC         = $0FFFFFFF     ' Standard EOC
+  FAT_FREE        = $00000000     ' Free cluster
+  FAT_BAD         = $0FFFFFF7     ' Bad cluster marker
+
+  ' Bitmap capacity (256KB covers up to 2M clusters — sufficient for cards up to 64GB)
+  BITMAP_LONGS        = 65536             ' 256KB
+  MAX_BITMAP_CLUSTERS = BITMAP_LONGS * 32 ' 2,097,152 clusters
+
+  ' Safety limits
+  MAX_DIR_DEPTH       = 16
+  MAX_CHAIN_LENGTH    = 2_000_000
+
+  ' Audit fail tracking
+  MAX_FAIL_NAMES    = 16
+
+  ' Stack for cogspin'd cog
+  STACK_LONGS       = 512
+  STACK_GUARD_LONGS = 4
+  STACK_GUARD_BYTE  = $CC
+
+' Enable full driver features
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+OBJ
+
+  dfs  : "dual_sd_fat32_flash_fs"
+  fifo : "isp_string_fifo"
+
+VAR
+
+  ' Sector buffers
+  BYTE    buf[512]              ' general purpose / directory entries
+  BYTE    buf2[512]             ' comparison buffer
+  BYTE    fatBuf[512]           ' FAT sector cache
+
+  ' FAT cache state
+  LONG    fatBufSector          ' which FAT1 sector is cached (-1 = none)
+  LONG    fatBufDirty           ' TRUE if fatBuf needs writing
+
+  ' Filesystem geometry (populated by readGeometry)
+  LONG    partitionStart
+  LONG    sectorsPerFat
+  LONG    sectorsPerCluster
+  LONG    totalClusters
+  LONG    totalSectors
+  LONG    reservedSectors
+  LONG    fat1Start
+  LONG    fat2Start
+  LONG    dataStart
+  LONG    rootCluster
+
+  ' Statistics / results
+  LONG    v_passCount
+  LONG    v_failCount
+  LONG    v_failNames[MAX_FAIL_NAMES]   ' pointers to failed test name strings
+  LONG    v_repairCount
+  LONG    v_errorCount
+  LONG    v_warningCount
+  LONG    v_dirCount
+  LONG    v_fileCount
+  LONG    scanDepth
+  LONG    v_lostCount           ' running count of lost clusters freed
+  LONG    windowStart           ' first cluster in current bitmap window
+  LONG    windowEnd             ' last cluster+1 in current window (exclusive)
+  LONG    currentWindow         ' current window index (0-based)
+  LONG    windowCount           ' total windows needed
+
+  ' Cluster bitmap (256KB)
+  LONG    bitmapData[BITMAP_LONGS]
+
+DAT { singleton cog state }
+
+cog_id      LONG    -1                   ' cog number (-1 = not running)
+op_mode     LONG    0                    ' MODE_AUDIT or MODE_FSCK
+op_done     LONG    0                    ' TRUE when cog finished
+
+pin_cs      LONG    0                    ' SD pin configuration
+pin_mosi    LONG    0
+pin_miso    LONG    0
+pin_sck     LONG    0
+
+cog_stack   LONG    0[STACK_LONGS]
+cog_guard   LONG    0[STACK_GUARD_LONGS]
+
+tmpStr      BYTE    0[32]                ' temp buffer for string extraction
+
+
+'' =========================================================================
+'' Caller API (call from main cog)
+'' =========================================================================
+
+PUB null()
+'' This is not a top level object
+
+
+PUB startFsck(cs, mosi, miso, sck) : ok
+'' Launch FSCK (check and repair) in a new cog
+''
+'' @param cs - SD card CS pin
+'' @param mosi - SD card MOSI pin
+'' @param miso - SD card MISO pin
+'' @param sck - SD card SCK pin
+'' @returns ok - TRUE if cog launched successfully
+
+    ok := doStart(cs, mosi, miso, sck, MODE_FSCK)
+
+
+PUB startAudit(cs, mosi, miso, sck) : ok
+'' Launch Audit (read-only check) in a new cog
+''
+'' @param cs - SD card CS pin
+'' @param mosi - SD card MOSI pin
+'' @param miso - SD card MISO pin
+'' @param sck - SD card SCK pin
+'' @returns ok - TRUE if cog launched successfully
+
+    ok := doStart(cs, mosi, miso, sck, MODE_AUDIT)
+
+
+PUB hasOutput() : yes
+'' Check if the utility has produced output strings
+''
+'' @returns yes - TRUE if strings are waiting in the FIFO
+
+    yes := fifo.hasOutput()
+
+
+PUB getOutput() : pStr
+'' Get the next output string from the utility
+''
+'' @returns pStr - pointer to string, or 0 if empty
+
+    pStr := fifo.getOutput()
+
+
+PUB isDone() : yes
+'' Check if the utility cog has finished
+''
+'' @returns yes - TRUE if the cog has completed its work
+
+    yes := (op_done <> 0)
+
+
+PUB getResults(pPass, pFail, pRepairs, pErrors, pWarnings, pDirs, pFiles)
+'' Copy result statistics to caller-provided LONG addresses
+'' Call after isDone() returns TRUE
+''
+'' @param pPass - pointer to LONG to receive pass count
+'' @param pFail - pointer to LONG to receive fail count
+'' @param pRepairs - pointer to LONG to receive repair count
+'' @param pErrors - pointer to LONG to receive error count
+'' @param pWarnings - pointer to LONG to receive warning count
+'' @param pDirs - pointer to LONG to receive directory count
+'' @param pFiles - pointer to LONG to receive file count
+
+    LONG[pPass] := v_passCount
+    LONG[pFail] := v_failCount
+    LONG[pRepairs] := v_repairCount
+    LONG[pErrors] := v_errorCount
+    LONG[pWarnings] := v_warningCount
+    LONG[pDirs] := v_dirCount
+    LONG[pFiles] := v_fileCount
+
+
+PUB stop()
+'' Stop the utility cog and clean up SD driver
+'' Safe to call even if cog already finished
+
+    if cog_id >= 0
+        cogstop(cog_id)
+    cog_id := -1
+    dfs.stop()
+
+
+' =========================================================================
+' Cog launch (private)
+' =========================================================================
+
+PRI doStart(cs, mosi, miso, sck, mode) : ok
+' Store pin configuration, init FIFO, launch cog
+'
+' @param cs, mosi, miso, sck - SD pin configuration
+' @param mode - MODE_AUDIT or MODE_FSCK
+' @returns ok - TRUE if cog launched
+
+    ' Store pins for the new cog to read
+    pin_cs := cs
+    pin_mosi := mosi
+    pin_miso := miso
+    pin_sck := sck
+    op_mode := mode
+    op_done := false
+
+    ' Initialize FIFO
+    fifo.init()
+
+    ' Fill stack guard
+    bytefill(@cog_guard, STACK_GUARD_BYTE, STACK_GUARD_LONGS * 4)
+
+    ' Launch cog
+    cog_id := cogspin(NEWCOG, run(), @cog_stack)
+    ok := (cog_id >= 0)
+
+
+' =========================================================================
+' Cog entry point (runs in new cog)
+' =========================================================================
+
+PRI run() | result, cardSectors
+' Cog entry point — initializes card and dispatches to audit or fsck
+' When this method returns, the cog stops automatically
+
+    ' Initialize card for raw sector access
+    dfs.init(pin_cs, pin_mosi, pin_miso, pin_sck)
+    result := dfs.initCardOnly()
+    if result == false
+        fifo.put(@"FATAL: Cannot initialize card!")
+        op_done := true
+        return
+
+    cardSectors := dfs.cardSizeSectors()
+
+    if op_mode == MODE_AUDIT
+        runAudit(cardSectors)
+    else
+        runFsck(cardSectors)
+
+    ' Clean up SD driver before finishing
+    dfs.stop()
+    op_done := true
+
+
+' =========================================================================
+' Audit orchestration
+' =========================================================================
+
+PRI runAudit(cardSectors) | result, idx, failsToPrint
+' Run all audit checks and display summary with pass/fail counts.
+'
+' @param cardSectors - Total number of sectors on the card
+' @local result - scratch variable for test results
+' @local idx - loop index for failed test names
+' @local failsToPrint - clamped count of fail names to display
+
+    v_passCount := 0
+    v_failCount := 0
+    longfill(@v_failNames, 0, MAX_FAIL_NAMES)
+
+    fifo.put(@"=== FAT32 Filesystem Audit (read-only) ===")
+    fifo.putFmt1(@"Card: %d MB", cardSectors / 2048)
+    fifo.put(@" ")
+
+    ' Read geometry
+    if not readGeometry()
+        fifo.put(@"ERROR: Cannot read filesystem geometry")
+        return
+
+    ' Run all audit checks
+    auditMBR()
+    auditVBR()
+    auditBackupVBR()
+    auditFSInfo()
+    auditFAT()
+    auditRootDir()
+    auditMountTest()
+
+    ' Summary
+    fifo.put(@" ")
+    fifo.put(@"=== AUDIT COMPLETE ===")
+    fifo.putFmt2(@"Tests: %d  Pass: %d", v_passCount + v_failCount, v_passCount)
+    fifo.putFmt1(@"Fail: %d", v_failCount)
+    if v_failCount == 0
+        fifo.put(@"FILESYSTEM INTEGRITY: OK")
+    else
+        fifo.put(@"FILESYSTEM INTEGRITY: ISSUES DETECTED")
+        fifo.put(@" ")
+        fifo.put(@"Failed checks:")
+        failsToPrint := v_failCount <# MAX_FAIL_NAMES
+        repeat idx from 0 to failsToPrint - 1
+            fifo.putFmt1(@"  - %s", v_failNames[idx])
+        if v_failCount > MAX_FAIL_NAMES
+            fifo.putFmt1(@"  ... and %d more", v_failCount - MAX_FAIL_NAMES)
+
+
+' =========================================================================
+' FSCK orchestration
+' =========================================================================
+
+PRI runFsck(cardSectors)
+' Run full 4-pass filesystem check and repair, then display summary.
+'
+' @param cardSectors - Total number of sectors on the card
+
+    v_repairCount := 0
+    v_errorCount := 0
+    v_warningCount := 0
+    v_dirCount := 0
+    v_fileCount := 0
+    v_lostCount := 0
+    scanDepth := 0
+    fatBufSector := -1
+    fatBufDirty := false
+
+    fifo.put(@"=== FAT32 Filesystem Check & Repair ===")
+    fifo.putFmt2(@"Card: %d sectors (%d MB)", cardSectors, cardSectors / 2048)
+    fifo.put(@" ")
+
+    ' Read filesystem geometry
+    if not readGeometry()
+        fifo.put(@"FATAL: Cannot read filesystem geometry")
+        return
+
+    fifo.put(@" ")
+
+    ' Pass 1: Structural integrity
+    fsckPass1()
+
+    ' Pass 2: Directory walk + chain validation (windowed bitmap)
+    fsckPass2()
+
+    ' Pass 4: FAT sync + free count
+    fsckPass4()
+
+    ' Summary
+    fifo.put(@" ")
+    fifo.put(@"=== FSCK COMPLETE ===")
+    fifo.putFmt2(@"Errors: %d  Repairs: %d", v_errorCount, v_repairCount)
+    fifo.putFmt1(@"Warnings: %d", v_warningCount)
+    fifo.putFmt2(@"Directories: %d  Files: %d", v_dirCount, v_fileCount)
+    if v_errorCount == 0
+        if v_repairCount == 0
+            fifo.put(@"STATUS: CLEAN")
+        else
+            fifo.put(@"STATUS: REPAIRED")
+    else
+        fifo.put(@"STATUS: ERRORS REMAIN")
+
+
+' =========================================================================
+' Shared geometry reader
+' =========================================================================
+
+PRI readGeometry() : ok | numFats
+' Read MBR and VBR to extract filesystem geometry.
+' Populates all geometry variables needed by subsequent passes.
+'
+' @returns ok - TRUE if geometry read successfully
+
+    ' Read MBR to get partition start
+    dfs.readSectorRaw(0, @buf)
+    if WORD[@buf + $1FE] <> MBR_SIGNATURE
+        fifo.put(@"  ERROR: Invalid MBR signature")
+        return false
+
+    partitionStart := LONG[@buf + $1C6]
+    if partitionStart == 0
+        fifo.put(@"  ERROR: Partition start is 0")
+        return false
+
+    ' Read VBR (Volume Boot Record)
+    dfs.readSectorRaw(partitionStart, @buf)
+    if WORD[@buf + $1FE] <> MBR_SIGNATURE
+        fifo.put(@"  ERROR: Invalid VBR signature")
+        return false
+
+    ' Extract geometry fields
+    sectorsPerCluster := buf[$0D]
+    reservedSectors := WORD[@buf + $0E]
+    numFats := buf[$10]
+    sectorsPerFat := LONG[@buf + $24]
+    totalSectors := LONG[@buf + $20]
+    rootCluster := LONG[@buf + $2C]
+
+    ' Validate critical fields
+    if sectorsPerCluster == 0
+        fifo.put(@"  ERROR: Zero in critical VBR field")
+        return false
+    if sectorsPerFat == 0
+        fifo.put(@"  ERROR: Zero in critical VBR field")
+        return false
+    if totalSectors == 0
+        fifo.put(@"  ERROR: Zero in critical VBR field")
+        return false
+
+    if numFats < 1
+        fifo.putFmt1(@"  ERROR: Invalid number of FATs: %d", numFats)
+        return false
+    if numFats > 2
+        fifo.putFmt1(@"  ERROR: Invalid number of FATs: %d", numFats)
+        return false
+
+    ' Compute derived values
+    fat1Start := partitionStart + reservedSectors
+    fat2Start := fat1Start + sectorsPerFat
+    dataStart := fat1Start + (numFats * sectorsPerFat)
+    totalClusters := (totalSectors - reservedSectors - (numFats * sectorsPerFat)) / sectorsPerCluster
+
+    fifo.put(@"  Geometry:")
+    fifo.putFmt1(@"    Partition start:  %d", partitionStart)
+    fifo.putFmt1(@"    Sectors/cluster:  %d", sectorsPerCluster)
+    fifo.putFmt1(@"    Sectors/FAT:      %d", sectorsPerFat)
+    fifo.putFmt1(@"    Total clusters:   %d", totalClusters)
+    fifo.putFmt1(@"    Root cluster:     %d", rootCluster)
+    fifo.putFmt1(@"    Data start:       %d", dataStart)
+    fifo.put(@" ")
+
+    ok := true
+
+
+' =========================================================================
+' Audit methods
+' =========================================================================
+
+PRI auditRunTest(pTestName, passed)
+' Record and display a single audit test result
+'
+' @param pTestName - pointer to test name string
+' @param passed - TRUE if test passed
+
+    if passed
+        v_passCount++
+        fifo.putFmt1(@"  [PASS] %s", pTestName)
+    else
+        if v_failCount < MAX_FAIL_NAMES
+            v_failNames[v_failCount] := pTestName
+        v_failCount++
+        fifo.putFmt1(@"  [FAIL] %s", pTestName)
+
+
+PRI auditMBR() | result
+' Audit MBR structure (sector 0)
+
+    fifo.put(@"Checking MBR (sector 0)...")
+
+    dfs.readSectorRaw(0, @buf)
+
+    auditRunTest(@"MBR boot signature ($AA55)", WORD[@buf + $1FE] == MBR_SIGNATURE)
+
+    result := buf[$1BE]
+    auditRunTest(@"Partition 1 boot flag ($00/$80)", result == $00 OR result == $80)
+
+    result := buf[$1C2]
+    auditRunTest(@"Partition type ($0C = FAT32 LBA)", result == PARTITION_TYPE_FAT32_LBA)
+
+    result := LONG[@buf + $1C6]
+    auditRunTest(@"Partition start > 0", result > 0)
+    fifo.putFmt1(@"    Partition start: sector %d", result)
+
+    result := LONG[@buf + $1CA]
+    auditRunTest(@"Partition size > 0", result > 0)
+    fifo.putFmt1(@"    Partition size: %d sectors", result)
+    fifo.put(@" ")
+
+
+PRI auditVBR() | result
+' Audit VBR (primary boot sector at partition start)
+
+    fifo.put(@"Checking VBR (boot sector)...")
+
+    dfs.readSectorRaw(partitionStart, @buf)
+
+    result := buf[0]
+    auditRunTest(@"VBR jump ($EB or $E9)", result == $EB OR result == $E9)
+
+    auditRunTest(@"VBR boot signature ($AA55)", WORD[@buf + $1FE] == MBR_SIGNATURE)
+
+    result := WORD[@buf + $0B]
+    auditRunTest(@"Bytes/sector = 512", result == 512)
+
+    result := buf[$0D]
+    auditRunTest(@"Sectors/cluster power of 2", result >= 1 AND result <= 128 AND (result & (result - 1)) == 0)
+    fifo.putFmt1(@"    Sectors/cluster: %d", result)
+
+    result := WORD[@buf + $0E]
+    auditRunTest(@"Reserved sectors = 32", result == 32)
+
+    result := buf[$10]
+    auditRunTest(@"Number of FATs = 2", result == 2)
+
+    result := WORD[@buf + $11]
+    auditRunTest(@"Root entry count = 0 (FAT32)", result == 0)
+
+    result := WORD[@buf + $13]
+    auditRunTest(@"Total sectors 16-bit = 0", result == 0)
+
+    result := buf[$15]
+    auditRunTest(@"Media type = $F8", result == $F8)
+
+    result := WORD[@buf + $16]
+    auditRunTest(@"FAT size 16-bit = 0", result == 0)
+
+    result := LONG[@buf + $1C]
+    auditRunTest(@"Hidden sectors = partition start", result == partitionStart)
+
+    auditRunTest(@"Total sectors 32-bit > 0", totalSectors > 0)
+    fifo.putFmt1(@"    Total sectors: %d", totalSectors)
+
+    auditRunTest(@"Sectors per FAT > 0", sectorsPerFat > 0)
+    fifo.putFmt1(@"    Sectors/FAT: %d", sectorsPerFat)
+
+    result := LONG[@buf + $2C]
+    auditRunTest(@"Root cluster = 2", result == 2)
+
+    result := WORD[@buf + $30]
+    auditRunTest(@"FSInfo at sector 1", result == 1)
+
+    result := WORD[@buf + $32]
+    auditRunTest(@"Backup boot at sector 6", result == 6)
+
+    result := buf[$42]
+    auditRunTest(@"Extended boot sig = $29", result == EXT_BOOT_SIG)
+
+    result := true
+    if buf[$52] <> "F"
+        result := false
+    if buf[$53] <> "A"
+        result := false
+    if buf[$54] <> "T"
+        result := false
+    if buf[$55] <> "3"
+        result := false
+    if buf[$56] <> "2"
+        result := false
+    auditRunTest(@"FS type = FAT32", result)
+    fifo.put(@" ")
+
+
+PRI auditBackupVBR() | idx, mismatch
+' Verify backup VBR matches primary
+
+    fifo.put(@"Checking Backup VBR...")
+
+    dfs.readSectorRaw(partitionStart, @buf)
+    dfs.readSectorRaw(partitionStart + 6, @buf2)
+
+    mismatch := false
+    repeat idx from 0 to 511
+        if buf[idx] <> buf2[idx]
+            mismatch := true
+            quit
+
+    auditRunTest(@"Backup VBR matches primary", mismatch == false)
+    fifo.put(@" ")
+
+
+PRI auditFSInfo() | result, idx, mismatch
+' Verify FSInfo sector and backup
+
+    fifo.put(@"Checking FSInfo sector...")
+
+    dfs.readSectorRaw(partitionStart + 1, @buf)
+
+    result := LONG[@buf]
+    auditRunTest(@"Lead signature ($41615252)", result == FSINFO_SIG1)
+
+    result := LONG[@buf + 484]
+    auditRunTest(@"Struct signature ($61417272)", result == FSINFO_SIG2)
+
+    result := LONG[@buf + $1FC]
+    auditRunTest(@"Trail signature ($AA550000)", result == FSINFO_TRAIL_SIG)
+
+    result := LONG[@buf + 488]
+    auditRunTest(@"Free cluster count set", result <> 0)
+    fifo.putFmt1(@"    Free clusters: %d", result)
+
+    result := LONG[@buf + 492]
+    auditRunTest(@"Next free hint valid", result == $FFFFFFFF OR result >= 2)
+
+    ' Check backup FSInfo
+    dfs.readSectorRaw(partitionStart + 1, @buf)
+    dfs.readSectorRaw(partitionStart + 7, @buf2)
+
+    mismatch := false
+    repeat idx from 0 to 511
+        if buf[idx] <> buf2[idx]
+            mismatch := true
+            quit
+
+    auditRunTest(@"Backup FSInfo matches primary", mismatch == false)
+    fifo.put(@" ")
+
+
+PRI auditFAT() | result, idx, mismatch
+' Verify FAT table entries and consistency
+
+    fifo.put(@"Checking FAT table...")
+
+    dfs.readSectorRaw(fat1Start, @buf)
+
+    result := LONG[@buf]
+    auditRunTest(@"FAT[0] = $0FFFFFF8 (media)", result == $0FFFFFF8)
+
+    result := LONG[@buf + 4]
+    auditRunTest(@"FAT[1] = $0FFFFFFF (EOC)", result == $0FFFFFFF)
+
+    result := LONG[@buf + 8]
+    auditRunTest(@"FAT[2] root cluster allocated", result <> 0)
+
+    ' Compare FAT1 and FAT2 first sector
+    dfs.readSectorRaw(fat2Start, @buf2)
+
+    mismatch := false
+    repeat idx from 0 to 511
+        if buf[idx] <> buf2[idx]
+            mismatch := true
+            quit
+
+    auditRunTest(@"FAT1 first sector == FAT2", mismatch == false)
+    fifo.put(@" ")
+
+
+PRI auditRootDir() | result
+' Verify root directory structure
+
+    fifo.put(@"Checking Root Directory...")
+
+    dfs.readSectorRaw(dataStart, @buf)
+
+    result := buf[$0B]
+    auditRunTest(@"Volume label entry (attr=$08)", result == $08)
+
+    result := buf[0]
+    auditRunTest(@"Valid volume label chars", result >= $20 AND result <= $7E)
+
+    result := buf[$20]
+    auditRunTest(@"Second entry valid or end", result == $00 OR result == $E5 OR (result >= $20 AND result <= $7E))
+    fifo.put(@" ")
+
+
+PRI auditMountTest() | result
+' Test mount/unmount cycle
+
+    fifo.put(@"Checking mount/unmount cycle...")
+
+    result := dfs.mount(dfs.DEV_SD)
+    auditRunTest(@"mount() succeeds", result)
+
+    if result
+        fifo.put(@"  Calculating free space...")
+        result := dfs.freeSpace(dfs.DEV_SD)
+        auditRunTest(@"Free space > 0", result > 0)
+        fifo.putFmt1(@"    Free: %d sectors", result)
+        dfs.unmount(dfs.DEV_SD)
+
+    fifo.put(@" ")
+
+
+' =========================================================================
+' FSCK Pass 1: Structural integrity
+' =========================================================================
+
+PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
+' Check and repair structural elements.
+' Verifies VBR backup, FSInfo signatures and backup, FAT[0], FAT[1], FAT[2].
+
+    fifo.put(@"--- Pass 1: Structural Integrity ---")
+    startRepairs := v_repairCount
+
+    ' === VBR backup (sector 6) ===
+    dfs.readSectorRaw(partitionStart, @buf)
+    dfs.readSectorRaw(partitionStart + 6, @buf2)
+
+    mismatch := false
+    repeat idx from 0 to 511
+        if buf[idx] <> buf2[idx]
+            mismatch := true
+            quit
+
+    if mismatch
+        fifo.put(@"  REPAIR: Backup VBR mismatch - copying")
+        dfs.writeSectorRaw(partitionStart + 6, @buf)
+        v_repairCount++
+    else
+        fifo.put(@"  [OK] Backup VBR matches")
+
+    ' === FSInfo signatures (sector 1) ===
+    dfs.readSectorRaw(partitionStart + 1, @buf)
+    fsinfoDirty := false
+
+    if LONG[@buf] <> FSINFO_SIG1
+        fifo.put(@"  REPAIR: FSInfo lead signature")
+        LONG[@buf] := FSINFO_SIG1
+        fsinfoDirty := true
+        v_repairCount++
+
+    if LONG[@buf + 484] <> FSINFO_SIG2
+        fifo.put(@"  REPAIR: FSInfo struct signature")
+        LONG[@buf + 484] := FSINFO_SIG2
+        fsinfoDirty := true
+        v_repairCount++
+
+    if LONG[@buf + $1FC] <> FSINFO_TRAIL_SIG
+        fifo.put(@"  REPAIR: FSInfo trail signature")
+        LONG[@buf + $1FC] := FSINFO_TRAIL_SIG
+        fsinfoDirty := true
+        v_repairCount++
+
+    if fsinfoDirty
+        dfs.writeSectorRaw(partitionStart + 1, @buf)
+    else
+        fifo.put(@"  [OK] FSInfo signatures")
+
+    ' === FSInfo backup (sector 7) ===
+    dfs.readSectorRaw(partitionStart + 1, @buf)
+    dfs.readSectorRaw(partitionStart + 7, @buf2)
+
+    mismatch := false
+    repeat idx from 0 to 511
+        if buf[idx] <> buf2[idx]
+            mismatch := true
+            quit
+
+    if mismatch
+        fifo.put(@"  REPAIR: Backup FSInfo mismatch - copying")
+        dfs.writeSectorRaw(partitionStart + 7, @buf)
+        v_repairCount++
+    else
+        fifo.put(@"  [OK] Backup FSInfo matches")
+
+    ' === FAT[0] media type ===
+    dfs.readSectorRaw(fat1Start, @buf)
+
+    if (LONG[@buf] & FAT_MASK) <> ($0FFFFFF8 & FAT_MASK)
+        fifo.put(@"  REPAIR: FAT[0] media type")
+        LONG[@buf] := $0FFFFFF8 | (LONG[@buf] & $F0000000)
+        dfs.writeSectorRaw(fat1Start, @buf)
+        v_repairCount++
+    else
+        fifo.put(@"  [OK] FAT[0] media type")
+
+    ' === FAT[1] EOC marker ===
+    if (LONG[@buf + 4] & FAT_MASK) <> FAT_EOC
+        fifo.put(@"  REPAIR: FAT[1] EOC marker")
+        LONG[@buf + 4] := FAT_EOC | (LONG[@buf + 4] & $F0000000)
+        dfs.writeSectorRaw(fat1Start, @buf)
+        v_repairCount++
+    else
+        fifo.put(@"  [OK] FAT[1] EOC marker")
+
+    ' === FAT[2] root cluster ===
+    if (LONG[@buf + 8] & FAT_MASK) == FAT_FREE
+        fifo.put(@"  REPAIR: FAT[2] root cluster was free")
+        LONG[@buf + 8] := FAT_EOC | (LONG[@buf + 8] & $F0000000)
+        dfs.writeSectorRaw(fat1Start, @buf)
+        v_repairCount++
+    else
+        fifo.put(@"  [OK] FAT[2] root cluster")
+
+    fifo.putFmt1(@"  Pass 1: %d repairs", v_repairCount - startRepairs)
+    fifo.put(@" ")
+
+
+' =========================================================================
+' FSCK Pass 2: Directory walk + chain validation
+' =========================================================================
+
+PRI fsckPass2() | startRepairs
+' Walk directory tree and validate all cluster chains using windowed bitmap.
+' For cards >64GB, processes cluster space in 2M-cluster windows,
+' re-walking the directory tree for each window.
+' After each window, runs pass 3 (lost cluster recovery) for that window.
+
+    fifo.put(@"--- Pass 2: Directory & Chain Validation ---")
+    startRepairs := v_repairCount
+
+    ' Compute number of windows needed
+    windowCount := (totalClusters + 2 + MAX_BITMAP_CLUSTERS - 1) / MAX_BITMAP_CLUSTERS
+    if windowCount > 1
+        fifo.putFmt2(@"  Using %d bitmap windows for %d clusters", windowCount, totalClusters + 2)
+
+    repeat currentWindow from 0 to windowCount - 1
+        ' Set up window boundaries
+        windowStart := currentWindow * MAX_BITMAP_CLUSTERS
+        windowEnd := (windowStart + MAX_BITMAP_CLUSTERS) <# (totalClusters + 2)
+
+        ' Clear cluster bitmap for this window
+        longfill(@bitmapData, 0, BITMAP_LONGS)
+
+        ' Mark clusters 0 and 1 as used (they don't exist as data clusters)
+        if windowStart == 0
+            setBit(0)
+            setBit(1)
+
+        ' Reset counters only on first window
+        if currentWindow == 0
+            v_dirCount := 0
+            v_fileCount := 0
+
+        ' CRITICAL: Validate root chain BEFORE scanning directories
+        ' This prevents pass 3 from freeing root directory clusters
+        fsckValidateChain(rootCluster, 0, true)
+
+        ' Scan directory tree
+        scanDepth := 0
+        fsckScanDir(rootCluster)
+
+        ' Run pass 3 (lost cluster recovery) for this window immediately
+        fsckPass3Window()
+
+    fifo.putFmt2(@"  Dirs: %d  Files: %d", v_dirCount, v_fileCount)
+    if v_lostCount > 0
+        fifo.putFmt1(@"  REPAIR: Freed %d lost clusters", v_lostCount)
+        v_repairCount += v_lostCount
+    else
+        fifo.put(@"  [OK] No lost clusters")
+    fifo.putFmt1(@"  Pass 2/3: %d repairs", v_repairCount - startRepairs)
+    fifo.put(@" ")
+
+
+PRI fsckScanDir(dirCluster) | sector, entSector, entIdx, pEntry, attr, startClus, fSize, name0, nextClus
+' Recursively scan directory, validating all entries and chains.
+' Re-reads parent sector after returning from subdirectory recursion.
+' On windows >0, suppresses counting and error messages (bitmap marking only).
+'
+' @param dirCluster - First cluster of the directory to scan
+
+    if currentWindow == 0
+        v_dirCount++
+    scanDepth++
+
+    if scanDepth > MAX_DIR_DEPTH
+        if currentWindow == 0
+            fifo.put(@"  WARNING: Max dir depth exceeded")
+            v_warningCount++
+        scanDepth--
+        return
+
+    ' Follow the directory's cluster chain
+    repeat while dirCluster >= 2
+        if dirCluster >= (totalClusters + 2)
+            quit
+        sector := clus2sec(dirCluster)
+
+        ' Read each sector in this cluster
+        repeat entSector from 0 to sectorsPerCluster - 1
+            dfs.readSectorRaw(sector + entSector, @buf)
+
+            ' Process 16 directory entries per sector
+            repeat entIdx from 0 to 15
+                pEntry := @buf + (entIdx * 32)
+                name0 := BYTE[pEntry]
+
+                ' $00 = end of directory
+                if name0 == $00
+                    scanDepth--
+                    return
+
+                ' $E5 = deleted entry, skip
+                if name0 == $E5
+                    next
+
+                attr := BYTE[pEntry + $0B]
+
+                ' Long filename entry (attr $0F), skip
+                if (attr & $3F) == $0F
+                    next
+
+                ' Volume label, skip
+                if attr & $08
+                    next
+
+                ' Skip . and .. entries
+                if isDot(pEntry)
+                    next
+
+                ' Extract start cluster and file size
+                startClus := WORD[pEntry + $1A] | (WORD[pEntry + $14] << 16)
+                fSize := LONG[pEntry + $1C]
+
+                if attr & $10
+                    ' --- Subdirectory ---
+                    if startClus >= 2
+                        if startClus < (totalClusters + 2)
+                            fsckValidateChain(startClus, 0, true)
+                            fsckScanDir(startClus)
+                            ' Re-read our sector after recursion
+                            dfs.readSectorRaw(sector + entSector, @buf)
+                        elseif currentWindow == 0
+                            fifo.putFmt1(@"  ERROR: Bad dir start cluster %d", startClus)
+                            v_errorCount++
+                    elseif startClus <> 0
+                        if currentWindow == 0
+                            fifo.putFmt1(@"  ERROR: Bad dir start cluster %d", startClus)
+                            v_errorCount++
+                else
+                    ' --- Regular file ---
+                    if currentWindow == 0
+                        v_fileCount++
+                    if startClus >= 2
+                        if startClus < (totalClusters + 2)
+                            fsckValidateChain(startClus, fSize, false)
+                    if startClus == 0
+                        if fSize > 0
+                            if currentWindow == 0
+                                fifo.putFmt1(@"  ERROR: File has size %d but no cluster", fSize)
+                                v_errorCount++
+
+        ' Advance to next cluster in directory chain
+        nextClus := readFAT(dirCluster) & FAT_MASK
+        if nextClus >= FAT_EOC_MIN
+            quit
+        if nextClus < 2
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Bad cluster in dir chain: %d", nextClus)
+                v_errorCount++
+            quit
+        if nextClus >= (totalClusters + 2)
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Bad cluster in dir chain: %d", nextClus)
+                v_errorCount++
+            quit
+        dirCluster := nextClus
+
+    scanDepth--
+
+
+PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen
+' Follow a cluster chain and validate integrity.
+' Marks each visited cluster in the bitmap to detect cross-links.
+' On window 0: repairs bad refs and reports errors.
+' On windows >0: bitmap marking only (chains already repaired).
+'
+' @param startClus - First cluster of the chain
+' @param fSize - Expected file size (0 for directories)
+' @param isDir - TRUE if this chain belongs to a directory
+
+    chainLen := 0
+    clus := startClus
+
+    repeat while clus >= 2
+        if clus >= (totalClusters + 2)
+            quit
+
+        ' Check for cross-link (cluster already referenced by another chain)
+        if testBit(clus)
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Cross-linked cluster %d", clus)
+                v_errorCount++
+            return
+
+        ' Mark cluster as referenced
+        setBit(clus)
+        chainLen++
+
+        ' Safety: detect infinite loops
+        if chainLen > MAX_CHAIN_LENGTH
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Chain too long from cluster %d", startClus)
+                v_errorCount++
+            return
+
+        ' Read next cluster in chain
+        nextClus := readFAT(clus) & FAT_MASK
+
+        ' End of chain?
+        if nextClus >= FAT_EOC_MIN
+            quit
+
+        ' Bad cluster reference?
+        if nextClus < 2
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
+                writeFAT(clus, FAT_EOC)
+                fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
+                v_repairCount++
+            quit
+
+        if nextClus >= (totalClusters + 2)
+            if nextClus <> FAT_BAD
+                if currentWindow == 0
+                    fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
+                    writeFAT(clus, FAT_EOC)
+                    fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
+                    v_repairCount++
+                quit
+
+        ' Bad cluster marker - stop following
+        if nextClus == FAT_BAD
+            quit
+
+        clus := nextClus
+
+    ' For files, check chain length vs expected
+    if currentWindow == 0
+        if not isDir
+            if fSize > 0
+                expectedLen := (fSize + (sectorsPerCluster * 512) - 1) / (sectorsPerCluster * 512)
+                if chainLen <> expectedLen
+                    fifo.putFmt2(@"  WARNING: Chain %d clusters, expected %d", chainLen, expectedLen)
+                    v_warningCount++
+
+
+' =========================================================================
+' FSCK Pass 3: Lost cluster recovery
+' =========================================================================
+
+PRI fsckPass3Window() | clus, fatVal, startClus
+' Find and free lost clusters within the current bitmap window.
+' A "lost" cluster is allocated in the FAT but not referenced by any directory entry.
+' Called once per window from fsckPass2(). Running count kept in v_lostCount.
+
+    startClus := windowStart #> 2
+    repeat clus from startClus to windowEnd - 1
+        if clus >= (totalClusters + 2)
+            quit
+
+        ' If not in bitmap, it was not referenced by any file/dir
+        if not testBit(clus)
+            fatVal := readFAT(clus) & FAT_MASK
+            if fatVal <> FAT_FREE
+                if fatVal <> FAT_BAD
+                    ' Cluster is allocated but unreferenced - free it
+                    writeFAT(clus, FAT_FREE)
+                    v_lostCount++
+
+    ' Flush any pending FAT writes after this window
+    flushFAT()
+
+
+' =========================================================================
+' FSCK Pass 4: FAT sync + free count
+' =========================================================================
+
+PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatch, idx, startRepairs
+' Synchronize FAT1 -> FAT2 and correct the free cluster count.
+' Reads each FAT1 sector, counts free entries, compares with FAT2, syncs if different.
+
+    fifo.put(@"--- Pass 4: FAT Sync & Free Count ---")
+    startRepairs := v_repairCount
+
+    ' Ensure all prior FAT writes are flushed
+    flushFAT()
+
+    freeCount := 0
+    syncCount := 0
+    clus := 0
+
+    repeat fatSector from 0 to sectorsPerFat - 1
+        ' Read FAT1 sector
+        dfs.readSectorRaw(fat1Start + fatSector, @buf)
+
+        ' Count free clusters in this sector
+        repeat entIdx from 0 to 127
+            if clus >= 2
+                if clus < (totalClusters + 2)
+                    fatVal := LONG[@buf + (entIdx * 4)] & FAT_MASK
+                    if fatVal == FAT_FREE
+                        freeCount++
+            clus++
+
+        ' Read FAT2 sector and compare
+        dfs.readSectorRaw(fat2Start + fatSector, @buf2)
+
+        mismatch := false
+        repeat idx from 0 to 511
+            if buf[idx] <> buf2[idx]
+                mismatch := true
+                quit
+
+        if mismatch
+            ' Copy FAT1 to FAT2
+            dfs.writeSectorRaw(fat2Start + fatSector, @buf)
+            syncCount++
+
+    if syncCount > 0
+        fifo.putFmt1(@"  REPAIR: Synced %d FAT sectors", syncCount)
+        v_repairCount += syncCount
+    else
+        fifo.put(@"  [OK] FAT1 and FAT2 in sync")
+
+    fifo.putFmt1(@"  Free clusters: %d", freeCount)
+
+    ' Update FSInfo free cluster count
+    dfs.readSectorRaw(partitionStart + 1, @buf)
+
+    if LONG[@buf + 488] <> freeCount
+        fifo.putFmt2(@"  REPAIR: FSInfo free count %d -> %d", LONG[@buf + 488], freeCount)
+        LONG[@buf + 488] := freeCount
+        dfs.writeSectorRaw(partitionStart + 1, @buf)
+        ' Update backup FSInfo too
+        dfs.writeSectorRaw(partitionStart + 7, @buf)
+        v_repairCount++
+    else
+        fifo.put(@"  [OK] FSInfo free count correct")
+
+    fifo.putFmt1(@"  Pass 4: %d repairs", v_repairCount - startRepairs)
+    fifo.put(@" ")
+
+
+' =========================================================================
+' FAT cache methods
+' =========================================================================
+
+PRI readFAT(cluster) : value | sector, offset
+' Read a FAT entry with sector caching.
+'
+' @param cluster - Cluster number to read
+' @returns value - Raw 32-bit FAT entry
+
+    sector := fat1Start + (cluster >> 7)
+    offset := (cluster & $7F) * 4
+
+    if sector <> fatBufSector
+        flushFAT()
+        dfs.readSectorRaw(sector, @fatBuf)
+        fatBufSector := sector
+
+    value := LONG[@fatBuf + offset]
+
+
+PRI writeFAT(cluster, value) | sector, offset, existing
+' Write a FAT entry with sector caching. Preserves upper 4 reserved bits.
+'
+' @param cluster - Cluster number to write
+' @param value - New FAT entry value (only lower 28 bits used)
+
+    sector := fat1Start + (cluster >> 7)
+    offset := (cluster & $7F) * 4
+
+    if sector <> fatBufSector
+        flushFAT()
+        dfs.readSectorRaw(sector, @fatBuf)
+        fatBufSector := sector
+
+    existing := LONG[@fatBuf + offset]
+    LONG[@fatBuf + offset] := (value & FAT_MASK) | (existing & $F0000000)
+    fatBufDirty := true
+
+
+PRI flushFAT()
+' Write cached FAT sector to disk (both FAT1 and FAT2) if dirty.
+
+    if fatBufDirty
+        if fatBufSector >= 0
+            dfs.writeSectorRaw(fatBufSector, @fatBuf)
+            dfs.writeSectorRaw(fatBufSector - fat1Start + fat2Start, @fatBuf)
+            fatBufDirty := false
+
+
+' =========================================================================
+' Cluster bitmap methods
+' =========================================================================
+
+PRI clus2sec(cluster) : sector
+' Convert cluster number to absolute sector number.
+'
+' @param cluster - Cluster number (2-based)
+' @returns sector - Absolute LBA sector number
+
+    sector := dataStart + ((cluster - 2) * sectorsPerCluster)
+
+
+PRI setBit(cluster) | idx
+' Set a bit in the cluster bitmap (window-relative).
+' Clusters outside the current window are silently ignored.
+'
+' @param cluster - Cluster number to mark
+
+    if cluster < windowStart or cluster >= windowEnd
+        return
+    idx := cluster - windowStart
+    bitmapData[idx >> 5] |= (1 << (idx & $1F))
+
+
+PRI testBit(cluster) : result | idx
+' Test whether a cluster is marked in the bitmap (window-relative).
+' Returns FALSE for clusters outside the current window.
+'
+' @param cluster - Cluster number to test
+' @returns result - TRUE (non-zero) if marked
+
+    if cluster < windowStart or cluster >= windowEnd
+        return false
+    idx := cluster - windowStart
+    result := (bitmapData[idx >> 5] >> (idx & $1F)) & 1
+
+
+PRI isDot(pEntry) : result
+' Check if a directory entry is the "." or ".." special entry.
+'
+' @param pEntry - Pointer to 32-byte directory entry
+' @returns result - TRUE if entry is . or ..
+
+    result := false
+    if BYTE[pEntry] == "."
+        if BYTE[pEntry + 1] == " "
+            result := true
+        if BYTE[pEntry + 1] == "."
+            result := true
+
+
+CON { license }
+
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ -------------------------------------------------------------------------------------------------
+}}

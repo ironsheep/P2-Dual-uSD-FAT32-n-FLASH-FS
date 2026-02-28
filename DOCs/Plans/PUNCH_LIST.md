@@ -15,19 +15,12 @@ Every PUB and PRI method must name its return value for what it actually is — 
 - Handles → `handle`
 - Specific values → `workerCog`, `size_in_bytes`, `error_code`
 
-**Scope**: All PUB/PRI methods in `dual_fs.spin2`. Phase 3 methods are mostly fixed; the pre-existing SD-origin PUBs still use `result` throughout (mount, unmount, readSectorRaw, writeSectorRaw, newFile, openFile, sync, moveFile, etc.).
+**Scope**: All PUB/PRI methods in `dual_sd_fat32_flash_fs.spin2`. Phase 3 methods are mostly fixed; the pre-existing SD-origin PUBs still use `result` throughout (mount, unmount, readSectorRaw, writeSectorRaw, newFile, openFile, sync, moveFile, etc.).
 
 ---
 
-## 2. Consistent PUB/PRI method documentation style
+## 2. Consistent VSCode documentation style
 
-All PUB and PRI methods must use VS Code-style doc comments (`''` lines) with:
-- One-line purpose summary
-- `@param` for each parameter
-- `@returns` for each return value
-
-Many of the SD-origin PUB methods have this. Some Phase 3 PRI methods use single-quote (`'`) comments instead of double-quote (`''`). Normalize everything to `''` doc comments on PUB methods and `'` block comments on PRI methods (or `''` if we want tooling to pick them up).
-
-**Decision needed**: Do PRI methods get `''` doc comments or `'` comments? Pick one and apply everywhere.
+Audit/Repair ALL .spin2 project files to precisely follow [VSCode Style Guide](./CODE-STYLE-GUIDE.md)
 
 ---

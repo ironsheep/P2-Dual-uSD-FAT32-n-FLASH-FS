@@ -1,24 +1,29 @@
-# SD Card Utilities
+# Dual-FS Utilities
 
-This document describes the standalone utility programs included with the P2 SD Card Driver. These utilities help with card formatting, characterization, performance testing, and filesystem validation.
+This document describes the standalone utility programs included with the P2 Dual-FS Driver. These utilities help with card/Flash formatting, characterization, performance testing, and filesystem validation for both SD and Flash devices.
 
 ## Overview
 
 The utilities are located in `src/UTILS/` and can be run independently using the test runner from the `tools/` directory.
 
-### Utility Summary
+### SD Utilities
 
 | Utility | Purpose | Destructive? |
 |---------|---------|:------------:|
-| **SD_format_card.spin2** | FAT32 card formatter (standalone) | Yes |
-| **SD_card_characterize.spin2** | Card register reader | No |
-| **SD_speed_characterize.spin2** | SPI speed tester | No |
-| **SD_frequency_characterize.spin2** | Sysclk frequency tester | No |
-| **SD_performance_benchmark.spin2** | Throughput measurement | Yes* |
-| **SD_FAT32_audit.spin2** | Filesystem validator | No |
-| **SD_FAT32_fsck.spin2** | Filesystem check & repair | Yes |
+| **DFS_SD_format_card.spin2** | FAT32 card formatter (standalone) | Yes |
+| **DFS_SD_card_characterize.spin2** | Card register reader | No |
+| **DFS_SD_FAT32_audit.spin2** | FAT32 filesystem validator | No |
+| **DFS_SD_FAT32_fsck.spin2** | FAT32 filesystem check & repair | Yes |
 
-*Creates temporary test files that are deleted after testing.
+### Flash Utilities
+
+| Utility | Purpose | Destructive? |
+|---------|---------|:------------:|
+| **DFS_FL_format.spin2** | Flash filesystem formatter | Yes |
+| **DFS_FL_audit.spin2** | Flash filesystem integrity check | No |
+| **DFS_FL_fsck.spin2** | Flash filesystem check & repair | Yes* |
+
+*Repair is performed by remounting, which automatically resolves duplicates, orphans, and bad CRC blocks.
 
 ---
 
@@ -31,11 +36,23 @@ cd tools/
 ./run_test.sh ../src/UTILS/<utility>.spin2 [-t timeout]
 ```
 
+Alternatively, from the `src/UTILS/` directory:
+
+```bash
+# Compile a utility
+pnut-ts -d -I ../. <utility>.spin2
+
+# Download and run on P2 (connects at 2 Mbit serial)
+pnut-term-ts -r <utility>.bin
+```
+
+The `-I ../.` flag tells the compiler to find the `dual_sd_fat32_flash_fs` driver in the parent `src/` directory.
+
 ---
 
-## Utility Details
+## SD Utility Details
 
-### 1. SD_format_card.spin2
+### 1. DFS_SD_format_card.spin2
 
 **Purpose:** Format an SD card with a FAT32 filesystem.
 
@@ -43,7 +60,7 @@ Uses `isp_format_utility.spin2` (library) which provides the formatting logic.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
+./run_test.sh ../src/UTILS/DFS_SD_format_card.spin2 -t 120
 ```
 
 **WARNING:** This will **ERASE ALL DATA** on the SD card!
@@ -80,13 +97,13 @@ END_SESSION
 
 ---
 
-### 2. SD_card_characterize.spin2
+### 2. DFS_SD_card_characterize.spin2
 
 **Purpose:** Extract and display all card register information.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+./run_test.sh ../src/UTILS/DFS_SD_card_characterize.spin2 -t 60
 ```
 
 **Reads and Displays:**
@@ -101,9 +118,9 @@ END_SESSION
 
 **Sample Output:**
 ```
-┌──────────────────────────────────────────┐
-│ SD Card Characterization Diagnostic      │
-└──────────────────────────────────────────┘
+======================================================
+  SD Card Characterization Diagnostic
+======================================================
 
 ========== CID (Card Identification) ==========
   Manufacturer ID:    $03 (SanDisk)
@@ -132,172 +149,16 @@ END_SESSION
 - Verify card capacity matches specification
 - Check supported features before use
 - Debug card compatibility issues
-- Build a card database/catalog
 
 ---
 
-### 3. SD_speed_characterize.spin2
-
-**Purpose:** Find maximum reliable SPI clock speed for a specific card.
-
-**Usage:**
-```bash
-./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
-```
-
-**Test Strategy:**
-
-| Phase | Test | Purpose |
-|-------|------|---------|
-| **Phase 1** | 1,000 single-sector reads | Quick reliability check |
-| **Phase 2** | 10,000 single-sector reads | Statistical confidence |
-| **Phase 3** | 100 × 8-sector reads | Sustained transfer test |
-
-Testing proceeds from lowest to highest speed. If any phase fails, testing stops for that speed and higher speeds are skipped.
-
-**Speed Levels Tested:**
-- 18 MHz, 20 MHz, 22 MHz, 25 MHz, 28 MHz
-- 30 MHz, 33 MHz, 37 MHz, 40 MHz, 45 MHz, 50 MHz
-
-**Output Includes:**
-- Target frequency vs actual achievable frequency
-- Delta percentage from ideal (due to P2 clock division)
-- Pass/fail status for each phase
-- CRC error counts and timeout counts
-- Maximum reliable speed recommendation
-
-**Sample Output:**
-```
-SD Card SPI Speed Characterization
-==================================
-Card: SanDisk Extreme 64GB
-
-Speed Tests:
-  18 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  20 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  25 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  30 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  33 MHz: Phase 1 PASS, Phase 2 FAIL (3 CRC errors)
-
-Recommended Maximum Speed: 30 MHz
-```
-
-**Use Cases:**
-- Determine safe operating speed for production
-- Compare cards for speed capability
-- Identify marginal cards with reliability issues
-- Optimize driver configuration per card type
-
----
-
-### 4. SD_frequency_characterize.spin2
-
-**Purpose:** Find sysclk frequency boundaries for reliable streamer timing.
-
-**Usage:**
-```bash
-./run_test.sh ../src/UTILS/SD_frequency_characterize.spin2 -t 300
-```
-
-**Test Method:**
-This utility dynamically changes the P2 sysclk frequency using `clkset()` to identify exactly where multi-block operations fail. It helps find timing-sensitive frequency ranges and quantization boundaries.
-
-**Test Frequencies:**
-- 320 MHz (baseline)
-- 310 MHz, 305 MHz, 300 MHz
-- 295 MHz, 290 MHz, 280 MHz, 270 MHz
-- 260 MHz, 255 MHz, 250 MHz, 240 MHz
-- 220 MHz, 200 MHz
-
-At each frequency, the test performs:
-1. `writeSectorsRaw(8)` - Write 8 sectors (4KB)
-2. `readSectorsRaw(8)` - Read 8 sectors back
-3. Data integrity verification
-
-**Output Includes:**
-- Half-period value at each frequency
-- Pass/fail status for multi-block operations
-- Data integrity verification results
-- Identification of working vs failing frequencies
-
-**Use Cases:**
-- Determine safe sysclk frequencies for production
-- Identify timing boundaries for streamer operations
-- Debug frequency-related failures
-- Validate driver timing across frequency ranges
-
----
-
-### 5. SD_performance_benchmark.spin2
-
-**Purpose:** Measure read/write throughput for real-world performance data.
-
-**Usage:**
-```bash
-./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
-```
-
-**Measurements:**
-
-| Category | Tests |
-|----------|-------|
-| **Mount/Unmount** | Timing for card initialization and filesystem mount |
-| **Raw Sector** | Hardware-level read/write bypassing filesystem |
-| **Multi-Sector** | CMD18/CMD25 bulk transfers (8, 32, 64 sectors) |
-| **Filesystem** | Real-world file read/write through driver API |
-| **Overhead** | File open/close timing |
-
-**Test Sizes (Based on Embedded Use Cases):**
-
-| Size | Use Case |
-|------|----------|
-| 512 B | Single log entry |
-| 4 KB | Configuration file |
-| 32 KB | Icon or small data batch |
-| 128 KB | Small display image |
-| 256 KB | Larger display image |
-
-**Output Format:**
-```
-SD Card Performance Benchmark
-=============================
-Card: Gigastone 32GB
-
-Raw Sector Performance:
-  Read:  512 bytes in 0.42 ms (1.19 MB/s)
-  Write: 512 bytes in 2.31 ms (0.22 MB/s)
-
-Multi-Sector Performance (64 sectors = 32KB):
-  Read:  32768 bytes in 18.2 ms (1.76 MB/s)
-  Write: 32768 bytes in 45.7 ms (0.70 MB/s)
-
-Filesystem Performance:
-  File Read (32KB):  62.3 ms (513 KB/s)
-  File Write (32KB): 89.1 ms (359 KB/s)
-  File Open:         12.4 ms
-  File Close:        8.7 ms
-```
-
-**Statistics:**
-- Each measurement repeated 10 times
-- Reports min/avg/max values
-- Calculates throughput in KB/s and MB/s
-
-**Use Cases:**
-- Establish performance baselines
-- Compare different SD cards
-- Measure impact of driver optimizations
-- Verify production card performance
-
----
-
-### 6. SD_FAT32_audit.spin2
+### 3. DFS_SD_FAT32_audit.spin2
 
 **Purpose:** Verify FAT32 filesystem integrity without modifying the card.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+./run_test.sh ../src/UTILS/DFS_SD_FAT32_audit.spin2 -t 60
 ```
 
 **Read-Only:** This tool does NOT modify any data on the card.
@@ -356,13 +217,13 @@ END_SESSION
 
 ---
 
-### 7. SD_FAT32_fsck.spin2
+### 4. DFS_SD_FAT32_fsck.spin2
 
 **Purpose:** Check and repair FAT32 filesystem corruption.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
+./run_test.sh ../src/UTILS/DFS_SD_FAT32_fsck.spin2 -t 300
 ```
 
 **WARNING:** This tool **modifies the card** to repair detected problems. Run the audit tool first if you want a read-only check.
@@ -391,9 +252,7 @@ END_SESSION
 
 **Memory Requirements:**
 
-The cluster bitmap uses 256 KB of P2 hub RAM (LONG[65536]), covering up to 2,097,152 clusters — sufficient for cards up to approximately 64 GB. Cards with more clusters receive structural integrity checks only (passes 1 and 4); chain validation and lost cluster recovery (passes 2 and 3) are skipped.
-
-This is a current constraint of the P2's 512 KB hub memory, not a fundamental design limitation. Research into windowed or overlay-based bitmap approaches that could extend full validation to larger cards is on the [Punch List](Plans/PUNCH-LIST.md).
+The cluster bitmap uses 256KB (LONG[65536]) covering 2,097,152 clusters per window. For cards up to approximately 64GB, a single window suffices. Larger cards are processed using multiple bitmap windows — the directory tree is re-walked for each window, and lost cluster recovery runs per window. All four passes execute regardless of card size.
 
 **Sample Output:**
 ```
@@ -464,63 +323,261 @@ END_SESSION
 
 ---
 
+## Flash Utility Details
+
+### 5. DFS_FL_format.spin2
+
+**Purpose:** Format the onboard 16MB Flash filesystem.
+
+**Usage:**
+```bash
+./run_test.sh ../src/UTILS/DFS_FL_format.spin2 -t 120
+```
+
+**WARNING:** This will **ERASE ALL FILES** stored in Flash!
+
+The Flash format operation cancels all active blocks and remounts the filesystem, effectively starting with a clean slate.
+
+**Output:**
+```
+======================================================
+  Flash Filesystem Format Utility
+======================================================
+
+WARNING: This will ERASE ALL FILES in Flash!
+
+Formatting Flash filesystem...
+
+FORMAT SUCCESSFUL!
+
+END_SESSION
+```
+
+**Use Cases:**
+- Initialize Flash filesystem on a new board
+- Reset Flash after development/testing
+- Recover from severe corruption when fsck cannot repair
+
+---
+
+### 6. DFS_FL_audit.spin2
+
+**Purpose:** Read-only integrity check for the onboard Flash filesystem.
+
+**Usage:**
+```bash
+./run_test.sh ../src/UTILS/DFS_FL_audit.spin2 -t 120
+```
+
+**Read-Only:** This tool does NOT modify the Flash chip.
+
+**Three-Phase Check:**
+
+| Phase | Operation | Purpose |
+|-------|-----------|---------|
+| **Phase 1** | `canMount()` | Non-destructive health check (scans all blocks, validates CRC-32) |
+| **Phase 2** | `mount()` + `stats()` | Verify mount succeeds, read block/file counts |
+| **Phase 3** | File iteration | Walk all files via `directory()`, compare count against `stats()` |
+
+**Verifications:**
+- canMount reports no issues (CRC-32 valid, no duplicate IDs, no orphaned blocks)
+- Mount succeeds
+- Used blocks + free blocks = total blocks
+- File count from stats() matches file count from iteration
+- JEDEC ID readable
+
+**Sample Output:**
+```
+======================================================
+  Flash Filesystem Audit (Read-Only)
+======================================================
+
+Phase 1: canMount() health check...
+  canMount: PASS
+
+Phase 2: Mount and statistics...
+  Mount: PASS
+  Used blocks:  42
+  Free blocks:  3798
+  File count:   5
+  Total blocks: 3840
+  JEDEC ID: $00EF4018_12345678
+
+Phase 3: File iteration verification...
+  [1] config.dat (256 bytes)
+  [2] log_001.txt (1024 bytes)
+  [3] log_002.txt (512 bytes)
+  [4] settings.bin (128 bytes)
+  [5] firmware.img (8192 bytes)
+  Iterated files: 5
+  Total bytes:    10112
+  File count: MATCH
+
+======================================================
+  AUDIT PASSED - Flash filesystem is healthy
+======================================================
+
+END_SESSION
+```
+
+**Use Cases:**
+- Verify Flash filesystem health before deployment
+- Check integrity after unexpected power loss
+- Monitor Flash wear and utilization
+- Debug mount or file access failures
+
+---
+
+### 7. DFS_FL_fsck.spin2
+
+**Purpose:** Check and repair Flash filesystem corruption.
+
+**Usage:**
+```bash
+./run_test.sh ../src/UTILS/DFS_FL_fsck.spin2 -t 120
+```
+
+**How Repair Works:**
+
+The Flash mount process already performs automatic repair:
+- **M1**: Scans all blocks, validates CRC-32, resolves duplicate block IDs, cancels corrupted blocks
+- **M2**: Locates complete files, identifies orphaned blocks
+- **M3**: Cancels orphaned blocks
+
+The fsck utility leverages this by first running a read-only check (`canMount`), then triggering a repair-mount if issues are detected.
+
+**Two-Phase Process:**
+
+| Phase | Operation | Purpose |
+|-------|-----------|---------|
+| **Phase 1** | `canMount()` | Read-only audit to detect issues |
+| **Phase 2** | `mount()` | Triggers automatic repair (only if Phase 1 finds issues) |
+
+**Sample Output (no issues):**
+```
+======================================================
+  Flash Filesystem Check & Repair (FSCK)
+======================================================
+
+Phase 1: Read-only health check (canMount)...
+  Health check: PASS (no issues detected)
+
+  Mounting to verify file statistics...
+  Used blocks:  42
+  Free blocks:  3798
+  File count:   5
+
+======================================================
+  FSCK COMPLETE - No repairs needed
+======================================================
+
+END_SESSION
+```
+
+**Sample Output (with repair):**
+```
+======================================================
+  Flash Filesystem Check & Repair (FSCK)
+======================================================
+
+Phase 1: Read-only health check (canMount)...
+  Health check: ISSUES DETECTED (status=-23)
+
+Phase 2: Repairing via mount (resolves duplicates, orphans, bad CRC)...
+  Mount/repair: SUCCESS
+
+  Post-repair statistics:
+  Used blocks:  40
+  Free blocks:  3800
+  File count:   4
+
+======================================================
+  FSCK COMPLETE - Repairs applied
+======================================================
+
+END_SESSION
+```
+
+**Use Cases:**
+- Repair Flash after unexpected power loss during write operations
+- Resolve duplicate block IDs from interrupted make-before-break replacements
+- Clean up orphaned blocks from incomplete file operations
+- Recover from CRC-32 failures caused by bit errors
+
+---
+
 ## Directory Structure
 
 ```
 src/UTILS/
-├── SD_format_card.spin2            # FAT32 card formatter
-├── SD_card_characterize.spin2      # Card register reader
-├── SD_speed_characterize.spin2     # SPI speed tester
-├── SD_frequency_characterize.spin2 # Sysclk frequency tester
-├── SD_performance_benchmark.spin2  # Throughput measurement
-├── SD_FAT32_audit.spin2            # Filesystem validator
-├── SD_FAT32_fsck.spin2             # Filesystem check & repair
-├── isp_format_utility.spin2        # FAT32 format library (used by SD_format_card)
+├── DFS_SD_format_card.spin2        # FAT32 card formatter
+├── DFS_SD_card_characterize.spin2  # SD card register reader
+├── DFS_SD_FAT32_audit.spin2        # FAT32 filesystem validator
+├── DFS_SD_FAT32_fsck.spin2         # FAT32 filesystem check & repair
+├── DFS_FL_format.spin2             # Flash filesystem formatter
+├── DFS_FL_audit.spin2              # Flash filesystem integrity check
+├── DFS_FL_fsck.spin2               # Flash filesystem check & repair
+├── isp_format_utility.spin2        # FAT32 format library (used by DFS_SD_format_card)
 ├── isp_fsck_utility.spin2          # Combined FSCK + Audit library (runs in temp cog)
+├── isp_mem_strings.spin2           # String manipulation library
 └── isp_string_fifo.spin2           # Lock-free inter-cog string FIFO
 ```
 
 ---
 
-## Recommended Workflow
+## Recommended Workflows
 
-### New Card Setup
+### New SD Card Setup
 
 1. **Characterize** - Read card registers to identify the card
    ```bash
-   ./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+   ./run_test.sh ../src/UTILS/DFS_SD_card_characterize.spin2 -t 60
    ```
 
-2. **Speed Test** - Find maximum reliable SPI speed
+2. **Format** - Create clean FAT32 filesystem
    ```bash
-   ./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
+   ./run_test.sh ../src/UTILS/DFS_SD_format_card.spin2 -t 120
    ```
 
-3. **Format** - Create clean FAT32 filesystem
+3. **Audit** - Verify filesystem structure
    ```bash
-   ./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
+   ./run_test.sh ../src/UTILS/DFS_SD_FAT32_audit.spin2 -t 60
    ```
 
-4. **Audit** - Verify filesystem structure
-   ```bash
-   ./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
-   ```
-
-5. **Benchmark** - Measure performance baseline
-   ```bash
-   ./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
-   ```
-
-### After Testing
+### After SD Testing
 
 Run the audit tool to verify filesystem integrity:
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+./run_test.sh ../src/UTILS/DFS_SD_FAT32_audit.spin2 -t 60
 ```
 
 If the audit reports failures, run FSCK to auto-repair:
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
+./run_test.sh ../src/UTILS/DFS_SD_FAT32_fsck.spin2 -t 300
+```
+
+### Flash Filesystem Setup
+
+1. **Format** - Initialize Flash filesystem (erases all existing files)
+   ```bash
+   ./run_test.sh ../src/UTILS/DFS_FL_format.spin2 -t 120
+   ```
+
+2. **Audit** - Verify filesystem health
+   ```bash
+   ./run_test.sh ../src/UTILS/DFS_FL_audit.spin2 -t 120
+   ```
+
+### After Flash Testing
+
+Run the audit tool for a non-destructive health check:
+```bash
+./run_test.sh ../src/UTILS/DFS_FL_audit.spin2 -t 120
+```
+
+If the audit reports issues, run FSCK to trigger auto-repair:
+```bash
+./run_test.sh ../src/UTILS/DFS_FL_fsck.spin2 -t 120
 ```
 
 ---
@@ -537,7 +594,20 @@ CON
     SD_SCK  = 61    ' Serial Clock
 ```
 
+The Flash chip shares MOSI, MISO, and SCK with the SD card but has a separate chip select. Both devices are managed by the unified `dual_sd_fat32_flash_fs` driver which handles SPI bus arbitration automatically.
+
 Modify the `CON` section in each utility if using different pins.
+
+---
+
+## Support Libraries
+
+| Library | Purpose |
+|---------|---------|
+| **isp_format_utility.spin2** | FAT32 format engine — creates MBR, VBR, FAT tables, root directory. Used by `DFS_SD_format_card`. |
+| **isp_fsck_utility.spin2** | FAT32 FSCK + Audit engine — 4-pass structural repair, directory/chain validation, lost cluster recovery. Runs in a temporary cog. Used by `DFS_SD_FAT32_audit` and `DFS_SD_FAT32_fsck`. |
+| **isp_mem_strings.spin2** | String manipulation routines for hub memory. |
+| **isp_string_fifo.spin2** | Lock-free inter-cog string FIFO for passing debug output from the FSCK/Audit cog back to the main cog. |
 
 ---
 

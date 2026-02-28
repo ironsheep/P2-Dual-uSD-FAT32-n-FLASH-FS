@@ -31,7 +31,7 @@ CON
      LARGE_BUF = 4096
 
 OBJ
-    dfs   : "dual_fs"
+    dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
 
 DAT

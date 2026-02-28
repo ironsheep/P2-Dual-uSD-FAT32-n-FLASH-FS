@@ -10,7 +10,7 @@ Phase 3 ports all Flash file I/O methods from the reference driver into the work
 
 ## Key Files
 
-- `src/dual_fs.spin2` — All changes go here (~7187 lines → ~8300 lines)
+- `src/dual_sd_fat32_flash_fs.spin2` — All changes go here (~7187 lines → ~8300 lines)
 - `REF-FLASH-uSD/FLASH/flash_fs.spin2` — Source of truth (lines 504-2558 contain all methods to port)
 - `src/DUAL_RT_phase3_verify.spin2` — New verification test
 
@@ -20,7 +20,7 @@ Phase 3 ports all Flash file I/O methods from the reference driver into the work
 
 Every ported method follows these mechanical substitutions:
 
-| flash_fs.spin2 | dual_fs.spin2 | Notes |
+| flash_fs.spin2 | dual_sd_fat32_flash_fs.spin2 | Notes |
 |---|---|---|
 | `fsMounted` | `flash_mounted` | Mount flag |
 | `locktry(fsLock)` / `lockrel(fsLock)` | *(removed)* | Worker cog is single-threaded |
@@ -240,7 +240,7 @@ Run: `tools/run_test.sh ../src/DUAL_RT_phase3_verify.spin2 -t 120`
 9. PUB API routing (Step 9)
 10. Verification test (Step 10)
 
-Compile-check after each step with `pnut-ts -d DUAL_RT_phase2_verify.spin2` (uses dual_fs.spin2).
+Compile-check after each step with `pnut-ts -d DUAL_RT_phase2_verify.spin2` (uses dual_sd_fat32_flash_fs.spin2).
 
 ---
 

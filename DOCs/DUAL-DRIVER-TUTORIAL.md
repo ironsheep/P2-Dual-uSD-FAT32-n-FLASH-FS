@@ -1,24 +1,24 @@
-# SD Card Driver — Tutorial
+# Dual Filesystem Driver — Tutorial
 
-*micro_sd_fat32_fs.spin2*
+*dual_sd_fat32_flash_fs.spin2*
 
-**A practical guide to FAT32 file operations on the Parallax Propeller 2**
+**A practical guide to SD + Flash file operations on the Parallax Propeller 2**
 
-This tutorial shows how to perform common filesystem operations using the SD card driver. If you're familiar with standard FAT32 APIs (FatFs, POSIX file I/O), this guide maps those concepts to our driver's interface.
+This tutorial shows how to perform common filesystem operations using the unified dual-FS driver. The driver manages both a microSD card (FAT32) and the onboard 16MB Flash chip through a single API.
 
-> **Reference:** For background on FAT32 internals and standard API concepts, see [FAT32-API-CONCEPTS-REFERENCE.md](Reference/FAT32-API-CONCEPTS-REFERENCE.md)
+> **Reference:** For architecture, command protocols, and internal details, see [DUAL-DRIVER-THEORY.md](DUAL-DRIVER-THEORY.md). For FAT32 background, see [FAT32-API-CONCEPTS-REFERENCE.md](Reference/FAT32-API-CONCEPTS-REFERENCE.md).
 
 ---
 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Handle-Based File API](#handle-based-file-api)
-3. [Mounting the Card](#mounting-the-card)
-4. [Working with Directories](#working-with-directories)
-5. [Searching for Files](#searching-for-files)
-6. [Reading Files](#reading-files)
-7. [Writing Files](#writing-files)
+2. [Initialization and Mounting](#initialization-and-mounting)
+3. [Two Devices, One API](#two-devices-one-api)
+4. [SD File Operations](#sd-file-operations)
+5. [Flash File Operations](#flash-file-operations)
+6. [Cross-Device Operations](#cross-device-operations)
+7. [Working with Directories](#working-with-directories)
 8. [Seeking and Random Access](#seeking-and-random-access)
 9. [File Information](#file-information)
 10. [File Management](#file-management)
@@ -26,9 +26,8 @@ This tutorial shows how to perform common filesystem operations using the SD car
 12. [Error Handling](#error-handling)
 13. [Complete Examples](#complete-examples)
 14. [Example Programs](#example-programs)
-15. [Architecture Notes](#architecture-notes)
+15. [Conditional Compilation](#conditional-compilation)
 16. [API Quick Reference](#api-quick-reference)
-17. [Conditional API Modules](#conditional-api-modules)
 
 ---
 
@@ -36,294 +35,531 @@ This tutorial shows how to perform common filesystem operations using the SD car
 
 ```spin2
 OBJ
-  sd : "micro_sd_fat32_fs"
+  fs : "dual_sd_fat32_flash_fs"
 
 CON
-  ' SD card pins - offsets from 8-pin header base pin
-  SD_BASE = 56                        ' P2 Edge Module default
-  SD_SCK  = SD_BASE + 5              ' Serial Clock
-  SD_CS   = SD_BASE + 4              ' Chip Select
-  SD_MOSI = SD_BASE + 3              ' Master Out, Slave In
-  SD_MISO = SD_BASE + 2              ' Master In, Slave Out
+  ' P2 Edge Module default pins
+  SD_CS   = 60
+  SD_MOSI = 59
+  SD_MISO = 58
+  SD_SCK  = 61
 
-PUB main() | handle, buf[128], bytes_read
-  ' Mount the card
-  if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    debug("Mount failed!")
+PUB main() | workerCog, handle, buf[128], bytes_read
+  ' Step 1: Initialize driver (starts worker cog)
+  workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  if workerCog < 0
+    debug("Init failed!")
     return
 
-  ' Open file for reading (handle-based API)
-  handle := sd.openFileRead(string("TEST.TXT"))
+  ' Step 2: Mount one or both devices
+  fs.mount(fs.DEV_BOTH)
+
+  ' Step 3: Use SD (FAT32 — directories, 8.3 filenames)
+  handle := fs.openFileRead(fs.DEV_SD, @"TEST.TXT")
   if handle >= 0
-    bytes_read := sd.readHandle(handle, @buf, 512)
-    sd.closeFileHandle(handle)
-    debug("Read ", udec(bytes_read), " bytes")
+    bytes_read := fs.readHandle(handle, @buf, 512)
+    fs.closeFileHandle(handle)
+    debug("SD: read ", udec(bytes_read), " bytes")
 
-  ' Clean shutdown
-  sd.unmount()
+  ' Step 4: Use Flash (block-based — directory emulation, long filenames)
+  handle := fs.open(fs.DEV_FLASH, @"sensor-log.dat", fs.FILEMODE_WRITE)
+  if handle >= 0
+    fs.wr_str(handle, @"Hello from Flash!")
+    fs.close(handle)
+
+  ' Step 5: Clean shutdown
+  fs.unmount(fs.DEV_BOTH)
+  fs.stop()
 ```
+
+Key differences from the SD-only reference driver:
+
+| SD-only driver | Unified driver |
+|----------------|----------------|
+| `sd : "micro_sd_fat32_fs"` | `fs : "dual_sd_fat32_flash_fs"` |
+| `sd.mount(CS, MOSI, MISO, SCK)` | `fs.init(CS, MOSI, MISO, SCK)` then `fs.mount(dev)` |
+| `sd.openFileRead(@"FILE")` | `fs.openFileRead(fs.DEV_SD, @"FILE")` |
+| (no Flash support) | `fs.open(fs.DEV_FLASH, @"file", mode)` |
 
 ---
 
-## Handle-Based File API
+## Initialization and Mounting
 
-The driver uses a handle-based file API that supports **multiple files and directories open simultaneously** (default 6 handles, user-configurable via `MAX_OPEN_FILES`). This enables use cases like:
-- Reading a configuration file while writing a log
-- Copying data between files
-- Comparing file contents
+Initialization and mounting are separate steps in the unified driver. This allows you to start the worker cog once and then mount/unmount devices independently during the application's lifetime.
 
-### Key Concepts
-
-**File Handles:** Each open file returns a handle (0-5, with the default 6 handles). Use this handle for all subsequent operations on that file.
-
-**Single-Writer Policy:** Only ONE file can be open for writing at a time. This prevents data corruption from concurrent writes.
-
-**Handle Type Enforcement:** `writeHandle()` on a read-only handle returns `E_INVALID_HANDLE` — you must open the file with `openFileWrite()` or `createFileNew()` to write. Reading from a write handle is permitted (useful for verify-after-write patterns).
-
-**Singleton Architecture:** The driver uses a singleton pattern - all OBJ instances share the same worker cog. Calling `stop()` from any instance affects all instances.
-
-### Filename Format
-
-The driver uses **8.3 short filenames** (up to 8 characters, a dot, and a 3-character extension). Names are case-insensitive — `"DATA.TXT"`, `"data.txt"`, and `"Data.Txt"` all refer to the same file. Long filenames (LFN) are not supported.
-
-### Opening Files
+### Step 1: Initialize
 
 ```spin2
-' Open for reading (returns handle or negative error code)
-handle := sd.openFileRead(string("DATA.TXT"))
-if handle < 0
-  debug("Open failed, error: ", sdec(handle))
-
-' Open for writing (existing file, appends — positions at end of file)
-handle := sd.openFileWrite(string("OUTPUT.TXT"))
-
-' Create new file for writing (fails if file already exists)
-handle := sd.createFileNew(string("NEWFILE.TXT"))
+PUB init(sd_cs, mosi, miso, sd_sck) : workerCog
 ```
 
-### Reading/Writing with Handles
+`init()` stores the pin assignments, allocates a hardware lock, starts the worker cog, and returns the worker's cog ID (0–7). Call it once at startup. If it returns a negative value, initialization failed.
 
 ```spin2
-' Read using handle
-bytes_read := sd.readHandle(handle, @buffer, count)
-
-' Write using handle
-bytes_written := sd.writeHandle(handle, @buffer, count)
+workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+if workerCog < 0
+  debug("Init failed!")
+  return
 ```
 
-### Closing Files
+### Step 2: Mount
 
 ```spin2
-' Close specific handle
-sd.closeFileHandle(handle)
-
-' Sync all open handles without closing
-sd.syncAllHandles()
+PUB mount(dev) : status
 ```
 
-### File Operations with Handles
+Mount one or both devices. The `dev` parameter selects the target:
+
+| Argument | Effect |
+|----------|--------|
+| `fs.DEV_SD` | Mount SD card only |
+| `fs.DEV_FLASH` | Mount Flash chip only |
+| `fs.DEV_BOTH` | Mount both devices |
 
 ```spin2
-' Get file size
-size := sd.fileSizeHandle(handle)
+' Mount both devices
+status := fs.mount(fs.DEV_BOTH)
 
-' Get current position
-pos := sd.tellHandle(handle)
-
-' Check for end of file
-if sd.eofHandle(handle)
-  debug("At end of file")
-
-' Seek to position
-sd.seekHandle(handle, position)
-
-' Flush writes without closing
-sd.syncHandle(handle)
+' Or mount individually
+fs.mount(fs.DEV_SD)
+fs.mount(fs.DEV_FLASH)
 ```
 
-### Multi-File Example
+`mount()` returns `SUCCESS` (0) on success, or a negative error code on failure. After mounting, you can check the status:
 
 ```spin2
-PUB copyFile(src_name, dest_name) | src_h, dest_h, buf[128], bytes
-  ' Open source for reading
-  src_h := sd.openFileRead(src_name)
-  if src_h < 0
-    return false
-
-  ' Create destination for writing
-  dest_h := sd.createFileNew(dest_name)
-  if dest_h < 0
-    sd.closeFileHandle(src_h)
-    return false
-
-  ' Copy in chunks
-  repeat
-    bytes := sd.readHandle(src_h, @buf, 512)
-    if bytes == 0
-      quit
-    sd.writeHandle(dest_h, @buf, bytes)
-
-  ' Clean up both files
-  sd.closeFileHandle(src_h)
-  sd.closeFileHandle(dest_h)
-  return true
+if fs.mount(fs.DEV_SD)
+  debug("SD mount failed: ", sdec(fs.error()))
+else
+  debug("SD mounted, volume: ", zstr(fs.volumeLabel(fs.DEV_SD)))
 ```
 
-### Handle Error Codes
-
-| Code | Constant | Description |
-|------|----------|-------------|
-| -90 | `E_TOO_MANY_FILES` | All file handles in use |
-| -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
-| -92 | `E_FILE_ALREADY_OPEN` | File already open (same path) |
-| -93 | `E_NOT_A_DIR_HANDLE` | Expected directory handle, got file handle |
-
----
-
-## Mounting the Card
-
-### Concept
-
-Before any filesystem operations, you must mount the card. This initializes the SPI interface, reads the boot sector, and locates the FAT and root directory.
-
-### API
+### Checking Mount Status
 
 ```spin2
-PUB mount(_cs, _mosi, _miso, _sck) : result
+if fs.mounted(fs.DEV_SD)
+  debug("SD is mounted")
+if fs.mounted(fs.DEV_FLASH)
+  debug("Flash is mounted")
 ```
 
-**Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `_cs` | pin number | Chip Select (directly wired to SD card CS) |
-| `_mosi` | pin number | Master Out, Slave In (data to card) |
-| `_miso` | pin number | Master In, Slave Out (data from card) |
-| `_sck` | pin number | Serial Clock |
-
-**Returns:** `true` on success, `false` on failure
-
-**Example:**
-```spin2
-CON
-  SD_BASE = 56                        ' P2 Edge Module default
-  SD_SCK  = SD_BASE + 5
-  SD_CS   = SD_BASE + 4
-  SD_MOSI = SD_BASE + 3
-  SD_MISO = SD_BASE + 2
-
-PUB setup()
-  if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    debug("Card mounted successfully")
-    debug("Volume: ", zstr(sd.volumeLabel()))
-  else
-    debug("Mount failed, error: ", sdec(sd.error()))
-```
-
-### Using a Different 8-Pin Header Group
-
-The microSD add-on board works on any P2 8-pin header group — not just the default P2 Edge Module pins. Simply change `SD_BASE` to match your wiring:
-
-| Header Group | SD_BASE | CS | MOSI | MISO | SCK |
-|---|---|---|---|---|---|
-| P0–P7 | 0 | P4 | P3 | P2 | P5 |
-| P8–P15 | 8 | P12 | P11 | P10 | P13 |
-| P16–P23 | 16 | P20 | P19 | P18 | P21 |
-| P24–P31 | 24 | P28 | P27 | P26 | P29 |
-| P32–P39 | 32 | P36 | P35 | P34 | P37 |
-| P40–P47 | 40 | P44 | P43 | P42 | P45 |
-| P48–P55 | 48 | P52 | P51 | P50 | P53 |
-
-**Example — External Header on P16–P23:**
-
-```spin2
-CON
-  SD_BASE = 16                        ' External header (P16-P23 group)
-  SD_SCK  = SD_BASE + 5              ' P21
-  SD_CS   = SD_BASE + 4              ' P20
-  SD_MOSI = SD_BASE + 3              ' P19
-  SD_MISO = SD_BASE + 2              ' P18
-```
-
-> **Note:** The P2 Edge Module's built-in SD slot is hard-wired to the P56–P63 group.
-> External headers use longer PCB traces, which may limit maximum reliable SPI speed
-> compared to the on-board slot. The driver defaults to 25 MHz SPI which works on all
-> tested configurations.
+`mounted()` is lock-free — it reads a hub RAM flag directly, so it's safe and fast to call from any cog at any time.
 
 ### Unmounting
 
 Always unmount cleanly to ensure data integrity:
 
 ```spin2
-sd.unmount()
+fs.unmount(fs.DEV_BOTH)   ' Flush and unmount both
+fs.stop()                  ' Stop worker cog, release lock
 ```
 
-This flushes any pending writes and updates the FSInfo sector with the correct free cluster count.
+For SD, unmounting flushes pending writes and updates the FSInfo sector. For Flash, it flushes any open file block buffers.
+
+### Pin Assignments
+
+The P2 Edge Module uses a fixed pin mapping where MISO and MOSI are shared between both devices, while CS and SCK swap roles:
+
+| Pin | SD Function | Flash Function |
+|-----|-------------|----------------|
+| P58 | MISO | MISO |
+| P59 | MOSI | MOSI |
+| P60 | CS | SCK |
+| P61 | SCK | CS |
+
+You pass the SD pin assignments to `init()`. The driver derives the Flash pins automatically by swapping P60/P61.
+
+---
+
+## Two Devices, One API
+
+The driver manages two very different storage devices through a unified interface:
+
+| Feature | SD Card (FAT32) | Flash Chip (Block-Based) |
+|---------|-----------------|--------------------------|
+| Capacity | Card-dependent (up to 2 TB, SDHC/SDXC) | 16 MB (3968 x 4KB blocks) |
+| Filenames | 8.3 format (case-insensitive) | Up to 127 characters |
+| Directories | Full hierarchy (cd, mkdir, tree) | Emulated via path-segmented filenames |
+| Sector/block size | 512 bytes | 4096 bytes |
+| File I/O style | Handle-based (readHandle/writeHandle) | Byte/word/long/string-level (wr_byte/rd_str) |
+| Removable | Yes | No (soldered on board) |
+
+### Device Constants
+
+Most path-based methods take a `dev` parameter as the first argument:
+
+```spin2
+fs.DEV_SD      ' microSD card
+fs.DEV_FLASH   ' Onboard Flash chip
+fs.DEV_BOTH    ' Both (mount/unmount only)
+```
+
+Handle-based methods (readHandle, writeHandle, closeFileHandle, etc.) do **not** need a device parameter — the driver remembers which device each handle belongs to.
+
+### Choosing the Right Device
+
+| Use Case | Best Device | Why |
+|----------|-------------|-----|
+| Large data files | SD | More capacity, removable for PC access |
+| Configuration storage | Flash | Always present, survives card removal |
+| High-frequency logging | Flash | No SD latency, fast small writes |
+| Long-term archival | SD | Removable, standard FAT32, large capacity |
+| Data exchange with PC | SD | Standard FAT32, USB card reader |
+| Sensor buffering | Flash | Fast writes, then archive to SD |
+
+---
+
+## SD File Operations
+
+SD file operations use the handle-based API familiar from standard file I/O: open a file, get a handle, read/write through it, close when done.
+
+### Filename Format
+
+SD uses **8.3 short filenames**: up to 8 characters, a dot, and a 3-character extension. Names are case-insensitive — `"DATA.TXT"`, `"data.txt"`, and `"Data.Txt"` all refer to the same file. Long filenames (LFN) are not supported.
+
+### Opening Files
+
+```spin2
+' Open for reading (returns handle or negative error code)
+handle := fs.openFileRead(fs.DEV_SD, @"DATA.TXT")
+if handle < 0
+  debug("Open failed, error: ", sdec(handle))
+
+' Open for writing/append (existing file, positions at end)
+handle := fs.openFileWrite(fs.DEV_SD, @"OUTPUT.TXT")
+
+' Create new file for writing (fails if file already exists)
+handle := fs.createFileNew(fs.DEV_SD, @"NEWFILE.TXT")
+```
+
+### Reading and Writing
+
+```spin2
+' Read using handle
+bytes_read := fs.readHandle(handle, @buffer, count)
+
+' Write using handle
+bytes_written := fs.writeHandle(handle, @buffer, count)
+```
+
+### Closing and Flushing
+
+```spin2
+' Close handle (flushes pending writes, updates directory entry)
+fs.closeFileHandle(handle)
+
+' Flush without closing (checkpoint for power-fail safety)
+fs.syncHandle(handle)
+
+' Flush all open write handles
+fs.syncAllHandles()
+```
+
+### Handle Concepts
+
+**Handle pool:** File and directory handles share a single pool of `MAX_OPEN_FILES` slots (default 6, configurable). Both SD and Flash handles come from this same pool.
+
+**Single-writer policy:** Only one handle can have a given SD file open for writing at a time. Multiple read handles to the same file are allowed.
+
+**Handle type guards:** File operations reject directory handles and vice versa.
+
+---
+
+## Flash File Operations
+
+Flash uses a different I/O style than SD. Instead of bulk buffer reads/writes, Flash provides byte, word, long, and string-level operations.
+
+### Filename Format
+
+Flash supports filenames up to **127 characters** (128 bytes including null terminator). Names are stored as-is — there is no 8.3 restriction and no case folding.
+
+### Open Modes
+
+```spin2
+fs.FILEMODE_READ             ' "r" — read existing file
+fs.FILEMODE_WRITE            ' "w" — write new file (truncates if exists)
+fs.FILEMODE_APPEND           ' "a" — append to existing file
+fs.FILEMODE_READ_EXTENDED    ' "r+" — read/write existing file
+fs.FILEMODE_WRITE_EXTENDED   ' "w+" — read/write, truncates if exists
+```
+
+### Opening and Closing
+
+```spin2
+' Open for reading
+handle := fs.open(fs.DEV_FLASH, @"sensor-log.dat", fs.FILEMODE_READ)
+if handle < 0
+  debug("Open failed: ", sdec(handle))
+
+' Open for writing (creates new or truncates)
+handle := fs.open(fs.DEV_FLASH, @"config.dat", fs.FILEMODE_WRITE)
+
+' Close when done
+fs.close(handle)
+
+' Flush without closing
+fs.flush(handle)
+```
+
+### Writing Data
+
+```spin2
+' Write individual values
+fs.wr_byte(handle, $42)              ' Single byte
+fs.wr_word(handle, 1234)             ' 16-bit (little-endian)
+fs.wr_long(handle, 1_000_000)        ' 32-bit (little-endian)
+
+' Write string (includes null terminator in the file)
+fs.wr_str(handle, @"Temperature: 23.5C")
+```
+
+### Reading Data
+
+```spin2
+' Read individual values
+byte_val := fs.rd_byte(handle)       ' Single byte
+word_val := fs.rd_word(handle)       ' 16-bit
+long_val := fs.rd_long(handle)       ' 32-bit
+
+' Read string (reads until null terminator or maxLen)
+VAR
+  byte str_buf[128]
+
+bytes_read := fs.rd_str(handle, @str_buf, 128)
+```
+
+> **Note:** `wr_str()` writes the null terminator into the file. `rd_str()` reads until it finds that terminator (or hits the buffer limit). The return value from `rd_str()` is the string length **without** the terminator.
+
+### Pre-Allocating Files
+
+For Flash files that will be written incrementally, you can pre-allocate space:
+
+```spin2
+' Create a 4000-byte file filled with zeros
+fs.create_file(fs.DEV_FLASH, @"buffer.dat", 0, 4000)
+```
+
+### Circular Files
+
+Flash supports circular (ring-buffer) files that wrap around at a fixed size:
+
+```spin2
+handle := fs.open_circular(fs.DEV_FLASH, @"ringlog.dat", fs.FILEMODE_WRITE, 8000)
+' Writes beyond 8000 bytes wrap to the beginning
+```
+
+### Flash Example: Write and Read Back
+
+```spin2
+PUB flashReadWrite() | handle, value
+  ' Write some values
+  handle := fs.open(fs.DEV_FLASH, @"test.dat", fs.FILEMODE_WRITE)
+  if handle >= 0
+    fs.wr_long(handle, 42)
+    fs.wr_str(handle, @"hello")
+    fs.close(handle)
+
+  ' Read them back
+  handle := fs.open(fs.DEV_FLASH, @"test.dat", fs.FILEMODE_READ)
+  if handle >= 0
+    value := fs.rd_long(handle)
+    debug("Value: ", udec(value))          ' 42
+
+    VAR byte name_buf[32]
+    fs.rd_str(handle, @name_buf, 32)
+    debug("String: ", zstr(@name_buf))     ' hello
+
+    fs.close(handle)
+```
+
+---
+
+## Cross-Device Operations
+
+The driver provides a built-in `copyFile()` that copies data between any combination of devices:
+
+```spin2
+PUB copyFile(srcDev, pSrc, dstDev, pDst) : status
+```
+
+### Copying Between Devices
+
+```spin2
+' Copy from SD to Flash
+fs.copyFile(fs.DEV_SD, @"DATA.TXT", fs.DEV_FLASH, @"data-backup.txt")
+
+' Copy from Flash to SD
+fs.copyFile(fs.DEV_FLASH, @"sensor.dat", fs.DEV_SD, @"SENSOR.DAT")
+
+' Same-device copy also works
+fs.copyFile(fs.DEV_SD, @"FILE.TXT", fs.DEV_SD, @"COPY.TXT")
+```
+
+`copyFile()` opens both files, transfers data in 512-byte chunks, and closes both handles. It handles the SPI bus switching internally.
+
+### Manual Cross-Device Copy
+
+For more control (e.g., data transformation during copy), you can do it manually:
+
+```spin2
+PUB manualCopy() | src_h, dst_h, buf[128], bytes
+  ' Read from Flash
+  src_h := fs.open(fs.DEV_FLASH, @"log.dat", fs.FILEMODE_READ)
+  if src_h < 0
+    return
+
+  ' Write to SD
+  dst_h := fs.createFileNew(fs.DEV_SD, @"LOG.TXT")
+  if dst_h < 0
+    fs.close(src_h)
+    return
+
+  ' Copy loop — driver handles SPI switching per command
+  repeat
+    bytes := fs.readHandle(src_h, @buf, 512)
+    if bytes == 0
+      quit
+    fs.writeHandle(dst_h, @buf, bytes)
+
+  fs.close(src_h)
+  fs.closeFileHandle(dst_h)
+```
 
 ---
 
 ## Working with Directories
 
-### Concept
+Both SD and Flash support directory navigation. SD uses the native FAT32 directory hierarchy. Flash emulates directories using path-segmented filenames — the driver prepends the current working directory prefix to filenames transparently.
 
-The driver maintains a "current working directory" (CWD) **per cog** -- each P2 cog has its own independent CWD. This means cog A can navigate to `/LOGS` while cog B works in `/DATA` without interference. You navigate the directory tree by changing directories, and can use absolute paths (starting with `/`) or relative paths.
+### Changing the Current Directory (SD)
 
-### Changing the Current Directory
+Each P2 cog maintains its own current working directory (CWD):
 
-```spin2
-PUB changeDirectory(name_ptr) : result
-```
-
-**Examples:**
 ```spin2
 ' Navigate to a subdirectory
-sd.changeDirectory(string("LOGS"))
+fs.changeDirectory(fs.DEV_SD, @"LOGS")
 
 ' Navigate to root
-sd.changeDirectory(string("/"))
+fs.changeDirectory(fs.DEV_SD, @"/")
 
 ' Navigate using absolute path
-sd.changeDirectory(string("/DATA/2026/JAN"))
+fs.changeDirectory(fs.DEV_SD, @"/DATA/2026/FEB")
 
-' Navigate up one level (to parent)
-sd.changeDirectory(string(".."))
+' Navigate up one level
+fs.changeDirectory(fs.DEV_SD, @"..")
 ```
 
-### Creating a New Directory
+### Creating Directories (SD)
 
 ```spin2
-PUB newDirectory(name_ptr) : result
-```
-
-**Example:**
-```spin2
-' Create a new directory in current location
-if sd.newDirectory(string("BACKUP"))
+if fs.newDirectory(fs.DEV_SD, @"BACKUP")
   debug("Directory created")
 else
   debug("Failed - may already exist")
 ```
 
-### Enumerating Directory Contents
+### Enumerating SD Directory Contents
+
+**Index-based (simple, from CWD):**
 
 ```spin2
-PUB readDirectory(entry) : result
+PUB listSDDirectory() | entry_num, p_entry
+  entry_num := 0
+  repeat
+    p_entry := fs.readDirectory(entry_num)
+    if p_entry == 0
+      quit
+
+    if fs.attributes() & $10
+      debug("[DIR]  ", zstr(fs.fileName()))
+    else
+      debug("[FILE] ", zstr(fs.fileName()), " (", udec(fs.fileSize()), " bytes)")
+
+    entry_num++
 ```
 
-This function iterates through entries in the current directory. Call it with entry index 0, 1, 2, etc. to get successive entries. Returns a pointer to the internal entry buffer, or 0 when no more entries exist.
+**Handle-based (enumerate a specific path without changing CWD):**
 
-**Getting Entry Information:**
+```spin2
+PUB listPath(p_path) | dh, p_entry
+  dh := fs.openDirectory(fs.DEV_SD, p_path)
+  if dh < 0
+    debug("Cannot open: ", sdec(dh))
+    return
 
-After `readDirectory()` returns successfully, use these methods:
+  repeat
+    p_entry := fs.readDirectoryHandle(dh)
+    if p_entry == 0
+      quit
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `fileName()` | string pointer | 8.3 formatted filename |
-| `fileSize()` | long | Size in bytes (0 for directories) |
-| `attributes()` | byte | Attribute flags (see below) |
+    if fs.attributes() & $10
+      debug("[DIR]  ", zstr(fs.fileName()))
+    else
+      debug("[FILE] ", zstr(fs.fileName()))
 
-> **Important:** The pointers returned by `fileName()` and the data from `attributes()` / `fileSize()` are only valid until the next call to `readDirectory()` or `readDirectoryHandle()`. If you need to keep a filename, copy it with `bytemove()` before reading the next entry.
+  fs.closeDirectoryHandle(dh)
+```
 
-**Attribute Flags:**
+### Flash Directory Emulation
+
+Flash emulates directories using path-segmented filenames. The driver maintains a per-cog CWD prefix string that is transparently prepended to filenames during file operations.
+
+```spin2
+' Navigate Flash directories (same API as SD)
+fs.changeDirectory(fs.DEV_FLASH, @"logs")      ' CWD prefix becomes "logs/"
+fs.changeDirectory(fs.DEV_FLASH, @"2026")       ' CWD prefix becomes "logs/2026/"
+fs.changeDirectory(fs.DEV_FLASH, @"/")           ' Back to root (empty prefix)
+fs.changeDirectory(fs.DEV_FLASH, @"..")          ' Up one level
+
+' Create a directory (validates path, stores nothing on Flash)
+fs.newDirectory(fs.DEV_FLASH, @"sensors")
+
+' Open a file — CWD prefix is prepended automatically
+fs.changeDirectory(fs.DEV_FLASH, @"sensors")
+handle := fs.open(fs.DEV_FLASH, @"temp.dat", fs.FILEMODE_WRITE)
+' File is stored as "sensors/temp.dat" on Flash
+```
+
+**Key differences from SD directories:**
+- Empty directories vanish when their last file is deleted (directories exist only because files with those path segments exist)
+- `newDirectory()` on Flash is a validation-only operation — it doesn't write anything to Flash
+- Flash filenames support "/" characters naturally (up to 127 chars total including path segments)
+
+### Enumerating Flash Directory Contents
+
+**Handle-based (filtered by CWD):**
+
+```spin2
+PUB listFlashDir() | dh, p_entry
+  dh := fs.openDirectory(fs.DEV_FLASH, @"/sensors")
+  if dh < 0
+    return
+
+  repeat
+    p_entry := fs.readDirectoryHandle(dh)
+    if p_entry == 0
+      quit
+    debug("[FILE] ", zstr(fs.fileName()))
+
+  fs.closeDirectoryHandle(dh)
+```
+
+**Low-level iteration (all files, unfiltered):**
+
+```spin2
+PUB listAllFlashFiles() | block_id, status, name_buf[32], file_size
+  block_id := 0
+  repeat
+    status := fs.directory(fs.DEV_FLASH, @block_id, @name_buf, @file_size)
+    if status <> 0
+      quit
+    debug(zstr(@name_buf), " (", udec(file_size), " bytes)")
+```
+
+Call `directory()` with `block_id` initialized to 0. Each call updates `block_id` to point to the next file. When there are no more files, it returns a non-zero status. This shows all files with their full path-segmented names.
+
+### SD Attribute Flags
+
 | Value | Meaning |
 |-------|---------|
 | `$01` | Read-only |
@@ -333,324 +569,41 @@ After `readDirectory()` returns successfully, use these methods:
 | `$10` | Directory |
 | `$20` | Archive |
 
-**Example - List All Files in Current Directory:**
-```spin2
-PUB listDirectory() | entry_num, p_entry
-  entry_num := 0
-  repeat
-    p_entry := sd.readDirectory(entry_num)
-    if p_entry == 0
-      quit                                    ' No more entries
-
-    ' Check if it's a directory or file
-    if sd.attributes() & $10
-      debug("[DIR]  ", zstr(sd.fileName()))
-    else
-      debug("[FILE] ", zstr(sd.fileName()), " (", udec(sd.fileSize()), " bytes)")
-
-    entry_num++
-```
-
-### Handle-Based Directory Enumeration
-
-For more advanced use cases, the driver provides handle-based directory enumeration. This lets you enumerate a specific directory **without changing your CWD**, and supports concurrent enumeration from multiple cogs since each handle has its own state.
-
-```spin2
-PUB openDirectory(p_path) : handle
-PUB readDirectoryHandle(handle) : p_entry
-PUB closeDirectoryHandle(handle)
-```
-
-Directory handles share the same pool as file handles (`MAX_OPEN_FILES` total). Pass `"."` or `""` to enumerate the calling cog's CWD, or any path to enumerate a specific directory.
-
-**Example - List a Specific Directory Without Changing CWD:**
-```spin2
-PUB listPath(p_path) | dh, p_entry
-  dh := sd.openDirectory(p_path)
-  if dh < 0
-    debug("Cannot open directory: error ", sdec(dh))
-    return
-
-  repeat
-    p_entry := sd.readDirectoryHandle(dh)
-    if p_entry == 0
-      quit                                    ' End of directory
-
-    if sd.attributes() & $10
-      debug("[DIR]  ", zstr(sd.fileName()))
-    else
-      debug("[FILE] ", zstr(sd.fileName()), " (", udec(sd.fileSize()), " bytes)")
-
-  sd.closeDirectoryHandle(dh)
-```
-
-**When to use which:**
-| Approach | Use when... |
-|----------|-------------|
-| `readDirectory(index)` | Simple enumeration of current directory |
-| `openDirectory()` + `readDirectoryHandle()` | Enumerating a different directory without changing CWD, or concurrent enumeration from multiple cogs |
-
----
-
-## Searching for Files
-
-### Concept
-
-Unlike some APIs that provide a separate search function, our driver combines searching with opening. When you call `openFileRead()` with a path, the driver walks the directory tree to find the file.
-
-### Search for a File in Current Directory
-
-```spin2
-handle := sd.openFileRead(string("CONFIG.TXT"))
-if handle >= 0
-  ' File found and opened
-  sd.closeFileHandle(handle)
-else
-  debug("File not found")
-```
-
-### Search Using Full Path
-
-The driver supports absolute paths starting with `/`:
-
-```spin2
-' Search from root, regardless of current directory
-handle := sd.openFileRead(string("/SETTINGS/USER.CFG"))
-if handle >= 0
-  ' Found it
-  sd.closeFileHandle(handle)
-```
-
-### Check if Directory Exists
-
-```spin2
-if sd.changeDirectory(string("LOGS"))
-  debug("LOGS directory exists")
-  sd.changeDirectory(string(".."))          ' Go back up
-else
-  debug("LOGS directory not found")
-```
-
----
-
-## Reading Files
-
-### Concept
-
-File reading is byte-oriented. You provide a buffer and a count, and the driver returns however many bytes were actually read. The driver handles all the cluster chain following, sector boundary crossing, and buffering internally.
-
-### Opening a File for Reading
-
-```spin2
-handle := sd.openFileRead(string("DATA.TXT"))
-if handle < 0
-  debug("Open failed")
-  return
-```
-
-### Reading Data
-
-```spin2
-PUB readHandle(handle, p_buffer, count) : bytes_read
-```
-
-**Parameters:**
-| Parameter | Description |
-|-----------|-------------|
-| `handle` | File handle from openFileRead() |
-| `p_buffer` | Pointer to your receive buffer |
-| `count` | Maximum bytes to read |
-
-**Returns:** Actual number of bytes read (may be less than requested at end of file)
-
-### Reading Examples
-
-**Read Entire Small File:**
-```spin2
-VAR
-  byte buffer[512]
-
-PUB readSmallFile() | handle, size
-  handle := sd.openFileRead(string("MESSAGE.TXT"))
-  if handle < 0
-    return
-
-  size := sd.fileSizeHandle(handle)
-  sd.readHandle(handle, @buffer, size)
-  buffer[size] := 0                           ' Null-terminate for string use
-  debug(zstr(@buffer))
-  sd.closeFileHandle(handle)
-```
-
-**Read Large File in Chunks:**
-```spin2
-CON
-  CHUNK_SIZE = 512
-
-VAR
-  byte chunk[CHUNK_SIZE]
-
-PUB readLargeFile() | handle, total_read, bytes_this_read
-  handle := sd.openFileRead(string("BIGFILE.DAT"))
-  if handle < 0
-    return
-
-  total_read := 0
-  repeat
-    bytes_this_read := sd.readHandle(handle, @chunk, CHUNK_SIZE)
-    if bytes_this_read == 0
-      quit                                    ' End of file
-
-    ' Process chunk here...
-    processData(@chunk, bytes_this_read)
-
-    total_read += bytes_this_read
-
-  debug("Total bytes read: ", udec(total_read))
-  sd.closeFileHandle(handle)
-```
-
----
-
-## Writing Files
-
-### Concept
-
-Writing works similarly to reading. For new files, use `createFileNew()` which creates the file and returns a handle for writing. For existing files, use `openFileWrite()`.
-
-### Creating a New File
-
-```spin2
-handle := sd.createFileNew(string("NEWFILE.TXT"))
-if handle < 0
-  debug("Could not create file")
-  return
-```
-
-### Writing Data
-
-```spin2
-PUB writeHandle(handle, p_buffer, count) : bytes_written
-```
-
-**Parameters:**
-| Parameter | Description |
-|-----------|-------------|
-| `handle` | File handle from createFileNew() or openFileWrite() |
-| `p_buffer` | Pointer to data to write |
-| `count` | Number of bytes to write |
-
-### Writing Examples
-
-**Create and Write a Small File:**
-```spin2
-PUB createTextFile() | handle
-  handle := sd.createFileNew(string("HELLO.TXT"))
-  if handle >= 0
-    sd.writeHandle(handle, string("Hello, World!"), 13)
-    sd.closeFileHandle(handle)
-    debug("File created successfully")
-  else
-    debug("Could not create file")
-```
-
-**Write Binary Data:**
-```spin2
-VAR
-  long sensor_data[100]
-
-PUB saveSensorData() | handle
-  handle := sd.createFileNew(string("SENSOR.DAT"))
-  if handle >= 0
-    sd.writeHandle(handle, @sensor_data, 100 * 4)   ' 100 longs = 400 bytes
-    sd.closeFileHandle(handle)
-```
-
-**Write Large Data in Chunks:**
-```spin2
-PUB writeLargeData(p_data, total_bytes) | handle, offset, chunk_size
-  handle := sd.createFileNew(string("DUMP.BIN"))
-  if handle < 0
-    return false
-
-  offset := 0
-  repeat while offset < total_bytes
-    chunk_size := (total_bytes - offset) <# 512
-    sd.writeHandle(handle, p_data + offset, chunk_size)
-    offset += chunk_size
-
-  sd.closeFileHandle(handle)
-  return true
-```
-
-### Flushing Data Without Closing
-
-Use `syncHandle()` to flush pending writes without closing the file:
-
-```spin2
-PUB longRunningWrite() | handle, i
-  handle := sd.createFileNew(string("DATA.LOG"))
-  if handle < 0
-    return
-
-  repeat i from 0 to 999
-    sd.writeHandle(handle, @data_point, DATA_SIZE)
-
-    ' Checkpoint every 100 entries
-    if i // 100 == 99
-      sd.syncHandle(handle)
-
-  sd.closeFileHandle(handle)
-```
-
 ---
 
 ## Seeking and Random Access
 
-### Concept
-
-The driver maintains a file position that advances automatically with each read/write. You can change this position with `seekHandle()`.
-
-### Seek to Position
+### SD Seeking
 
 ```spin2
-PUB seekHandle(handle, pos) : result
+' Seek to absolute byte position
+fs.seekHandle(handle, position)
+
+' Get current position
+pos := fs.tellHandle(handle)
 ```
 
-**Parameters:**
-| Parameter | Description |
-|-----------|-------------|
-| `handle` | File handle |
-| `pos` | Byte offset from start of file |
+### Flash Seeking
 
-**Returns:** `SUCCESS` (0) on success, or a negative error code if position is beyond end of file
+Flash provides a richer seek API with a `whence` parameter:
 
-### Seeking Examples
-
-**Read from Middle of File:**
 ```spin2
-VAR
-  byte header[64]
+' Seek from start of file
+end_pos := fs.flashSeek(handle, 100, fs.SK_FILE_START)
 
-PUB readFileHeader() | handle
-  handle := sd.openFileRead(string("DATA.BIN"))
-  if handle < 0
-    return
-
-  sd.seekHandle(handle, 256)                  ' Skip first 256 bytes
-  sd.readHandle(handle, @header, 64)          ' Read 64-byte header
-  sd.closeFileHandle(handle)
+' Seek relative to current position
+end_pos := fs.flashSeek(handle, 50, fs.SK_CURRENT_POSN)
 ```
 
-**Random Access Read:**
+### Random Access Example (SD)
+
 ```spin2
 PUB readRecordAt(record_num) | handle, record[16]
-  ' Assuming 64-byte records
-  handle := sd.openFileRead(string("DATABASE.DAT"))
+  handle := fs.openFileRead(fs.DEV_SD, @"DATABASE.DAT")
   if handle >= 0
-    sd.seekHandle(handle, record_num * 64)
-    sd.readHandle(handle, @record, 64)
-    sd.closeFileHandle(handle)
+    fs.seekHandle(handle, record_num * 64)
+    fs.readHandle(handle, @record, 64)
+    fs.closeFileHandle(handle)
   return @record
 ```
 
@@ -658,53 +611,70 @@ PUB readRecordAt(record_num) | handle, record[16]
 
 ## File Information
 
-### Getting File Size
+### File Size
 
 ```spin2
-size := sd.fileSizeHandle(handle)
+' By handle (SD or Flash)
+size := fs.fileSizeHandle(handle)
+
+' By name (without opening)
+size := fs.file_size(fs.DEV_SD, @"DATA.TXT")
+size := fs.file_size(fs.DEV_FLASH, @"sensor.dat")
 ```
 
-Returns the size of the file in bytes.
-
-### Getting Current Position
+### End of File
 
 ```spin2
-pos := sd.tellHandle(handle)
+if fs.eofHandle(handle)
+  debug("At end of file")
 ```
 
-Returns the current read/write position.
-
-### Checking for End of File
+### Current Position
 
 ```spin2
-if sd.eofHandle(handle)
-  debug("Reached end of file")
+pos := fs.tellHandle(handle)
 ```
 
-### Volume Information
+### Volume and Device Information
 
 ```spin2
-' Get volume label
-debug("Volume: ", zstr(sd.volumeLabel()))
+' SD volume label
+debug("Volume: ", zstr(fs.volumeLabel(fs.DEV_SD)))
 
-' Get free space (returns sectors, not bytes)
-free_sectors := sd.freeSpace()
-debug("Free space: ", udec(free_sectors >> 11), " MB")  ' sectors / 2048 = MB
+' Free space
+sd_free := fs.freeSpace(fs.DEV_SD)         ' Returns sectors (x512 = bytes)
+fl_free := fs.freeSpace(fs.DEV_FLASH)      ' Returns free blocks (x4096 = bytes)
+
+' Device statistics (Flash)
+used, free_ct, file_count := fs.stats(fs.DEV_FLASH)
+debug("Flash: ", udec(file_count), " files, ", udec(free_ct), " blocks free")
+
+' Serial number (Flash)
+sn_hi, sn_lo := fs.serial_number(fs.DEV_FLASH)
+
+' Driver version
+ver := fs.version(fs.DEV_SD)    ' 300 (= v3.0.0)
+ver := fs.version(fs.DEV_FLASH) ' 200 (= v2.0.0)
 ```
 
-### Setting Timestamps
+### Setting Timestamps (SD Only)
 
-Set the date/time that will be applied to new files:
+Set the date/time applied to newly created files and directories:
 
 ```spin2
-PUB setDate(year, month, day, hour, minute, second)
+fs.setDate(2026, 2, 28, 14, 30, 0)
+handle := fs.createFileNew(fs.DEV_SD, @"STAMPED.TXT")
+fs.closeFileHandle(handle)
 ```
 
+### Checking File Existence
+
 ```spin2
-' Set timestamp before creating files
-sd.setDate(2026, 2, 3, 14, 30, 0)
-handle := sd.createFileNew(string("TIMESTAMPED.TXT"))
-sd.closeFileHandle(handle)
+if fs.exists(fs.DEV_SD, @"CONFIG.TXT")
+  debug("Config file found on SD")
+
+if fs.exists(fs.DEV_FLASH, @"calibration.dat")
+  debug("Calibration data found on Flash")
 ```
 
 ---
@@ -714,86 +684,84 @@ sd.closeFileHandle(handle)
 ### Deleting Files
 
 ```spin2
-PUB deleteFile(name_ptr) : result
+' Delete from SD (current directory)
+status := fs.deleteFile(fs.DEV_SD, @"OLD_DATA.TXT")
+
+' Delete from Flash
+status := fs.deleteFile(fs.DEV_FLASH, @"temp-log.dat")
 ```
 
-Deletes the named file from the current directory. Returns `SUCCESS` (0) on success, or a negative error code. The file must not be open.
+Returns `SUCCESS` (0) on success, or a negative error code. The file must not be open.
+
+### Renaming Files
 
 ```spin2
-if sd.deleteFile(@"OLD_DATA.TXT") == sd.SUCCESS
-    debug("File deleted")
-else
-    debug("Delete failed, error: ", sdec(sd.error()))
+' Rename on SD (within current directory)
+status := fs.rename(fs.DEV_SD, @"DRAFT.TXT", @"FINAL.TXT")
+
+' Rename on Flash
+status := fs.rename(fs.DEV_FLASH, @"old-name.dat", @"new-name.dat")
 ```
 
-### Renaming Files and Directories
+### Moving Files Between Directories (SD Only)
 
 ```spin2
-PUB rename(old_name, new_name) : result
+' Move LOG.TXT into the ARCHIVE directory
+fs.moveFile(fs.DEV_SD, @"LOG.TXT", @"ARCHIVE")
 ```
 
-Renames a file or directory within the current directory. Both names are simple filenames (not paths). Returns `true` on success, `false` on failure. Fails with `E_FILE_NOT_FOUND` if the source doesn't exist, or `E_FILE_EXISTS` if the destination name is already in use.
-
-```spin2
-if not sd.rename(@"DRAFT.TXT", @"FINAL.TXT")
-  debug("Rename failed: ", sdec(sd.error()))
-```
-
-### Moving Files Between Directories
-
-```spin2
-PUB moveFile(name_ptr, dest_folder) : result
-```
-
-Moves a file from the current directory into a different directory. The destination must be an existing directory name or path.
-
-```spin2
-' Move LOG.TXT from current directory into the ARCHIVE directory
-sd.moveFile(@"LOG.TXT", @"ARCHIVE")
-```
+`moveFile()` is currently SD-only (moves a file to another directory on the SD card). Calling it with `DEV_FLASH` returns `E_NOT_SUPPORTED`. On Flash, rename with a different path prefix to achieve the same effect.
 
 ---
 
 ## Multi-Cog Access
 
-### Concept
-
-The P2 has 8 cogs, and the SD driver is designed for safe concurrent access from any of them. The driver runs a dedicated worker cog that serializes all SPI operations through a hardware lock — your application cogs never touch the SPI bus directly.
-
 ### What Each Cog Gets
 
-- **Its own current working directory (CWD)** — cog A can navigate to `/LOGS` while cog B works in `/DATA`
+- **Its own CWD** — Cog A can navigate to `/LOGS` while Cog B works in `/DATA` (both SD and Flash maintain per-cog CWD)
 - **Its own error slot** — `error()` returns the last error for the calling cog only
-- **Shared file handles** — handles are allocated from a common pool and can be used from any cog
+- **Shared handle pool** — handles are allocated from a common pool and can be used from any cog
 
 ### Singleton Pattern
 
-All OBJ instances of the driver share the same worker cog. This means you don't need to pass a driver reference between cogs — just declare the OBJ in each cog's top-level object:
+All OBJ instances of `dual_sd_fat32_flash_fs` share the same worker cog and state. You don't need to pass a driver reference between cogs:
 
 ```spin2
 OBJ
-    sd : "micro_sd_fat32_fs"
+  fs : "dual_sd_fat32_flash_fs"
 
 PUB readerTask() | handle, buf[128], bytes_read
-    ' This cog can use sd.* immediately — it shares the already-mounted driver
-    handle := sd.openFileRead(@"SENSOR.DAT")
-    if handle >= 0
-        repeat
-            bytes_read := sd.readHandle(handle, @buf, 512)
-            if bytes_read == 0
-                quit
-            processData(@buf, bytes_read)
-        sd.closeFileHandle(handle)
+  ' This cog can use fs.* immediately — shares the already-initialized driver
+  handle := fs.openFileRead(fs.DEV_SD, @"SENSOR.DAT")
+  if handle >= 0
+    repeat
+      bytes_read := fs.readHandle(handle, @buf, 512)
+      if bytes_read == 0
+        quit
+      processData(@buf, bytes_read)
+    fs.closeFileHandle(handle)
 ```
 
 ### Rules for Multi-Cog Access
 
-1. **Mount from one cog only.** Call `mount()` before starting other cogs that use the driver.
-2. **One writer at a time.** Only one file can be open for writing across all cogs. Multiple files can be open for reading simultaneously.
-3. **Close handles when done.** Handles are a shared resource (default 6 total).
+1. **Init and mount from one cog only.** Call `init()` and `mount()` before starting other cogs that use the driver.
+2. **One writer per SD file.** Multiple read handles are fine; only one write handle per file.
+3. **Close handles when done.** Handles are a shared resource (default 6 total for both devices).
 4. **Don't call `stop()` or `unmount()` while other cogs are using the driver.**
 
-> **See also:** [SD_example_multicog.spin2](../src/EXAMPLES/SD_example_multicog.spin2) for a complete working example.
+### Configuring Handle Count
+
+Override `MAX_OPEN_FILES` if the default 6 isn't enough:
+
+```spin2
+CON
+  MAX_OPEN_FILES = 8          ' 3 cogs doing file copy + headroom
+
+OBJ
+  fs : "dual_sd_fat32_flash_fs"
+```
+
+Each additional handle costs ~4.7 KB (primarily the Flash 4KB block buffer + SD 512-byte sector buffer + state arrays).
 
 ---
 
@@ -802,473 +770,481 @@ PUB readerTask() | handle, buf[128], bytes_read
 ### Checking for Errors
 
 ```spin2
-PUB error() : status
+status := fs.error()          ' Last error for calling cog
 ```
 
-Returns the error code from the most recent operation. Thread-safe (each cog has its own error slot).
+Each cog has its own error slot, so errors from one cog don't affect another.
 
-### Error Codes
+### Human-Readable Error Strings
 
-| Code | Constant | Description |
-|------|----------|-------------|
-| 0 | `SUCCESS` | No error |
-| -1 | `E_TIMEOUT` | Card didn't respond in time |
-| -2 | `E_NO_RESPONSE` | Card not responding |
-| -3 | `E_BAD_RESPONSE` | Unexpected response from card |
-| -4 | `E_CRC_ERROR` | Data CRC mismatch |
-| -5 | `E_WRITE_REJECTED` | Card rejected write operation |
-| -6 | `E_CARD_BUSY` | Card busy |
+```spin2
+debug("Error: ", zstr(fs.string_for_error(status)))
+```
+
+### Error Code Ranges
+
+| Range | Category |
+|-------|----------|
+| 0 | `SUCCESS` |
+| -1 to -93 | SD/FAT32 errors |
+| -100 to -114 | Flash errors |
+| -120 to -122 | Unified device errors |
+
+### Common SD Errors
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| -1 | `E_TIMEOUT` | Card didn't respond |
 | -20 | `E_NOT_MOUNTED` | Filesystem not mounted |
-| -21 | `E_INIT_FAILED` | Card initialization failed |
-| -22 | `E_NOT_FAT32` | Card not formatted as FAT32 |
-| -23 | `E_BAD_SECTOR_SIZE` | Sector size not 512 bytes |
 | -40 | `E_FILE_NOT_FOUND` | File doesn't exist |
 | -41 | `E_FILE_EXISTS` | File already exists |
-| -42 | `E_NOT_A_FILE` | Expected file, found directory |
-| -43 | `E_NOT_A_DIR` | Expected directory, found file |
-| -45 | `E_FILE_NOT_OPEN` | File not open |
-| -46 | `E_END_OF_FILE` | Read past end of file |
 | -60 | `E_DISK_FULL` | No free clusters |
-| -64 | `E_NO_LOCK` | Couldn't allocate hardware lock |
-| -7 | `E_IO_ERROR` | I/O error during read or write |
-| -90 | `E_TOO_MANY_FILES` | All file handles in use |
+| -90 | `E_TOO_MANY_FILES` | All handle slots in use |
 | -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
-| -92 | `E_FILE_ALREADY_OPEN` | File already open (same path) |
-| -93 | `E_NOT_A_DIR_HANDLE` | Expected directory handle, got file handle |
+| -92 | `E_FILE_ALREADY_OPEN` | File already open for writing |
+
+### Common Flash Errors
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| -100 | `E_FLASH_BAD_HANDLE` | Flash handle is invalid |
+| -101 | `E_FLASH_NO_HANDLE` | Out of available handles |
+| -102 | `E_FLASH_DRIVE_FULL` | Flash chip is full |
+| -106 | `E_FLASH_FILE_MODE` | Wrong open mode for operation |
+| -107 | `E_FLASH_FILE_SEEK` | Seek past end of file |
+| -114 | `E_FLASH_FILE_EXISTS` | File already exists |
+
+### Unified Device Errors
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| -120 | `E_BAD_DEVICE` | Invalid device parameter |
+| -121 | `E_DEVICE_NOT_MOUNTED` | Device not mounted |
+| -122 | `E_NOT_SUPPORTED` | Operation not supported on this device |
 
 ### Error Handling Pattern
 
 ```spin2
-PUB safeFileOperation() | handle
-  if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    case sd.error()
-      sd.E_TIMEOUT:
-        debug("Card not inserted or not responding")
-      sd.E_NOT_FAT32:
-        debug("Card not formatted as FAT32")
-      other:
-        debug("Mount failed, error: ", sdec(sd.error()))
+PUB safeOperation() | handle, status
+  workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  if workerCog < 0
+    debug("Init failed")
     return
 
-  handle := sd.openFileRead(string("DATA.TXT"))
+  status := fs.mount(fs.DEV_BOTH)
+  if status < 0
+    debug("Mount failed: ", zstr(fs.string_for_error(status)))
+    fs.stop()
+    return
+
+  ' Try to open a file on SD
+  handle := fs.openFileRead(fs.DEV_SD, @"CONFIG.TXT")
   if handle < 0
-    if sd.error() == sd.E_FILE_NOT_FOUND
-      ' Create the file
-      handle := sd.createFileNew(string("DATA.TXT"))
+    case fs.error()
+      fs.E_FILE_NOT_FOUND:
+        debug("Config not found, using defaults")
+      fs.E_NOT_MOUNTED:
+        debug("SD card not mounted")
+      other:
+        debug("Error: ", zstr(fs.string_for_error(fs.error())))
+  else
+    ' ... use handle ...
+    fs.closeFileHandle(handle)
 
-  if handle >= 0
-    ' ... perform operations ...
-    sd.closeFileHandle(handle)
-
-  sd.unmount()
+  fs.unmount(fs.DEV_BOTH)
+  fs.stop()
 ```
 
 ---
 
 ## Complete Examples
 
-### Example 1: Configuration File Reader
+### Example 1: Sensor Logger (Flash + SD Archival)
+
+A common pattern: write high-frequency data to Flash for speed, then archive to SD for long-term storage.
 
 ```spin2
 CON
-  SD_BASE = 56, SD_SCK = SD_BASE + 5, SD_CS = SD_BASE + 4, SD_MOSI = SD_BASE + 3, SD_MISO = SD_BASE + 2
+  SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+
+OBJ
+  fs : "dual_sd_fat32_flash_fs"
+
+PUB main() | handle, i, value
+  fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  fs.mount(fs.DEV_BOTH)
+
+  ' --- Phase 1: Fast logging to Flash ---
+  handle := fs.open(fs.DEV_FLASH, @"readings.dat", fs.FILEMODE_WRITE)
+  if handle >= 0
+    repeat i from 0 to 99
+      value := readSensor()
+      fs.wr_long(handle, value)
+    fs.close(handle)
+    debug("Logged 100 readings to Flash")
+
+  ' --- Phase 2: Archive to SD ---
+  fs.copyFile(fs.DEV_FLASH, @"readings.dat", fs.DEV_SD, @"READINGS.DAT")
+  debug("Archived to SD card")
+
+  ' --- Phase 3: Verify and clean up ---
+  if fs.exists(fs.DEV_SD, @"READINGS.DAT")
+    fs.deleteFile(fs.DEV_FLASH, @"readings.dat")
+    debug("Flash copy deleted after successful archive")
+
+  fs.unmount(fs.DEV_BOTH)
+  fs.stop()
+
+PRI readSensor() : value
+  value := getrnd() & $FFFF              ' Simulated sensor reading
+```
+
+### Example 2: Configuration File Reader (SD)
+
+```spin2
+CON
+  SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
   MAX_LINE = 80
 
 OBJ
-  sd : "micro_sd_fat32_fs"
+  fs : "dual_sd_fat32_flash_fs"
 
 VAR
   byte line_buffer[MAX_LINE]
 
 PUB readConfig() | handle, i, ch
-  if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  if fs.mount(fs.DEV_SD)
+    debug("Mount failed")
     return false
 
-  handle := sd.openFileRead(string("CONFIG.INI"))
+  handle := fs.openFileRead(fs.DEV_SD, @"CONFIG.INI")
   if handle < 0
-    sd.unmount()
+    fs.unmount(fs.DEV_SD)
+    fs.stop()
     return false
 
-  ' Read file line by line
+  ' Read line by line
   repeat
     i := 0
     repeat
-      if sd.readHandle(handle, @ch, 1) == 0   ' End of file
+      if fs.readHandle(handle, @ch, 1) == 0
         quit
-      if ch == 10                             ' Newline
+      if ch == 10
         quit
-      if ch <> 13 and i < MAX_LINE - 1        ' Skip CR, check buffer
+      if ch <> 13 and i < MAX_LINE - 1
         line_buffer[i++] := ch
 
-    line_buffer[i] := 0                       ' Null terminate
-
+    line_buffer[i] := 0
     if i > 0
       processConfigLine(@line_buffer)
 
-    if sd.eofHandle(handle)
+    if fs.eofHandle(handle)
       quit
 
-  sd.closeFileHandle(handle)
-  sd.unmount()
+  fs.closeFileHandle(handle)
+  fs.unmount(fs.DEV_SD)
+  fs.stop()
   return true
 ```
 
-### Example 2: Data Logger
+### Example 3: Data Logger with Periodic SD Checkpoints
 
 ```spin2
 CON
-  SD_BASE = 56, SD_SCK = SD_BASE + 5, SD_CS = SD_BASE + 4, SD_MOSI = SD_BASE + 3, SD_MISO = SD_BASE + 2
+  SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
 
 OBJ
-  sd : "micro_sd_fat32_fs"
+  fs : "dual_sd_fat32_flash_fs"
 
 VAR
-  byte log_name[13]
   long log_handle
 
-PUB startLogging() | handle
-  if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    return false
+PUB startLogging() | status
+  fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  fs.mount(fs.DEV_SD)
 
   ' Set timestamp
-  sd.setDate(2026, 2, 3, 12, 0, 0)
+  fs.setDate(2026, 2, 28, 12, 0, 0)
 
   ' Create logs directory if needed
-  if not sd.changeDirectory(string("LOGS"))
-    sd.newDirectory(string("LOGS"))
-    sd.changeDirectory(string("LOGS"))
+  if not fs.changeDirectory(fs.DEV_SD, @"LOGS")
+    fs.newDirectory(fs.DEV_SD, @"LOGS")
+    fs.changeDirectory(fs.DEV_SD, @"LOGS")
 
-  ' Find next available log number
-  findNextLogName()
-
-  ' Create the new log file
-  log_handle := sd.createFileNew(@log_name)
+  ' Create log file
+  log_handle := fs.createFileNew(fs.DEV_SD, @"DATA.LOG")
   if log_handle < 0
-    sd.unmount()
-    return false
+    return
 
-  sd.writeHandle(log_handle, string("=== Log Started ===", 13, 10), 21)
-  return true
+  fs.writeHandle(log_handle, @"=== Log Started ===", 19)
 
 PUB logEntry(message) | len
   len := strsize(message)
-  sd.writeHandle(log_handle, message, len)
-  sd.writeHandle(log_handle, string(13, 10), 2)
-  sd.syncHandle(log_handle)                   ' Ensure data is saved
+  fs.writeHandle(log_handle, message, len)
+  fs.writeHandle(log_handle, string(13, 10), 2)
+  fs.syncHandle(log_handle)               ' Checkpoint for power-fail safety
 
 PUB stopLogging()
-  sd.writeHandle(log_handle, string("=== Log Ended ===", 13, 10), 19)
-  sd.closeFileHandle(log_handle)
-  sd.changeDirectory(string("/"))
-  sd.unmount()
-
-PRI findNextLogName() | num, handle
-  num := 0
-  repeat
-    formatLogName(num)
-    handle := sd.openFileRead(@log_name)
-    if handle < 0
-      quit                                    ' Found unused name
-    sd.closeFileHandle(handle)
-    num++
-
-PRI formatLogName(num) | tens, ones
-  ' Format as "LOG00.TXT" through "LOG99.TXT"
-  tens := num / 10
-  ones := num // 10
-  bytemove(@log_name, string("LOG00.TXT"), 10)
-  log_name[3] := "0" + tens
-  log_name[4] := "0" + ones
+  fs.writeHandle(log_handle, @"=== Log Ended ===", 17)
+  fs.closeFileHandle(log_handle)
+  fs.changeDirectory(fs.DEV_SD, @"/")
+  fs.unmount(fs.DEV_SD)
+  fs.stop()
 ```
 
-### Example 3: Binary Record File
+### Example 4: Flash Key-Value Store
 
 ```spin2
-CON
-  SD_BASE = 56, SD_SCK = SD_BASE + 5, SD_CS = SD_BASE + 4, SD_MOSI = SD_BASE + 3, SD_MISO = SD_BASE + 2
-  RECORD_SIZE = 32
+PUB saveConfig(key, value) | handle
+  ' Flash filenames can be descriptive
+  handle := fs.open(fs.DEV_FLASH, key, fs.FILEMODE_WRITE)
+  if handle >= 0
+    fs.wr_long(handle, value)
+    fs.close(handle)
 
-OBJ
-  sd : "micro_sd_fat32_fs"
+PUB loadConfig(key) : value | handle
+  handle := fs.open(fs.DEV_FLASH, key, fs.FILEMODE_READ)
+  if handle >= 0
+    value := fs.rd_long(handle)
+    fs.close(handle)
+  else
+    value := -1                            ' Default if not found
 
-PUB readRecord(filename, record_num, p_dest) : success | handle
-  if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    return false
-
-  handle := sd.openFileRead(filename)
-  if handle < 0
-    sd.unmount()
-    return false
-
-  ' Check if record exists
-  if (record_num + 1) * RECORD_SIZE > sd.fileSizeHandle(handle)
-    sd.closeFileHandle(handle)
-    sd.unmount()
-    return false
-
-  ' Seek to record position and read
-  sd.seekHandle(handle, record_num * RECORD_SIZE)
-  sd.readHandle(handle, p_dest, RECORD_SIZE)
-
-  sd.closeFileHandle(handle)
-  sd.unmount()
-  return true
-
-PUB appendRecord(filename, p_src) : success | handle
-  if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    return false
-
-  ' Try to open existing (appends), or create new
-  handle := sd.openFileWrite(filename)
-  if handle < 0
-    handle := sd.createFileNew(filename)
-    if handle < 0
-      sd.unmount()
-      return false
-
-  sd.writeHandle(handle, p_src, RECORD_SIZE)
-
-  sd.closeFileHandle(handle)
-  sd.unmount()
-  return true
+' Usage:
+'   saveConfig(@"calibration-offset", 1234)
+'   offset := loadConfig(@"calibration-offset")
 ```
 
 ---
 
 ## Example Programs
 
-The `src/EXAMPLES/` directory contains compilable, self-contained programs you can run directly on P2 hardware. Each demonstrates a common usage pattern:
+The `src/` directory contains compilable, hardware-verified example programs:
 
 | Program | What It Teaches |
 |---------|-----------------|
-| [SD_example_read_write.spin2](../src/EXAMPLES/SD_example_read_write.spin2) | Complete file lifecycle: create, write, close, re-open, read back |
-| [SD_example_data_logger.spin2](../src/EXAMPLES/SD_example_data_logger.spin2) | Append-mode logging with `syncHandle()` for power-fail safety |
-| [SD_example_directory_walk.spin2](../src/EXAMPLES/SD_example_directory_walk.spin2) | Directory listing (both APIs), file delete, rename, subdirectory creation |
-| [SD_example_multicog.spin2](../src/EXAMPLES/SD_example_multicog.spin2) | Two cogs accessing different files concurrently |
+| [DFS_example_basic.spin2](../src/DFS_example_basic.spin2) | Init both devices, write/read on SD and Flash, device stats |
+| [DFS_example_cross_copy.spin2](../src/DFS_example_cross_copy.spin2) | Cross-device copy (SD → Flash → SD round-trip with verification) |
+| [DFS_example_data_logger.spin2](../src/DFS_example_data_logger.spin2) | Fast logging to Flash, periodic archival to SD |
+| [DFS_demo_shell.spin2](../src/DFS_demo_shell.spin2) | Interactive shell: `dev sd`/`dev flash`, `dir`, `type`, `copy sd:FILE flash:FILE` |
 
-See the [Examples README](../src/EXAMPLES/README.md) for build instructions and detailed descriptions.
+Build any example with:
 
----
-
-## Architecture Notes
-
-### Singleton Pattern
-
-The driver uses a singleton pattern: all object instances share the same worker cog and state. This has important implications:
-
-```spin2
-OBJ
-  sd1 : "micro_sd_fat32_fs"    ' First instance
-  sd2 : "micro_sd_fat32_fs"    ' Second instance - shares same driver!
-
-PUB example()
-  sd1.mount(CS, MOSI, MISO, SCK)
-  ' sd2 can now use the mounted card too - same driver instance
-  handle := sd2.openFileRead(string("TEST.TXT"))
-
-  ' WARNING: stop() from ANY instance affects ALL instances
-  sd1.stop()   ' This will also stop sd2's access!
+```bash
+cd src/
+pnut-ts -d DFS_example_basic.spin2
+pnut-term-ts -r DFS_example_basic.bin
 ```
 
-### Worker Cog
-
-All SPI operations are performed by a dedicated worker cog. This:
-- Isolates timing-sensitive SPI operations from your application code
-- Provides multi-cog safety through a hardware lock
-- Allows the main cog to continue other work during SD operations
-
-### Memory Usage
-
-| Resource | Usage |
-|----------|-------|
-| Cogs | 1 (worker) |
-| Locks | 1 |
-| Hub RAM | ~4KB (handles + worker stack + sector buffers) |
+The reference SD-only examples are also available under `REF-FLASH-uSD/uSD-FAT32/src/EXAMPLES/` (using the single-device `micro_sd_fat32_fs` driver).
 
 ---
 
-## API Quick Reference
+## Conditional Compilation
 
-These methods are always available in the core driver (no feature flags required).
+Five feature flags control optional SD features. Flash features are always compiled.
 
-### Lifecycle
-| Method | Description |
-|--------|-------------|
-| `mount(cs, mosi, miso, sck)` | Mount card, returns true/false |
-| `unmount()` | Unmount card cleanly |
-| `stop()` | Stop worker cog |
-| `error()` | Last error code for calling cog |
+| Flag | What It Adds |
+|------|-------------|
+| `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block CMD18/CMD25 |
+| `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access |
+| `SD_INCLUDE_SPEED` | CMD6 high-speed mode (50 MHz) |
+| `SD_INCLUDE_DEBUG` | CRC diagnostics, test hooks, hex dump utilities |
+| `SD_INCLUDE_ALL` | All four flags above |
 
-### Handle-Based File Operations
-| Method | Description |
-|--------|-------------|
-| `openFileRead(path)` | Open for reading, returns handle |
-| `openFileWrite(path)` | Open for append writing, returns handle |
-| `createFileNew(path)` | Create new file for writing, returns handle |
-| `closeFileHandle(handle)` | Close file handle, flush writes |
-| `readHandle(handle, buffer, count)` | Read bytes, returns count read |
-| `writeHandle(handle, buffer, count)` | Write bytes, returns count written |
-| `seekHandle(handle, pos)` | Set file position, returns SUCCESS (0) or error |
-| `tellHandle(handle)` | Get current position |
-| `eofHandle(handle)` | Check if at end of file |
-| `fileSizeHandle(handle)` | Get file size by handle |
-| `syncHandle(handle)` | Flush writes on handle |
-| `syncAllHandles()` | Flush all open handles |
-
-### File Management
-| Method | Description |
-|--------|-------------|
-| `deleteFile(name)` | Delete file |
-| `rename(old, new)` | Rename file or directory |
-| `moveFile(name, dest)` | Move file to directory |
-
-### Directories
-| Method | Description |
-|--------|-------------|
-| `changeDirectory(name)` | Change current directory (per-cog CWD) |
-| `newDirectory(name)` | Create new directory |
-| `readDirectory(index)` | Get CWD entry at index |
-| `openDirectory(path)` | Open directory for enumeration, returns handle |
-| `readDirectoryHandle(handle)` | Read next entry from directory handle |
-| `closeDirectoryHandle(handle)` | Close directory handle |
-
-### Information
-| Method | Description |
-|--------|-------------|
-| `fileName()` | Name of last directory entry |
-| `attributes()` | Attributes of last directory entry |
-| `volumeLabel()` | Card volume label |
-| `setVolumeLabel(label)` | Set volume label |
-| `freeSpace()` | Free sectors on card |
-| `setDate(y,m,d,h,mi,s)` | Set date/time for new files |
-| `getSPIFrequency()` | Current SPI clock in Hz |
-| `getCardMaxSpeed()` | Card's reported max speed in Hz |
-| `getManufacturerID()` | Card manufacturer ID byte |
-| `getReadTimeout()` | Read timeout in ms |
-| `getWriteTimeout()` | Write timeout in ms |
-| `isHighSpeedActive()` | True if running at 50 MHz |
-
-### Utilities
-| Method | Description |
-|--------|-------------|
-| `setSPISpeed(freq)` | Set SPI clock frequency in Hz |
-| `syncDirCache()` | Force directory cache re-read |
-| `sync()` | Flush all pending writes |
-
-### Legacy File API (deprecated)
-
-The driver contains older single-file methods (`openFile`, `read`, `write`, `seek`, `closeFile`) from before the handle-based API was added. These still work but are **not recommended for new code** — they operate on an implicit "current file" with no handle, support only one file at a time, and silently return 0 or no-op when called without an open file (instead of reporting an error). Use the handle-based API above for all new development.
-
----
-
-## Conditional API Modules
-
-The driver supports optional feature modules enabled via `#PRAGMA EXPORTDEF` in your top-level file. This keeps the core driver small (24 KB) for applications that only need standard file operations.
-
-To enable a module, add the pragma **before** the OBJ declaration:
+Enable flags with `#PRAGMA EXPORTDEF` **before** the OBJ declaration:
 
 ```spin2
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
 #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
 
 OBJ
-  sd : "micro_sd_fat32_fs"
+  fs : "dual_sd_fat32_flash_fs"
 ```
 
-To enable all modules at once:
+Or enable everything:
 
 ```spin2
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
 
 OBJ
-  sd : "micro_sd_fat32_fs"
+  fs : "dual_sd_fat32_flash_fs"
 ```
 
-### SD_INCLUDE_RAW - Raw Sector Access
+### Raw Sector Access (SD_INCLUDE_RAW)
 
-For low-level operations like formatting, partitioning, or direct sector manipulation. Bypasses the filesystem layer entirely.
+For formatting, partitioning, or direct sector manipulation:
+
+```spin2
+' Initialize card without filesystem (raw mode)
+fs.initCardOnly()
+
+' Read/write at absolute LBA addresses
+fs.readSectorRaw(sector, @buf)
+fs.writeSectorRaw(sector, @buf)
+
+' Multi-block operations (faster for sequential access)
+fs.readSectorsRaw(start, count, @buf)
+fs.writeSectorsRaw(start, count, @buf)
+
+' Card capacity
+total := fs.cardSizeSectors()
+```
+
+### Card Registers (SD_INCLUDE_REGISTERS)
+
+```spin2
+VAR
+  byte cid_buf[16], csd_buf[16]
+
+fs.readCIDRaw(@cid_buf)                   ' Manufacturer, serial number, etc.
+fs.readCSDRaw(@csd_buf)                   ' Capacity, speed class, etc.
+ocr := fs.getOCR()                        ' Operating conditions
+```
+
+### High-Speed Mode (SD_INCLUDE_SPEED)
+
+```spin2
+if fs.checkCMD6Support()
+  if fs.checkHighSpeedCapability()
+    if fs.attemptHighSpeed()
+      debug("Running at 50 MHz!")
+```
+
+---
+
+## API Quick Reference
+
+### Lifecycle
 
 | Method | Description |
 |--------|-------------|
-| `initCardOnly(cs, mosi, miso, sck)` | Initialize card without mounting filesystem |
-| `cardSizeSectors()` | Total 512-byte sectors on card |
-| `readSectorRaw(sector, buffer)` | Read sector at absolute LBA |
-| `writeSectorRaw(sector, buffer)` | Write sector at absolute LBA |
-| `readSectorsRaw(start, count, buffer)` | Multi-block read (CMD18) |
-| `writeSectorsRaw(start, count, buffer)` | Multi-block write (CMD25) |
-| `testCMD13()` | Send CMD13, return raw R2 response |
+| `init(cs, mosi, miso, sck)` | Start worker cog, returns cog ID |
+| `stop()` | Stop worker cog, release lock |
+| `mount(dev)` | Mount one or both devices |
+| `unmount(dev)` | Flush and unmount |
+| `mounted(dev)` | Check mount status (lock-free) |
+| `version(dev)` | Driver version as integer |
+| `checkStackGuard()` | Verify worker stack integrity |
+| `error()` | Last error for calling cog |
+| `string_for_error(code)` | Human-readable error string |
 
-### SD_INCLUDE_REGISTERS - Card Register Access
-
-For card characterization and identification. Provides raw access to CID, CSD, SCR, and OCR registers.
-
-| Method | Description |
-|--------|-------------|
-| `readCIDRaw(buffer)` | Read 16-byte CID register (manufacturer, serial, etc.) |
-| `readCSDRaw(buffer)` | Read 16-byte CSD register (capacity, speed, features) |
-| `readSCRRaw(buffer)` | Read 8-byte SCR register (SD spec version, bus widths) |
-| `getOCR()` | Get cached OCR value (voltage range, capacity status) |
-| `readSDStatusRaw(buffer)` | Read 64-byte SD Status register (ACMD13) |
-| `readVBRRaw(buffer)` | Read 512-byte Volume Boot Record |
-
-### SD_INCLUDE_SPEED - High-Speed Mode Control
-
-For testing and enabling 50 MHz high-speed mode via CMD6.
+### SD File Operations (Handle-Based)
 
 | Method | Description |
 |--------|-------------|
-| `attemptHighSpeed()` | Switch to 50 MHz with verification, falls back on failure |
-| `checkCMD6Support()` | Check if card supports CMD6 (SD 2.0+) |
-| `checkHighSpeedCapability()` | Query if card reports high-speed capability |
+| `openFileRead(dev, path)` | Open for reading → handle |
+| `openFileWrite(dev, path)` | Open for append → handle |
+| `createFileNew(dev, path)` | Create new file → handle |
+| `readHandle(handle, buf, count)` | Read bytes → bytes_read |
+| `writeHandle(handle, buf, count)` | Write bytes → bytes_written |
+| `seekHandle(handle, pos)` | Seek to position |
+| `tellHandle(handle)` | Get position |
+| `eofHandle(handle)` | Check end-of-file |
+| `fileSizeHandle(handle)` | Get file size |
+| `syncHandle(handle)` | Flush writes |
+| `syncAllHandles()` | Flush all handles |
+| `closeFileHandle(handle)` | Close handle |
 
-### SD_INCLUDE_DEBUG - Diagnostic Methods
-
-For driver development, debugging, and regression testing. Includes CRC diagnostic getters, internal state inspection, and display utilities.
+### Flash File Operations
 
 | Method | Description |
 |--------|-------------|
-| `getLastCMD13()` | Last CMD13 R2 response word |
-| `getLastCMD13Error()` | Last non-zero CMD13 result |
-| `getLastReceivedCRC()` | CRC-16 received from card on last read |
-| `getLastCalculatedCRC()` | CRC-16 calculated from received data |
-| `getLastSentCRC()` | CRC-16 sent with last write |
-| `getCRCMatchCount()` | Count of reads where CRC matched |
-| `getCRCMismatchCount()` | Count of reads where CRC did not match |
-| `getCRCRetryCount()` | Count of CRC retries on reads |
-| `setCRCValidation(enabled)` | Enable/disable CRC checking |
-| `debugGetRootSec()` | Root directory sector number |
-| `debugGetDirSec()` | Current directory sector for calling cog |
-| `debugGetVbrSec()` | VBR sector number |
-| `debugGetFatSec()` | FAT start sector number |
-| `debugGetSecPerFat()` | Sectors per FAT |
-| `debugDumpRootDir()` | Print root directory entries to debug |
-| `debugClearRootDir()` | Zero root directory sector (destructive!) |
-| `debugReadSectorSlow(sector, buffer)` | Byte-by-byte read without streamer |
-| `getWriteDiag(...)` | Last writeSector diagnostic (4 return values) |
-| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |
-| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption (test hook) |
-| `getTestErrorCount()` | Count of injected test errors triggered |
-| `clearTestErrors()` | Reset all test error injection state |
-| `debugGetReadSectorDiag(...)` | Last readSector diagnostic data (8 params) |
-| `debugGetReadSectorDiagExt(...)` | Extended diagnostic data (5 params) |
-| `displaySector()` | Hex dump of sector buffer |
-| `displayEntry()` | Hex dump of directory entry buffer |
-| `displayFAT(cluster)` | Hex dump of FAT sector for cluster |
+| `open(dev, name, mode)` | Open with mode → handle |
+| `open_circular(dev, name, mode, maxLen)` | Open circular file → handle |
+| `create_file(dev, name, fill, count)` | Pre-allocate file |
+| `close(handle)` | Close handle |
+| `flush(handle)` | Flush without closing |
+| `wr_byte(handle, val)` | Write byte |
+| `rd_byte(handle)` | Read byte |
+| `wr_word(handle, val)` | Write 16-bit word |
+| `rd_word(handle)` | Read 16-bit word |
+| `wr_long(handle, val)` | Write 32-bit long |
+| `rd_long(handle)` | Read 32-bit long |
+| `wr_str(handle, pStr)` | Write string + null terminator |
+| `rd_str(handle, pStr, maxLen)` | Read string → length (excl. null) |
+| `flashSeek(handle, pos, whence)` | Seek with SK_FILE_START or SK_CURRENT_POSN |
+
+### File Management
+
+| Method | Description |
+|--------|-------------|
+| `deleteFile(dev, name)` | Delete file |
+| `rename(dev, old, new)` | Rename file or directory |
+| `moveFile(dev, name, dest)` | Move to directory (SD only) |
+| `exists(dev, name)` | Check if file exists |
+| `file_size(dev, name)` | Size without opening |
+| `file_size_unused(dev, name)` | Unused bytes in last Flash block |
+
+### Directories
+
+| Method | Description |
+|--------|-------------|
+| `changeDirectory(dev, path)` | Change CWD (SD or Flash, per-cog) |
+| `newDirectory(dev, name)` | Create directory (SD native, Flash emulated) |
+| `readDirectory(index)` | Enumerate CWD by index (SD) |
+| `openDirectory(dev, path)` | Open for enumeration (SD or Flash) → handle |
+| `readDirectoryHandle(handle)` | Next entry → pEntry |
+| `closeDirectoryHandle(handle)` | Close directory handle |
+| `directory(dev, pBlockId, pName, pSize)` | Iterate Flash files |
+
+### Device Information
+
+| Method | Description |
+|--------|-------------|
+| `freeSpace(dev)` | Free space (SD: sectors, Flash: blocks) |
+| `volumeLabel(dev)` | Volume label (SD only) |
+| `setVolumeLabel(dev, label)` | Set volume label (SD) |
+| `serial_number(dev)` | Device serial number |
+| `stats(dev)` | Statistics (used, free, files) |
+| `canMount(dev)` | Non-destructive mount check |
+| `format(dev)` | Format device (destructive!) |
+| `setDate(y,m,d,h,mi,s)` | Timestamp for new files (SD) |
+
+### Cross-Device
+
+| Method | Description |
+|--------|-------------|
+| `copyFile(srcDev, src, dstDev, dst)` | Copy between devices |
+
+### Utilities
+
+| Method | Description |
+|--------|-------------|
+| `setSPISpeed(freq)` | Set SPI clock in Hz |
+| `syncDirCache()` | Invalidate SD directory cache |
+| `sync()` | Flush all pending writes |
+| `fileName()` | Last directory entry name (SD) |
+| `attributes()` | Last directory entry attributes (SD) |
+
+### Card Information (Always Available)
+
+| Method | Description |
+|--------|-------------|
+| `getSPIFrequency()` | Current SPI clock in Hz |
+| `getCardMaxSpeed()` | Card's max speed from CSD |
+| `getManufacturerID()` | Card manufacturer ID |
+| `getReadTimeout()` | Read timeout in ms |
+| `getWriteTimeout()` | Write timeout in ms |
+| `isHighSpeedActive()` | TRUE if at 50 MHz |
 
 ---
 
 ## What The Driver Handles For You
 
-The driver abstracts away all FAT32 complexity:
+The driver abstracts away the complexity of managing two devices over a shared SPI bus:
 
-- **Cluster chains:** Following and allocating clusters automatically
-- **FAT updates:** Maintaining both FAT copies
-- **Sector buffering:** Managing the 512-byte sector buffer
-- **Directory parsing:** Converting 8.3 names and navigating entries
-- **Path resolution:** Walking the directory tree for absolute paths
-- **Multi-cog safety:** Serializing access through a worker cog
-- **Multiple file handles:** Track up to 6 open files/directories simultaneously (configurable)
-- **Single-writer enforcement:** Prevent data corruption from concurrent writes
-- **CRC validation:** Hardware-accelerated CRC-16 on all data transfers
+- **SPI bus switching:** Automatic smart pin teardown and SD card re-initialization when switching between devices
+- **FAT32 internals:** Cluster chains, FAT updates, directory parsing, path resolution
+- **Flash block management:** Translation tables, wear leveling, block allocation
+- **Multi-cog safety:** Hardware lock serialization, per-cog CWD, per-cog errors
+- **Multiple file handles:** Up to 6 (configurable) open files/directories across both devices
+- **CRC validation:** Hardware-accelerated CRC-16 on all SD data transfers
+- **Cross-device copy:** Built-in `copyFile()` handles all the plumbing
 
-You just work with files and bytes; the driver handles the rest.
+You work with files and bytes; the driver handles the rest.
+
+---
+
+*Part of the [P2 Dual Filesystem](../README.md) project — Iron Sheep Productions*

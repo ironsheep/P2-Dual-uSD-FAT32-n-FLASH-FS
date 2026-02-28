@@ -1,14 +1,14 @@
 '' =================================================================================================
 ''
 ''   File....... DFS_FL_RT_mount_handle_basics_tests.spin2
-''   Purpose.... Flash mount/handle basics tests via dual_fs unified driver
+''   Purpose.... Flash mount/handle basics tests via dual_sd_fat32_flash_fs unified driver
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... AUG 2023
 ''   Updated.... 27 FEB 2026
 ''
-''   Migrated from RT_mount_handle_basics_tests.spin2 (flash_fs) to dual_fs
+''   Migrated from RT_mount_handle_basics_tests.spin2 (flash_fs) to dual_sd_fat32_flash_fs
 ''
 '' =================================================================================================
 
@@ -18,7 +18,7 @@ CON
      DEBUG_BAUD       = 2_000_000
 
 OBJ
-    dfs   : "dual_fs"
+    dfs   : "dual_sd_fat32_flash_fs"
     utils : "DFS_FL_RT_utilities"
 
 CON

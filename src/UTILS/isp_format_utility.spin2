@@ -1,0 +1,805 @@
+'' =================================================================================================
+''
+''   File....... isp_format_utility.spin2
+''   Purpose.... FAT32 format utility for SD cards using the dual_sd_fat32_flash_fs unified driver
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 16 JAN 2026
+''
+'' =================================================================================================
+''
+''  This utility formats an SD card with a FAT32 filesystem.
+''
+''  USAGE:
+''    fmt.format(cs, mosi, miso, sck)                      ' Format with default label "P2-XFER"
+''    fmt.formatWithLabel(cs, mosi, miso, sck, @"MYCARD")  ' Format with custom label (max 11 chars)
+''
+''  WARNING: This will ERASE ALL DATA on the card!
+''
+'' =================================================================================================
+
+CON
+
+    DEBUG_DISABLE = 0   ' Enable debug output
+
+    ' FAT32 constants
+    BYTES_PER_SECTOR    = 512
+    RESERVED_SECTORS    = 32        ' Standard for FAT32
+    NUM_FATS            = 2         ' Always 2 for FAT32 compliance
+    ROOT_CLUSTER        = 2         ' Root directory starts at cluster 2
+
+    ' MBR constants
+    MBR_SIGNATURE       = $AA55
+    PARTITION_TYPE_FAT32_LBA = $0C  ' FAT32 with LBA
+
+    ' FAT32 special values
+    FAT32_EOC           = $0FFFFFFF ' End of chain marker
+    FAT32_MEDIA_TYPE    = $0FFFFFF8 ' Media descriptor in FAT[0]
+
+    ' Multi-sector write batch size for initFAT/initRootDirectory
+    MULTI_BATCH_SIZE    = 64        ' Sectors per CMD25 batch (32 KB)
+
+    ' FSInfo signatures
+    FSINFO_SIG1         = $41615252 ' "RRaA"
+    FSINFO_SIG2         = $61417272 ' "rrAa"
+    FSINFO_SIG3         = $AA550000
+
+    ' Volume label (11 chars, space padded) - "P2-XFER    "
+    DEFAULT_LABEL_0     = $58_2D_32_50  ' "P2-X" (little endian: P, 2, -, X)
+    DEFAULT_LABEL_1     = $20_52_45_46  ' "FER " (little endian: F, E, R, space)
+    DEFAULT_LABEL_2     = $00_20_20_20  ' "   " + null (spaces to pad to 11)
+
+' Enable full driver features for this utility
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+    ' Cog stack for async format
+    FMT_STACK_LONGS   = 256
+    FMT_GUARD_LONGS   = 4
+    FMT_GUARD_BYTE    = $CC
+
+OBJ
+
+    dfs  : "dual_sd_fat32_flash_fs"                      ' Unified dual-FS driver
+    fifo : "isp_string_fifo"            ' FIFO for cog-based output
+
+VAR
+
+    ' Pin configuration
+    LONG    pinCS, pinMOSI, pinMISO, pinSCK
+
+    ' Sector buffer
+    BYTE    buf[BYTES_PER_SECTOR]
+    BYTE    verifyBuf[BYTES_PER_SECTOR]
+    BYTE    zeroBuf[MULTI_BATCH_SIZE * BYTES_PER_SECTOR]  ' 32 KB zero buffer for CMD25 batches
+
+    ' Card geometry
+    LONG    totalSectors
+    LONG    sectorsPerCluster
+    LONG    sectorsPerFat
+    LONG    dataSectors
+    LONG    totalClusters
+    LONG    partitionStart      ' LBA of partition start (VBR)
+    LONG    fat1Start           ' LBA of first FAT
+    LONG    fat2Start           ' LBA of second FAT
+    LONG    dataStart           ' LBA of data area
+
+    ' Volume label (12 bytes: 11 chars + null)
+    BYTE    volumeLabel[12]
+
+DAT { singleton cog state for async format }
+
+fmt_cog_id    LONG    -1                 ' cog number (-1 = not running)
+fmt_op_done   LONG    0                  ' TRUE when cog finished
+fmt_op_result LONG    0                  ' TRUE if format succeeded
+
+fmt_cog_stack LONG    0[FMT_STACK_LONGS]
+fmt_cog_guard LONG    0[FMT_GUARD_LONGS]
+
+
+'' =========================================================================
+'' Synchronous API (existing - unchanged)
+'' =========================================================================
+
+PUB format(cs, mosi, miso, sck) : ok
+'' Format the SD card with default volume label "P2-XFER".
+''
+'' @param cs - Chip Select pin number
+'' @param mosi - Master Out Slave In pin number
+'' @param miso - Master In Slave Out pin number
+'' @param sck - Serial Clock pin number
+'' @returns ok - TRUE if successful, FALSE if failed
+
+    pinCS := cs
+    pinMOSI := mosi
+    pinMISO := miso
+    pinSCK := sck
+    setDefaultLabel()
+    ok := doFormat()
+
+PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : ok | idx, ch
+'' Format the SD card with a custom volume label.
+''
+'' @param cs - Chip Select pin number
+'' @param mosi - Master Out Slave In pin number
+'' @param miso - Master In Slave Out pin number
+'' @param sck - Serial Clock pin number
+'' @param pLabel - Pointer to null-terminated string (max 11 chars)
+'' @returns ok - TRUE if successful, FALSE if failed
+
+    pinCS := cs
+    pinMOSI := mosi
+    pinMISO := miso
+    pinSCK := sck
+
+    ' Copy and pad label to 11 characters
+    bytefill(@volumeLabel, " ", 11)
+    volumeLabel[11] := 0
+
+    idx := 0
+    repeat while idx < 11
+        ch := BYTE[pLabel][idx]
+        if ch == 0
+            quit
+        ' Convert to uppercase for FAT compatibility
+        if ch >= "a" and ch <= "z"
+            ch -= 32
+        volumeLabel[idx] := ch
+        idx++
+
+    ok := doFormat()
+
+PUB stop()
+'' Stop the driver worker cog and release SPI pins.
+'' Call this after format() or formatWithLabel() to allow other drivers to use the card.
+
+    dfs.stop()
+
+
+'' =========================================================================
+'' Cog-based (asynchronous) API - for use from demo shell
+'' =========================================================================
+
+PUB startFormat(cs, mosi, miso, sck) : ok
+'' Launch format with default label in a new cog
+''
+'' @param cs, mosi, miso, sck - SD pin configuration
+'' @returns ok - TRUE if cog launched successfully
+
+    pinCS := cs
+    pinMOSI := mosi
+    pinMISO := miso
+    pinSCK := sck
+    setDefaultLabel()
+    ok := doStartCog()
+
+
+PUB startFormatWithLabel(cs, mosi, miso, sck, pLabel) : ok | idx, ch
+'' Launch format with custom label in a new cog
+''
+'' @param cs, mosi, miso, sck - SD pin configuration
+'' @param pLabel - Pointer to null-terminated string (max 11 chars)
+'' @returns ok - TRUE if cog launched successfully
+
+    pinCS := cs
+    pinMOSI := mosi
+    pinMISO := miso
+    pinSCK := sck
+
+    ' Copy and pad label to 11 characters
+    bytefill(@volumeLabel, " ", 11)
+    volumeLabel[11] := 0
+
+    idx := 0
+    repeat while idx < 11
+        ch := BYTE[pLabel][idx]
+        if ch == 0
+            quit
+        if ch >= "a"
+            if ch <= "z"
+                ch -= 32
+        volumeLabel[idx] := ch
+        idx++
+
+    ok := doStartCog()
+
+
+PUB hasOutput() : yes
+'' Check if the format utility has produced output strings
+''
+'' @returns yes - TRUE if strings are waiting in the FIFO
+
+    yes := fifo.hasOutput()
+
+
+PUB getOutput() : pStr
+'' Get the next output string
+''
+'' @returns pStr - pointer to string, or 0 if empty
+
+    pStr := fifo.getOutput()
+
+
+PUB isDone() : yes
+'' Check if the format cog has finished
+''
+'' @returns yes - TRUE if the cog has completed
+
+    yes := (fmt_op_done <> 0)
+
+
+PUB getResult() : ok
+'' Get the format result after isDone() returns TRUE
+''
+'' @returns ok - TRUE if format succeeded, FALSE if failed
+
+    ok := fmt_op_result
+
+
+PUB stopCog()
+'' Stop the format cog and clean up SD driver
+'' Safe to call even if cog already finished
+
+    if fmt_cog_id >= 0
+        cogstop(fmt_cog_id)
+    fmt_cog_id := -1
+    dfs.stop()
+
+
+' =========================================================================
+' Cog launch and entry point (private)
+' =========================================================================
+
+PRI doStartCog() : ok
+' Initialize FIFO and launch format cog
+'
+' @returns ok - TRUE if cog launched
+
+    fmt_op_done := false
+    fmt_op_result := false
+
+    fifo.init()
+
+    bytefill(@fmt_cog_guard, FMT_GUARD_BYTE, FMT_GUARD_LONGS * 4)
+
+    fmt_cog_id := cogspin(NEWCOG, runInCog(), @fmt_cog_stack)
+    ok := (fmt_cog_id >= 0)
+
+
+PRI runInCog() | result
+' Cog entry point for async format.
+' When this method returns, the cog stops automatically.
+
+    result := doFormatCog()
+    dfs.stop()
+    fmt_op_result := result
+    fmt_op_done := true
+
+
+PRI doFormatCog() : ok
+' Execute the format operation with FIFO output instead of debug().
+' Calls the same write methods (writeMBR, writeVBR, etc.) as doFormat().
+'
+' @returns ok - TRUE if all steps succeeded
+
+    fifo.put(@"=== SD Card FAT32 Formatter ===")
+    fifo.putFmt1(@"Volume Label: %s", @volumeLabel)
+    fifo.put(@" ")
+
+    ' Initialize card
+    fifo.put(@"Initializing SD card...")
+    dfs.init(pinCS, pinMOSI, pinMISO, pinSCK)
+    ok := dfs.initCardOnly()
+    if ok == false
+        fifo.put(@"ERROR: Could not initialize SD card!")
+        return false
+
+    ' Get card size
+    totalSectors := dfs.cardSizeSectors()
+    if totalSectors == 0
+        fifo.put(@"ERROR: Could not read card size!")
+        return false
+
+    fifo.putFmt2(@"Card: %d sectors (%d MB)", totalSectors, totalSectors / 2048)
+
+    ' Calculate filesystem parameters
+    if not calculateParameters()
+        fifo.put(@"ERROR: Card too small for FAT32!")
+        return false
+
+    fifo.putFmt1(@"Sectors/cluster: %d", sectorsPerCluster)
+    fifo.putFmt1(@"Sectors/FAT: %d", sectorsPerFat)
+    fifo.putFmt1(@"Total clusters: %d", totalClusters)
+
+    ' Write MBR
+    fifo.put(@"Writing MBR...")
+    if not writeMBR()
+        fifo.put(@"ERROR: Failed to write MBR!")
+        return false
+
+    ' Write VBR
+    fifo.put(@"Writing VBR...")
+    if not writeVBR()
+        fifo.put(@"ERROR: Failed to write VBR!")
+        return false
+
+    ' Write FSInfo
+    fifo.put(@"Writing FSInfo...")
+    if not writeFSInfo()
+        fifo.put(@"ERROR: Failed to write FSInfo!")
+        return false
+
+    ' Write backup boot
+    fifo.put(@"Writing backup boot...")
+    if not writeBackupBoot()
+        fifo.put(@"ERROR: Failed to write backup boot!")
+        return false
+
+    ' Initialize FAT tables
+    fifo.put(@"Initializing FAT1...")
+    if not initFAT(fat1Start)
+        fifo.put(@"ERROR: Failed to initialize FAT1!")
+        return false
+
+    fifo.put(@"Initializing FAT2...")
+    if not initFAT(fat2Start)
+        fifo.put(@"ERROR: Failed to initialize FAT2!")
+        return false
+
+    ' Initialize root directory
+    fifo.put(@"Initializing root directory...")
+    if not initRootDirectory()
+        fifo.put(@"ERROR: Failed to initialize root directory!")
+        return false
+
+    fifo.put(@" ")
+    fifo.put(@"=== FORMAT COMPLETE ===")
+    fifo.putFmt1(@"Volume: %s", @volumeLabel)
+    fifo.putFmt2(@"Size: %d MB, Clusters: %d", totalSectors / 2048, totalClusters)
+
+    return true
+
+
+PRI setDefaultLabel()
+' Set default volume label "P2-XFER" (11 chars, space padded).
+
+    ' Set default label "P2-XFER    " (11 chars, space padded)
+    LONG[@volumeLabel][0] := DEFAULT_LABEL_0
+    LONG[@volumeLabel][1] := DEFAULT_LABEL_1
+    BYTE[@volumeLabel][8] := " "
+    BYTE[@volumeLabel][9] := " "
+    BYTE[@volumeLabel][10] := " "
+    volumeLabel[11] := 0
+
+PRI doFormat() : result
+' Execute the format operation: MBR, VBR, FSInfo, FAT tables, root directory.
+'
+' @returns result - TRUE if all steps succeeded, FALSE otherwise
+
+    debug("==============================================")
+    debug("  SD Card FAT32 Formatter")
+    debug("  Volume Label: [", zstr_(@volumeLabel), "]")
+    debug("==============================================")
+    debug(" ")
+
+    ' Initialize card (low-level, no filesystem mount)
+    debug("* Initializing SD card...")
+    dfs.init(pinCS, pinMOSI, pinMISO, pinSCK)
+    result := dfs.initCardOnly()
+    if result == false
+        debug("ERROR: Could not initialize SD card!")
+        return false
+
+    ' Get card size
+    debug("* Reading card size...")
+    totalSectors := dfs.cardSizeSectors()
+    if totalSectors == 0
+        debug("ERROR: Could not read card size!")
+        return false
+
+    debug("  Total sectors: ", udec_(totalSectors))
+    debug("  Card size: ", udec_(totalSectors / 2048), " MB")
+
+    ' Calculate filesystem parameters
+    debug("* Calculating filesystem parameters...")
+    if not calculateParameters()
+        debug("ERROR: Card too small for FAT32!")
+        return false
+
+    debug("  Sectors/cluster: ", udec_(sectorsPerCluster))
+    debug("  Sectors/FAT: ", udec_(sectorsPerFat))
+    debug("  Total clusters: ", udec_(totalClusters))
+    debug("  Partition start: ", udec_(partitionStart))
+    debug("  FAT1 start: ", udec_(fat1Start))
+    debug("  FAT2 start: ", udec_(fat2Start))
+    debug("  Data start: ", udec_(dataStart))
+
+    ' Write MBR
+    debug(" ")
+    debug("* Writing MBR...")
+    if not writeMBR()
+        debug("ERROR: Failed to write MBR!")
+        showWriteDiag()
+        return false
+
+    ' Verify MBR read-back
+    dfs.readSectorRaw(0, @verifyBuf)
+#IFDEF __FLEXSPIN__
+    debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + $1FE]), " type=$", uhex_byte_(verifyBuf[$1C2]), " start=", udec_(LONG[@verifyBuf + $1C6]))
+    debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+#ELSE
+    debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + $1FE]), ...
+      " type=$", uhex_byte_(verifyBuf[$1C2]), ...
+      " start=", udec_(LONG[@verifyBuf + $1C6]))
+    debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), ...
+      " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
+      " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
+      " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+#ENDIF
+    debug("  verify buf addr: $", uhex_long_(@verifyBuf))
+    if WORD[@verifyBuf + $1FE] <> MBR_SIGNATURE
+        debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
+
+    ' Write VBR (Volume Boot Record)
+    debug("* Writing VBR...")
+    if not writeVBR()
+        debug("ERROR: Failed to write VBR!")
+        showWriteDiag()
+        return false
+
+    ' Verify VBR read-back
+    dfs.readSectorRaw(partitionStart, @verifyBuf)
+#IFDEF __FLEXSPIN__
+    debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[3]), uhex_byte_(verifyBuf[4]), " bps=", udec_(WORD[@verifyBuf + $0B]), " spc=", udec_(verifyBuf[$0D]), " sig=$", uhex_word_(WORD[@verifyBuf + $1FE]))
+#ELSE
+    debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), ...
+      " OEM=$", uhex_byte_(verifyBuf[3]), uhex_byte_(verifyBuf[4]), ...
+      " bps=", udec_(WORD[@verifyBuf + $0B]), ...
+      " spc=", udec_(verifyBuf[$0D]), ...
+      " sig=$", uhex_word_(WORD[@verifyBuf + $1FE]))
+#ENDIF
+    if verifyBuf[0] <> $EB
+        debug("  *** VBR READBACK MISMATCH! Expected $EB got $", uhex_byte_(verifyBuf[0]), " ***")
+
+    ' Write FSInfo sector
+    debug("* Writing FSInfo...")
+    if not writeFSInfo()
+        debug("ERROR: Failed to write FSInfo!")
+        return false
+
+    ' Write backup boot sector (sector 6 of partition)
+    debug("* Writing backup boot sector...")
+    if not writeBackupBoot()
+        debug("ERROR: Failed to write backup boot!")
+        return false
+
+    ' Initialize FAT tables
+    debug("* Initializing FAT1...")
+    if not initFAT(fat1Start)
+        debug("ERROR: Failed to initialize FAT1!")
+        return false
+
+    debug("* Initializing FAT2...")
+    if not initFAT(fat2Start)
+        debug("ERROR: Failed to initialize FAT2!")
+        return false
+
+    ' Initialize root directory
+    debug("* Initializing root directory...")
+    if not initRootDirectory()
+        debug("ERROR: Failed to initialize root directory!")
+        return false
+
+    debug(" ")
+    debug("==============================================")
+    debug("  FORMAT COMPLETE")
+    debug("  Volume: [", zstr_(@volumeLabel), "]")
+    debug("  Size: ", udec_(totalSectors / 2048), " MB")
+    debug("  Clusters: ", udec_(totalClusters))
+    debug("==============================================")
+
+    return true
+
+PRI calculateParameters() : success | clusterSize
+' Calculate filesystem parameters based on card size.
+'
+' @returns success - TRUE if card large enough for FAT32, FALSE otherwise
+
+    ' Partition starts at sector 8192 (4MB aligned for modern cards)
+    partitionStart := 8192
+
+    ' Calculate data sectors available
+    dataSectors := totalSectors - partitionStart
+
+    ' Determine sectors per cluster based on volume size
+    ' Microsoft recommends:
+    '   <= 8GB:   8 sectors (4KB clusters)
+    '   <= 16GB: 16 sectors (8KB clusters)
+    '   <= 32GB: 32 sectors (16KB clusters)
+    '   > 32GB:  64 sectors (32KB clusters)
+
+    if dataSectors <= 16_777_216        ' <= 8GB
+        sectorsPerCluster := 8
+    elseif dataSectors <= 33_554_432    ' <= 16GB
+        sectorsPerCluster := 16
+    elseif dataSectors <= 67_108_864    ' <= 32GB
+        sectorsPerCluster := 32
+    else
+        sectorsPerCluster := 64
+
+    ' Calculate sectors per FAT
+    ' Formula: sectorsPerFat = (dataSectors - RESERVED) / (clusterSize * 2 / 4 + NUM_FATS)
+    ' Simplified approximation that works well:
+    totalClusters := (dataSectors - RESERVED_SECTORS) / sectorsPerCluster
+    sectorsPerFat := (totalClusters * 4 + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR
+
+    ' Recalculate actual data area
+    fat1Start := partitionStart + RESERVED_SECTORS
+    fat2Start := fat1Start + sectorsPerFat
+    dataStart := fat2Start + sectorsPerFat
+
+    ' Recalculate total clusters with actual layout
+    dataSectors := totalSectors - dataStart
+    totalClusters := dataSectors / sectorsPerCluster
+
+    ' FAT32 requires at least 65525 clusters
+    if totalClusters < 65525
+        return false
+
+    return true
+
+PRI writeMBR() : success | partitionSectors
+' Write the Master Boot Record (sector 0) with partition table.
+'
+' @returns success - TRUE if write succeeded, FALSE otherwise
+
+    ' Clear buffer
+    bytefill(@buf, 0, BYTES_PER_SECTOR)
+
+    ' Partition table entry at offset $1BE (446)
+    partitionSectors := totalSectors - partitionStart
+
+    buf[$1BE] := $00                    ' Boot indicator (not bootable)
+    buf[$1BF] := $00                    ' Starting head (CHS - ignored for LBA)
+    buf[$1C0] := $00                    ' Starting sector (CHS)
+    buf[$1C1] := $00                    ' Starting cylinder (CHS)
+    buf[$1C2] := PARTITION_TYPE_FAT32_LBA  ' Partition type
+    buf[$1C3] := $FE                    ' Ending head (CHS)
+    buf[$1C4] := $FF                    ' Ending sector (CHS)
+    buf[$1C5] := $FF                    ' Ending cylinder (CHS)
+
+    ' Partition start LBA (little endian)
+    LONG[@buf + $1C6] := partitionStart
+
+    ' Partition size in sectors (little endian)
+    LONG[@buf + $1CA] := partitionSectors
+
+    ' MBR signature
+    WORD[@buf + $1FE] := MBR_SIGNATURE
+
+    ' Diagnostic: dump write buffer before writing
+#IFDEF __FLEXSPIN__
+    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + $1FE]), " type=$", uhex_byte_(buf[$1C2]), " start=", udec_(LONG[@buf + $1C6]))
+    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+#ELSE
+    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + $1FE]), ...
+      " type=$", uhex_byte_(buf[$1C2]), ...
+      " start=", udec_(LONG[@buf + $1C6]))
+    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), ...
+      " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), ...
+      " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), ...
+      " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+#ENDIF
+    debug("  MBR buf addr: $", uhex_long_(@buf))
+
+    ' Write MBR to sector 0
+    success := dfs.writeSectorRaw(0, @buf)
+
+PRI writeVBR() : success
+' Write the Volume Boot Record (first sector of partition).
+'
+' @returns success - TRUE if write succeeded, FALSE otherwise
+
+    ' Clear buffer
+    bytefill(@buf, 0, BYTES_PER_SECTOR)
+
+    ' Jump instruction
+    buf[$00] := $EB
+    buf[$01] := $58
+    buf[$02] := $90
+
+    ' OEM name (8 bytes)
+    bytemove(@buf + $03, @"P2FMTER ", 8)
+
+    ' BPB (BIOS Parameter Block)
+    WORD[@buf + $0B] := BYTES_PER_SECTOR    ' Bytes per sector
+    buf[$0D] := sectorsPerCluster           ' Sectors per cluster
+    WORD[@buf + $0E] := RESERVED_SECTORS    ' Reserved sectors
+    buf[$10] := NUM_FATS                    ' Number of FATs
+    WORD[@buf + $11] := 0                   ' Root entries (0 for FAT32)
+    WORD[@buf + $13] := 0                   ' Total sectors 16-bit (0 for FAT32)
+    buf[$15] := $F8                         ' Media type (fixed disk)
+    WORD[@buf + $16] := 0                   ' Sectors per FAT (16-bit, 0 for FAT32)
+    WORD[@buf + $18] := 63                  ' Sectors per track (legacy)
+    WORD[@buf + $1A] := 255                 ' Number of heads (legacy)
+    LONG[@buf + $1C] := partitionStart      ' Hidden sectors (partition start)
+    LONG[@buf + $20] := totalSectors - partitionStart  ' Total sectors 32-bit
+
+    ' FAT32 extended BPB
+    LONG[@buf + $24] := sectorsPerFat       ' Sectors per FAT (32-bit)
+    WORD[@buf + $28] := 0                   ' Flags
+    WORD[@buf + $2A] := 0                   ' Version
+    LONG[@buf + $2C] := ROOT_CLUSTER        ' Root cluster
+    WORD[@buf + $30] := 1                   ' FSInfo sector
+    WORD[@buf + $32] := 6                   ' Backup boot sector
+    ' Bytes $34-$3F reserved (already 0)
+
+    buf[$40] := $80                         ' Drive number
+    buf[$41] := 0                           ' Reserved
+    buf[$42] := $29                         ' Extended boot signature
+    LONG[@buf + $43] := getct()             ' Volume serial number (random)
+
+    ' Volume label (11 bytes)
+    bytemove(@buf + $47, @volumeLabel, 11)
+
+    ' File system type (8 bytes)
+    bytemove(@buf + $52, @"FAT32   ", 8)
+
+    ' Boot signature
+    WORD[@buf + $1FE] := MBR_SIGNATURE
+
+    ' Write VBR to partition start
+    success := dfs.writeSectorRaw(partitionStart, @buf)
+
+PRI writeFSInfo() : success
+' Write the FSInfo sector with free cluster count and hint.
+'
+' @returns success - TRUE if write succeeded, FALSE otherwise
+
+    ' Clear buffer
+    bytefill(@buf, 0, BYTES_PER_SECTOR)
+
+    ' FSInfo signatures
+    LONG[@buf + $000] := FSINFO_SIG1        ' Lead signature
+    LONG[@buf + $1E4] := FSINFO_SIG2        ' Structure signature
+    LONG[@buf + $1E8] := totalClusters - 1  ' Free cluster count
+    LONG[@buf + $1EC] := 3                  ' Next free cluster hint
+    LONG[@buf + $1FC] := FSINFO_SIG3        ' Trail signature (includes $AA55)
+
+    ' Write FSInfo to sector 1 of partition
+    success := dfs.writeSectorRaw(partitionStart + 1, @buf)
+
+PRI writeBackupBoot() : success
+' Write backup VBR and FSInfo to sectors 6 and 7 of partition.
+'
+' @returns success - TRUE if writes succeeded, FALSE otherwise
+
+    ' Re-create VBR in buffer
+    writeVBR()
+
+    ' Write to sector 6 of partition (backup VBR location)
+    if not dfs.writeSectorRaw(partitionStart + 6, @buf)
+        return false
+
+    ' Write backup FSInfo to sector 7
+    writeFSInfo()
+    success := dfs.writeSectorRaw(partitionStart + 7, @buf)
+
+PRI initFAT(fatStart) : success | sector, remaining, batch, written
+' Initialize a FAT table with media type and root cluster.
+' Uses CMD25 multi-sector writes in 64-sector batches for ~5.5x speedup.
+'
+' @param fatStart - Starting sector of the FAT
+' @returns success - TRUE if all sectors written, FALSE otherwise
+
+    ' Clear buffer
+    bytefill(@buf, 0, BYTES_PER_SECTOR)
+
+    ' First sector of FAT has special entries
+    LONG[@buf + 0] := FAT32_MEDIA_TYPE      ' FAT[0] - media type
+    LONG[@buf + 4] := FAT32_EOC             ' FAT[1] - end of chain marker
+    LONG[@buf + 8] := FAT32_EOC             ' FAT[2] - root directory (end of chain)
+
+    ' Write first FAT sector (single-sector, has special entries)
+    if not dfs.writeSectorRaw(fatStart, @buf)
+        return false
+
+    ' Write remaining FAT sectors in CMD25 batches (all zeros = free clusters)
+    ' zeroBuf is zero-initialized by Spin2 VAR section
+    sector := 1
+    remaining := sectorsPerFat - 1
+    repeat while remaining > 0
+        batch := remaining <# MULTI_BATCH_SIZE                                   ' Clamp to 64 or remainder
+        written := dfs.writeSectorsRaw(fatStart + sector, batch, @zeroBuf)
+        if written <> batch
+            debug("  FAT batch write FAILED at sector ", udec_(sector), " wrote ", udec_(written), "/", udec_(batch))
+            return false
+        if (sector & $FF) == 0 or remaining <= batch
+            debug("  Progress: ", udec_(sector + batch), "/", udec_(sectorsPerFat))
+        sector += batch
+        remaining -= batch
+
+    return true
+
+PRI initRootDirectory() : success | written
+' Initialize the root directory cluster with volume label entry.
+'
+' @returns success - TRUE if all sectors written, FALSE otherwise
+
+    ' Clear buffer
+    bytefill(@buf, 0, BYTES_PER_SECTOR)
+
+    ' Create volume label directory entry at offset 0
+    ' Filename (11 bytes) = volume label
+    bytemove(@buf, @volumeLabel, 11)
+
+    ' Attributes = $08 (volume label)
+    buf[$0B] := $08
+
+    ' Creation time/date (use some default)
+    WORD[@buf + $0E] := $0000   ' Creation time
+    WORD[@buf + $10] := $0021   ' Creation date (1980-01-01)
+    WORD[@buf + $12] := $0021   ' Access date
+    WORD[@buf + $14] := $0000   ' High word of cluster (0)
+    WORD[@buf + $16] := $0000   ' Modification time
+    WORD[@buf + $18] := $0021   ' Modification date
+    WORD[@buf + $1A] := $0000   ' Low word of cluster (0)
+    LONG[@buf + $1C] := 0       ' File size (0 for volume label)
+
+    ' Write first sector of root directory
+    if not dfs.writeSectorRaw(dataStart, @buf)
+        return false
+
+    ' Clear remaining sectors of root cluster using CMD25 batch write
+    ' zeroBuf is zero-initialized by Spin2 VAR section; max 63 sectors fits in 32 KB
+    if sectorsPerCluster > 1
+        written := dfs.writeSectorsRaw(dataStart + 1, sectorsPerCluster - 1, @zeroBuf)
+        if written <> sectorsPerCluster - 1
+            debug("  Root dir batch write FAILED: wrote ", udec_(written), "/", udec_(sectorsPerCluster - 1))
+            return false
+
+    return true
+
+PRI showWriteDiag() | wResult, wR1, wDresp, wSector
+' Display write diagnostic info from driver after a write failure.
+
+    wResult, wR1, wDresp, wSector := dfs.getWriteDiag()
+    debug("  DIAG: result=", udec_(wResult), " R1=$", uhex_byte_(wR1), " dresp=$", uhex_byte_(wDresp), " sector=", udec_(wSector))
+    debug("  (1=CMD24fatal 2=drespTimeout 3=CRCreject 4=writeErr 5=unknownReject 6=busyTimeout 7=OK)")
+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
