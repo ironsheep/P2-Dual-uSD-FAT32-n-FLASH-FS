@@ -8,6 +8,7 @@ REF-FLASH-uSD/
 
 # Build artifacts
 *.lst
+*.map
 *.p2asm
 
 # OS files
