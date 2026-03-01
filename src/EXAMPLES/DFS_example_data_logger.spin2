@@ -49,6 +49,12 @@ VAR
     byte  buffer[BUFFER_SIZE]
 
 PUB go() | status, handle, sample, reading, bytes_read
+'' Log sensor samples to Flash, then archive to SD card.
+'' @local status - Operation status code
+'' @local handle - File handle
+'' @local sample - Current sample number
+'' @local reading - Simulated sensor reading value
+'' @local bytes_read - Number of bytes read during archive
 
     debug("=== Data Logger Example ===")
     debug("Pattern: Log to Flash, archive to SD")
@@ -133,8 +139,14 @@ PUB go() | status, handle, sample, reading, bytes_read
 
 
 PRI format_sample(p_buf, sample_num, value) | idx, digit, started
-
-'' Format "NNN,VVV" into buffer as a zero-terminated string.
+' Format "NNN,VVV" into buffer as a zero-terminated string.
+'
+' @param p_buf - Pointer to output buffer
+' @param sample_num - Sample number (1-999)
+' @param value - Sensor value to format
+' @local idx - Current write position in buffer
+' @local digit - Current digit value being formatted
+' @local started - TRUE after first non-zero digit (suppresses leading zeros)
 
   idx := 0
 
@@ -170,6 +182,7 @@ PRI format_sample(p_buf, sample_num, value) | idx, digit, started
 
 
 PRI cleanup()
+' Delete test files and shut down driver cleanly.
 
     dfs.deleteFile(dfs.DEV_SD, @sdArchiveName)
     dfs.deleteFile(dfs.DEV_FLASH, @flLogName)

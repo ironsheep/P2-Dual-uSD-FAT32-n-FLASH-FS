@@ -851,6 +851,7 @@ PUB unmount(dev) : status | did_unmount
 ''
 '' @param dev - DEV_SD, DEV_FLASH, or DEV_BOTH
 '' @returns status - SUCCESS (0) on success, E_NOT_MOUNTED if device not mounted
+' @local did_unmount - TRUE if unmount operation succeeded
 
   did_unmount := FALSE
 
@@ -983,6 +984,7 @@ PUB open(dev, p_filename, mode) : handle | fl_path[32]
 '' @param p_filename - Pointer to filename string
 '' @param mode - File open mode constant
 '' @returns handle - Handle on success, negative error code on failure
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1021,6 +1023,7 @@ PUB open_circular(dev, p_filename, mode, max_file_length) : handle | fl_path[32]
 '' @param mode - File open mode
 '' @param max_file_length - Maximum file size in bytes
 '' @returns handle - Handle on success, negative error code on failure
+' @local fl_path - Flash-prefixed path string
 
   if dev <> DEV_FLASH
     set_error(E_NOT_SUPPORTED)
@@ -1043,6 +1046,7 @@ PUB create_file(dev, p_filename, fill_value, byte_count) : status | fl_path[32]
 '' @param fill_value - Fill byte value
 '' @param byte_count - File size to pre-allocate
 '' @returns status - SUCCESS or error code
+' @local fl_path - Flash-prefixed path string
 
   if dev <> DEV_FLASH
     set_error(E_NOT_SUPPORTED)
@@ -1092,6 +1096,7 @@ PUB openFileRead(dev, p_path) : handle | fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1119,6 +1124,7 @@ PUB openFileWrite(dev, p_path) : handle | fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1146,6 +1152,7 @@ PUB createFileNew(dev, p_path) : handle | fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1267,6 +1274,7 @@ PUB seek(handle, position, whence) : end_position | abs_pos
 '' @param position - Byte position (absolute) or offset (relative)
 '' @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
 '' @returns end_position - Resulting position, or negative error code
+' @local abs_pos - Absolute file position in bytes
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1307,6 +1315,7 @@ PUB tellHandle(handle) : position | cmd_status
 ''
 '' @param handle - Valid file handle
 '' @returns position - Current position (0-based), negative on error
+' @local cmd_status - Command status from send_command()
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1328,6 +1337,9 @@ PUB eofHandle(handle) : is_eof | cur_pos, fsize, cmd_status
 ''
 '' @param handle - Valid file handle
 '' @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
+' @local cur_pos - Current file position in bytes
+' @local fsize - File size in bytes from directory entry
+' @local cmd_status - Command status from send_command()
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1357,6 +1369,7 @@ PUB fileSizeHandle(handle) : size | cmd_status
 ''
 '' @param handle - Valid file handle
 '' @returns size - File size in bytes, negative on error
+' @local cmd_status - Command status from send_command()
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1418,6 +1431,10 @@ PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status | srcHandle, dstHa
 '' @returns status - SUCCESS or negative error code
 
   ' Validate devices
+' @local srcHandle - Source file handle for copy operation
+' @local dstHandle - Destination file handle for copy operation
+' @local bytes_read - Number of bytes read in current transfer
+' @local bytes_written - Number of bytes written in current transfer
   if srcDev <> DEV_SD and srcDev <> DEV_FLASH
     return set_error(E_BAD_DEVICE)
   if dstDev <> DEV_SD and dstDev <> DEV_FLASH
@@ -1584,6 +1601,7 @@ PUB directory(dev, p_block_id, p_filename, p_file_size) : status | tmpName[32]
 '' @param p_filename - Pointer to 128-byte buffer for filename (receives bare name)
 '' @param p_file_size - Pointer to LONG receiving file size
 '' @returns status - SUCCESS or error code
+' @local tmpName - Temporary filename buffer for path construction
 
   if dev <> DEV_FLASH
     return set_error(E_BAD_DEVICE)
@@ -1614,6 +1632,7 @@ PUB exists(dev, p_filename) : found | fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
 '' @returns found - TRUE if file exists
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1640,6 +1659,8 @@ PUB file_size(dev, p_filename) : size | cmd_status, fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
 '' @returns size - File size in bytes, negative on error
+' @local cmd_status - Command status from send_command()
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1674,6 +1695,7 @@ PUB file_size_unused(dev, p_filename) : size_unused | fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param p_filename - Pointer to filename string
 '' @returns size_unused - Unused byte count, or negative error code
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1698,6 +1720,8 @@ PUB rename(dev, old_name, new_name) : status | fl_old[32], fl_new[32]
 '' @param old_name - Pointer to current name string
 '' @param new_name - Pointer to new name string
 '' @returns status - SUCCESS or negative error code (E_FILE_NOT_FOUND, E_FILE_EXISTS, E_NOT_MOUNTED)
+' @local fl_old - Flash-prefixed old filename for rename
+' @local fl_new - Flash-prefixed new filename for rename
 
   case dev
     DEV_SD:
@@ -1720,6 +1744,7 @@ PUB deleteFile(dev, name_ptr) : status | fl_path[32]
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated filename string
 '' @returns status - SUCCESS or negative error code (E_FILE_NOT_FOUND, E_NOT_MOUNTED, E_BAD_DEVICE)
+' @local fl_path - Flash-prefixed path string
 
   case dev
     DEV_SD:
@@ -1788,6 +1813,8 @@ PUB stats(dev) : used, free_ct, file_count | dirHandle, p_entry
 '' @returns used - Used blocks/sectors
 '' @returns free_ct - Free blocks/sectors
 '' @returns file_count - Number of files in CWD
+' @local dirHandle - Directory handle for enumeration
+' @local p_entry - Pointer to directory entry
 
   case dev
     DEV_SD:
@@ -1837,6 +1864,7 @@ PUB serial_number(dev) : sn_hi, sn_lo | status
 '' @param dev - DEV_SD or DEV_FLASH
 '' @returns sn_hi - High 32 bits (Flash only; 0 for SD)
 '' @returns sn_lo - Low 32 bits
+' @local status - Operation status code
 
   case dev
     DEV_SD:
@@ -1869,6 +1897,7 @@ PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count | fl
 '' @returns bytes_used - Bytes written to file (or E_FILE_NOT_FOUND)
 '' @returns bytes_free - Unused bytes in last block
 '' @returns block_count - Total blocks allocated
+' @local fl_path - Flash-prefixed path string
 
   ifnot flash_mounted
     bytes_used := set_error(E_NOT_MOUNTED)
@@ -1889,6 +1918,7 @@ PUB wr_byte(handle, byte_value) : status | bytes_written
 '' @param handle - Handle to file open for write
 '' @param byte_value - Byte value to write
 '' @returns status - SUCCESS or negative error code
+' @local bytes_written - Number of bytes written in current transfer
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1920,6 +1950,7 @@ PUB wr_word(handle, word_value) : status | bytes_written
 '' @param handle - Handle to file open for write
 '' @param word_value - 16-bit value to write
 '' @returns status - SUCCESS or negative error code
+' @local bytes_written - Number of bytes written in current transfer
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1931,6 +1962,7 @@ PUB rd_word(handle) : word_value | bytes_read
 ''
 '' @param handle - Handle to file open for read
 '' @returns word_value - WORD value or negative error code
+' @local bytes_read - Number of bytes read in current transfer
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1945,6 +1977,7 @@ PUB wr_long(handle, long_value) : status | bytes_written
 '' @param handle - Handle to file open for write
 '' @param long_value - 32-bit value to write
 '' @returns status - SUCCESS or negative error code
+' @local bytes_written - Number of bytes written in current transfer
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1970,6 +2003,7 @@ PUB wr_str(handle, p_str) : status | bytes_written
 '' @param handle - Handle to file open for write
 '' @param p_str - Pointer to zero-terminated string
 '' @returns status - SUCCESS or negative error code
+' @local bytes_written - Number of bytes written in current transfer
 
   ifnot validateHandle(handle)
     return set_error(E_INVALID_HANDLE)
@@ -1984,6 +2018,7 @@ PUB rd_str(handle, p_str, count) : bytes_read | ch
 '' @param p_str - Pointer to destination buffer
 '' @param count - Maximum bytes to read (including terminator)
 '' @returns bytes_read - String length (not including terminator), or negative on error
+' @local ch - Current character being processed
 
   ifnot validateHandle(handle)
     set_error(E_INVALID_HANDLE)
@@ -2181,6 +2216,7 @@ PUB checkStackGuard() : bIntact | idx
 '' Returns FALSE and reports via debug if any guard byte is corrupted.
 ''
 '' @returns bIntact - TRUE if stack guard is intact, FALSE if overflow detected
+' @local idx - Array or table index
 
   bIntact := true
   repeat idx from 0 to (STACK_GUARD_LONGS * 4) - 1
@@ -4653,6 +4689,10 @@ PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cl
 ' @param name_ptr - Pointer to null-terminated filename string
 ' @returns unused_bytes - Allocated space minus file size, or 0 on error
 ' @returns status - SUCCESS or error code
+' @local fsize - File size in bytes from directory entry
+' @local cluster - Current cluster number
+' @local cluster_count - Number of clusters traversed
+' @local loop_count - Safety counter for chain traversal loops
 
   if not searchDirectory(name_ptr)
     return 0, E_FILE_NOT_FOUND
@@ -4792,6 +4832,11 @@ PRI do_set_vol_label(p_label) : status | i, ch, p_entry, label_83[3], pVBR
 ' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
   ' Format label: uppercase, space-pad to 11 chars
+' @local i - Loop index
+' @local ch - Current character being processed
+' @local p_entry - Pointer to directory entry
+' @local label_83 - 8.3 formatted volume label buffer
+' @local pVBR - Pointer to VBR (Volume Boot Record) data
   bytefill(@label_83, " ", 11)
   i := 0
   repeat while byte[p_label + i] <> 0 and i < 11
@@ -5356,6 +5401,9 @@ PRI fl_command(command, count) | _sclk, _cs, _miso
 '
 ' @param command - Command byte(s) packed into LONG (reversed before send)
 ' @param count - Number of bytes to send (1-4)
+' @local _sclk - Local copy of SCLK pin number
+' @local _cs - Local copy of CS pin number
+' @local _miso - Local copy of MISO pin number
 
   _sclk := flash_sck_pin
   _cs := flash_cs_pin
@@ -5379,6 +5427,9 @@ PRI fl_send(p_buffer, count) | tx_byte, _sclk, _mosi
 '
 ' @param p_buffer - Hub address of bytes to send
 ' @param count - Number of bytes to send
+' @local tx_byte - Byte being transmitted via SPI
+' @local _sclk - Local copy of SCLK pin number
+' @local _mosi - Local copy of MOSI pin number
 
   _sclk := flash_sck_pin
   _mosi := mosi
@@ -5411,6 +5462,10 @@ PRI fl_receive(p_buffer, count) | rx_byte, _sclk, _cs, _miso
 '
 ' @param p_buffer - Hub address to store received bytes
 ' @param count - Number of bytes to receive
+' @local rx_byte - Received SPI byte
+' @local _sclk - Local copy of SCLK pin number
+' @local _cs - Local copy of CS pin number
+' @local _miso - Local copy of MISO pin number
 
   _sclk := flash_sck_pin
   _cs := flash_cs_pin
@@ -5439,6 +5494,7 @@ PRI fl_receive(p_buffer, count) | rx_byte, _sclk, _cs, _miso
 PRI fl_wait() | statusBits
 ' Wait for Flash chip to become ready (BUSY bit clear).
 ' Polls status register via command $05.
+' @local statusBits - Flash status register bits
 
   repeat
     fl_command($05, 1)
@@ -5473,6 +5529,7 @@ PRI fl_program_block(block_address, p_buffer, cycle_bits) | pageIndex
 ' @param block_address - Block offset within filesystem
 ' @param p_buffer - Hub address of 4KB data to write
 ' @param cycle_bits - Lifecycle bit pattern (3-bit)
+' @local pageIndex - Flash page index within block (0-15)
 
   fl_command($06, 1)                                                              ' Enable write
   fl_command($20 | (FIRST_BLOCK + block_address) << 20, 4)                        ' Erase 4KB block
@@ -5502,6 +5559,8 @@ PRI fl_format() : status | block_address, cycleBits
 ' Port of flash_fs.spin2 format() lines 250-291.
 '
 ' @returns status - SUCCESS or error code
+' @local block_address - Physical Flash block address
+' @local cycleBits - Block cycle bits for wear-leveling generation
 
   debug("  [fl_format] Formatting ", udec_(FL_BLOCKS), " blocks...")
 
@@ -5556,6 +5615,7 @@ PRI fl_activate_updated_block(block_address, pBuff) | nextCycleBits
 '
 ' @param block_address - Block address to activate
 ' @param pBuff - Pointer to block buffer to program
+' @local nextCycleBits - Next-generation cycle bits for block replacement
 
   nextCycleBits := fl_next_active_cycle(LONG[pBuff].[7..5])
   fl_program_block(block_address, pBuff, nextCycleBits)
@@ -5567,6 +5627,10 @@ PRI fl_check_block_fix_dupe_id(thisBlockAddress) | otherBlockAddress, thisCycleB
 ' Port of flash_fs.spin2 check_block_fix_dupe_id().
 '
 ' @param thisBlockAddress - Block offset within filesystem
+' @local otherBlockAddress - Address of duplicate block being compared
+' @local thisCycleBits - Cycle bits of current block
+' @local otherCycleBits - Cycle bits of other block being compared
+' @local thisBlockID - Block ID of current block
 
   fl_read_block_addr(thisBlockAddress, @thisCycleBits, $000, $000)                ' Read first byte
 
@@ -5607,6 +5671,8 @@ PRI fl_trace_file_set_flags(block_address, set) : valid | signature, block_id
 ' @param block_address - Starting block address (head block)
 ' @param set - TRUE to set B_HEAD/B_BODY, FALSE to restore B_TEMP
 ' @returns valid - TRUE if file chain is complete and valid
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local block_id - Logical Flash block ID
 
   valid := false
   fl_read_block_addr(block_address, @signature, $000, $003)                       ' Read first LONG
@@ -5634,6 +5700,9 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
 ' Three-pass scan: M1=fix duplicates, M2=trace files, M3=clean dead blocks.
 '
 ' @returns status - SUCCESS or error code
+' @local block_address - Physical Flash block address
+' @local blockTypeBits - Block type field from header
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   debug("  [do_flash_mount] Starting Flash mount scan...")
 
@@ -5694,6 +5763,12 @@ PRI fl_can_mount() : ok | block_address, blockTypeBits, signature, bad_count, du
 ' Uses fl_check_block_read_only() instead of fl_check_block_fix_dupe_id().
 '
 ' @returns ok - TRUE if no blocks would need repair, FALSE otherwise
+' @local block_address - Physical Flash block address
+' @local blockTypeBits - Block type field from header
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local bad_count - Count of bad/corrupt blocks found
+' @local dupe_count - Count of duplicate block IDs found
+' @local badBlockCount - Total bad block count
 
   debug("  [fl_can_mount] Checking Flash mount readiness...")
 
@@ -5742,6 +5817,10 @@ PRI fl_check_block_read_only(thisBlockAddress) : bad_count, dupe_count | otherBl
 ' @param thisBlockAddress - Block offset within filesystem
 ' @returns bad_count - 1 if block has bad CRC, 0 otherwise
 ' @returns dupe_count - 1 if duplicate ID found, 0 otherwise
+' @local otherBlockAddress - Address of duplicate block being compared
+' @local thisCycleBits - Cycle bits of current block
+' @local otherCycleBits - Cycle bits of other block being compared
+' @local thisBlockID - Block ID of current block
 
   fl_read_block_addr(thisBlockAddress, @thisCycleBits, $000, $000)               ' Read first byte
 
@@ -5822,6 +5901,9 @@ PRI fl_prepend_cwd(p_dest, p_name) | p_cwd, cwd_len, name_len
 '
 ' @param p_dest - Destination buffer (FL_FILENAME_SIZE bytes)
 ' @param p_name - Filename to prepend CWD to
+' @local p_cwd - Pointer to current working directory path
+' @local cwd_len - Length of CWD path string
+' @local name_len - Length of filename string
 
   p_cwd := fl_get_cwd()
   cwd_len := strsize(p_cwd)
@@ -5845,6 +5927,10 @@ PRI fl_change_cwd(p_path) | p_cwd, cwd_len, path_len, idx
 ' Any other path appends to the current CWD with "/" separator.
 '
 ' @param p_path - Pointer to path string
+' @local p_cwd - Pointer to current working directory path
+' @local cwd_len - Length of CWD path string
+' @local path_len - Length of path string
+' @local idx - Array or table index
 
   p_cwd := fl_get_cwd()
   cwd_len := strsize(p_cwd)
@@ -5888,6 +5974,10 @@ PRI fl_cwd_matches(p_stored_name, p_bare_name) : matches | p_cwd, cwd_len, name_
 ' @param p_stored_name - Full stored filename from Flash
 ' @param p_bare_name - Buffer to receive the stripped bare filename (FL_FILENAME_SIZE bytes)
 ' @returns matches - TRUE if the file is a direct child of CWD
+' @local p_cwd - Pointer to current working directory path
+' @local cwd_len - Length of CWD path string
+' @local name_len - Length of filename string
+' @local idx - Array or table index
 
   p_cwd := fl_get_cwd()
   cwd_len := strsize(p_cwd)
@@ -5973,6 +6063,7 @@ PRI fl_alloc_buffer(handle) : status | bufIdx
 '
 ' @param handle - handle to assign a buffer to
 ' @returns status - SUCCESS or E_FLASH_NO_BUFFER
+' @local bufIdx - Buffer pool index
 
   repeat bufIdx from 0 to MAX_FLASH_BUFFERS - 1
     if fl_buf_owner[bufIdx] == $FF
@@ -5987,6 +6078,7 @@ PRI fl_free_buffer(handle) | bufIdx
 ' Safe to call when handle has no buffer ($FF).
 '
 ' @param handle - handle whose buffer to release
+' @local bufIdx - Buffer pool index
 
   bufIdx := fl_hBufIndex[handle]
   if bufIdx <> $FF
@@ -5998,6 +6090,7 @@ PRI fl_has_free_buffer() : bAvail | bufIdx
 ' Used for early-exit error checking before expensive operations.
 '
 ' @returns bAvail - TRUE if at least one buffer is free
+' @local bufIdx - Buffer pool index
 
   repeat bufIdx from 0 to MAX_FLASH_BUFFERS - 1
     if fl_buf_owner[bufIdx] == $FF
@@ -6024,6 +6117,7 @@ PRI fl_has_free_handle() : bAvail | idx
 ' Used for early-exit error checking before expensive operations.
 '
 ' @returns bAvail - TRUE if at least one handle is free
+' @local idx - Array or table index
 
   repeat idx from 0 to MAX_OPEN_FILES - 1
     if h_flags[idx] == HF_FREE
@@ -6037,6 +6131,7 @@ PRI fl_new_handle(p_filename) : handle | status
 '
 ' @param p_filename - address of filename zstring
 ' @returns handle - handle index, E_FLASH_NO_HANDLE, or E_FLASH_NO_BUFFER
+' @local status - Operation status code
 
   handle := allocateHandle()
   if handle < 0
@@ -6102,6 +6197,7 @@ PRI fl_is_file_open(p_filename, open_mode_bits) : is_open | handle
 ' @param p_filename - address of filename zstring
 ' @param open_mode_bits - combination of FL_H_READ, FL_H_WRITE, etc.
 ' @returns is_open - TRUE if file is open, FALSE otherwise
+' @local handle - File/directory handle
 
   repeat MAX_OPEN_FILES with handle
     if fl_hStatus[handle] & open_mode_bits
@@ -6122,6 +6218,7 @@ PRI fl_blocks_free() : count | block_address
 ' Port of flash_fs.spin2 blocks_free().
 '
 ' @returns count - number of B_FREE blocks
+' @local block_address - Physical Flash block address
 
   repeat FL_BLOCKS with block_address
     ifnot field[fl_BlockState][block_address]
@@ -6132,6 +6229,7 @@ PRI fl_available_blocks() : bAvail | blk8Idx
 ' Port of flash_fs.spin2 available_blocks().
 '
 ' @returns bAvail - TRUE if blocks are available for write
+' @local blk8Idx - Block index within 8-block group
 
   bAvail := false
   repeat FL_FLAGS_SIZE with blk8Idx
@@ -6144,6 +6242,7 @@ PRI fl_next_available_block_id() : block_id | possible_block_id
 ' Port of flash_fs.spin2 next_available_block_id().
 '
 ' @returns block_id - next free ID, or E_FLASH_DRIVE_FULL
+' @local possible_block_id - Candidate block ID during allocation scan
 
   block_id := E_FLASH_DRIVE_FULL
   repeat FL_BLOCKS with possible_block_id
@@ -6162,6 +6261,7 @@ PRI fl_start_write(handle, open_mode, head_block_id, head_cycle) | block_address
 ' @param open_mode - desired open mode
 ' @param head_block_id - head block ID for the file
 ' @param head_cycle - lifecycle bits for head block
+' @local block_address - Physical Flash block address
 
   fl_build_head_block(fl_buffer_pointer(handle), fl_filename_pointer(handle), head_block_id)
 
@@ -6178,6 +6278,8 @@ PRI fl_is_old_format_file_head(block_address, pBlockBuffer) : oldFormatStatus | 
 ' @param block_address - address of block to check
 ' @param pBlockBuffer - buffer to receive filename data
 ' @returns oldFormatStatus - TRUE if old format
+' @local fnmCrc32 - Filename CRC32 for Flash file identification
+' @local possOldCRC - Possible old-format filename CRC for comparison
 
   fl_read_block_addr(block_address, @possOldCRC, $004, $007)
   fl_read_block_addr(block_address, pBlockBuffer, $008, $087)
@@ -6192,6 +6294,10 @@ PRI fl_get_file_head_signature(p_filename) : foundSignature | tmpFilenameCRC, bl
 '
 ' @param p_filename - address of filename zstring
 ' @returns foundSignature - first long of head block (non-zero=found), 0 if not found
+' @local tmpFilenameCRC - Temporary filename CRC for comparison
+' @local block_address - Physical Flash block address
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local bIsOldFmt - TRUE if old-format file head block
 
   tmpFilenameCRC := fl_filename_crc(p_filename)
 
@@ -6221,6 +6327,7 @@ PRI fl_TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count |
 ' @returns bytes_used - bytes written (or E_FILE_NOT_FOUND)
 ' @returns bytes_free - unused bytes in last block
 ' @returns block_count - total blocks allocated
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   ifnot flash_mounted
     return E_NOT_MOUNTED, 0, 0
@@ -6238,6 +6345,7 @@ PRI fl_count_file_bytes(block_address) : bytes_used, bytes_free, block_count | s
 ' @returns bytes_used - bytes written to file
 ' @returns bytes_free - bytes allocated but not written (in last block)
 ' @returns block_count - number of blocks allocated
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   if block_address <> FL_NOT_VALID
     repeat
@@ -6276,6 +6384,13 @@ PRI fl_locate_file_byte(block_id, file_position) : rID, rBlockOfs, rLocation | d
 ' @returns rID - block ID containing desired location
 ' @returns rBlockOfs - offset into block
 ' @returns rLocation - location within entire file
+' @local dataOffset - Byte offset within Flash block data area
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local currOfs - Current offset in Flash block data area
+' @local srtOfs - Start offset in Flash block data area
+' @local endOfs - End offset in Flash block data area
+' @local fnmCrc32 - Filename CRC32 for Flash file identification
+' @local bIsOldFmt - TRUE if old-format file head block
 
   file_position := file_position #> 0 <# $FFFFFF
 
@@ -6304,6 +6419,8 @@ PRI fl_start_modify(handle, open_mode, head_block_id, file_position, bFileExists
 ' @param head_block_id - head block ID
 ' @param file_position - position to start at
 ' @param bFileExists - TRUE if file already exists
+' @local block_id - Logical Flash block ID
+' @local pBuff - Flash block buffer pointer
 
   pBuff := fl_buffer_pointer(handle)
   if bFileExists
@@ -6326,6 +6443,10 @@ PRI fl_seek_no_locks(handle, file_position) | pBuff, block_id, endPtr, fileOffse
 '
 ' @param handle - handle to open file
 ' @param file_position - desired file position
+' @local pBuff - Flash block buffer pointer
+' @local block_id - Logical Flash block ID
+' @local endPtr - End-of-data pointer within Flash block buffer
+' @local fileOffset - Byte offset within Flash file
 
   pBuff := fl_buffer_pointer(handle)
   block_id, endPtr, fileOffset := fl_locate_file_byte(fl_hHeadBlockID[handle], file_position)
@@ -6345,6 +6466,10 @@ PRI fl_next_block_address() : block_address | blockFreeCount, freeBlockAddress, 
 ' Port of flash_fs.spin2 next_block_address().
 '
 ' @returns block_address - block address, or E_FLASH_DRIVE_FULL
+' @local blockFreeCount - Count of free blocks scanned
+' @local freeBlockAddress - Address of available free block
+' @local freeIndex - Index into free block scan
+' @local next_cycle_bits - Cycle bits for next Flash block generation
 
   ifnot blockFreeCount := fl_blocks_free()
     return fl_set_error(E_FLASH_DRIVE_FULL)
@@ -6379,6 +6504,9 @@ PRI fl_write_block(handle, NextID_EndPtr) | pBuff, block_id, block_address
 '
 ' @param handle - handle to file open for write
 ' @param NextID_EndPtr - next block ID or end-of-data pointer
+' @local pBuff - Flash block buffer pointer
+' @local block_id - Logical Flash block ID
+' @local block_address - Physical Flash block address
 
   pBuff := fl_buffer_pointer(handle)
   long[pBuff].[31..20] := NextID_EndPtr
@@ -6403,6 +6531,10 @@ PRI fl_rewrite_block(handle) | pBuff, block_id, block_address, oldBlockAddress
 ' Port of flash_fs.spin2 rewrite_block().
 '
 ' @param handle - handle to file open for read/modify/write
+' @local pBuff - Flash block buffer pointer
+' @local block_id - Logical Flash block ID
+' @local block_address - Physical Flash block address
+' @local oldBlockAddress - Previous block address before replacement
 
   pBuff := fl_buffer_pointer(handle)
   block_id := long[pBuff].[19..8]
@@ -6423,6 +6555,8 @@ PRI fl_delete_chain_from_id(block_id, EndID, delete_mode, KeepFirstIDValid) | bl
 ' @param EndID - ending block ID
 ' @param delete_mode - 0=to last, 1=through EndID, 2=before EndID
 ' @param KeepFirstIDValid - TRUE to keep first block ID valid
+' @local block_address - Physical Flash block address
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   block_address := field[fl_IDToBlock][block_id]
   if fl_showRTdebug
@@ -6446,6 +6580,14 @@ PRI fl_froncate_file(head_block_id, limit_in_bytes) | size_in_bytes, block_addre
 '
 ' @param head_block_id - block ID of file
 ' @param limit_in_bytes - file size limit in bytes
+' @local size_in_bytes - File size in bytes
+' @local block_address - Physical Flash block address
+' @local new_head_block_id - ID of new head block after froncate
+' @local block_offset - Byte offset within a block
+' @local body_signature - Signature for body blocks in chain
+' @local delete_mode - TRUE if deleting blocks (froncate operation)
+' @local prior_block_id - ID of previous block in chain
+' @local data_offset - Byte offset into block data area
 
   size_in_bytes := fl_count_file_bytes_id(head_block_id)
 
@@ -6499,6 +6641,10 @@ PRI fl_rd_byte_no_locks(handle) : byte_value | pBuff, signature, isSeeking, endP
 '
 ' @param handle - handle to file open for read
 ' @returns byte_value - byte [0-255] or negative error code
+' @local pBuff - Flash block buffer pointer
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local isSeeking - TRUE if in seek mode (not sequential read/write)
+' @local endPtr - End-of-data pointer within Flash block buffer
 
   isSeeking := (fl_hSeekPtr[handle] <> FL_NOT_ENABLED) ? true : false
   endPtr := isSeeking ? fl_hSeekPtr[handle] : fl_hEndPtr[handle]
@@ -6536,6 +6682,10 @@ PRI fl_wr_byte_no_locks(handle, byte_value) : status | pBuff, nextBlockID, isSee
 ' @param handle - handle to file open for write
 ' @param byte_value - value to write
 ' @returns status - SUCCESS or error code
+' @local pBuff - Flash block buffer pointer
+' @local nextBlockID - ID of next block in Flash file chain
+' @local isSeeking - TRUE if in seek mode (not sequential read/write)
+' @local endPtr - End-of-data pointer within Flash block buffer
 
   isSeeking := (fl_hSeekPtr[handle] <> FL_NOT_ENABLED) ? true : false
   endPtr := isSeeking ? fl_hSeekPtr[handle] : fl_hEndPtr[handle]
@@ -6581,6 +6731,8 @@ PRI fl_rd_str(handle, p_str, count) : bytes_read | byteIndex, readValue
 ' @param p_str - destination buffer in hub RAM
 ' @param count - max bytes including terminator
 ' @returns bytes_read - string length (not including terminator), or negative error
+' @local byteIndex - Current byte index in read/write loop
+' @local readValue - Byte value read from Flash file
 
   bytefill(p_str, 0, count)
   bytes_read := 0
@@ -6615,6 +6767,7 @@ PRI fl_file_size_unused(p_filename) : size_unused | signature
 '
 ' @param p_filename - pointer to filename string
 ' @returns size_unused - unused bytes, or negative error
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   ifnot flash_mounted
     return E_NOT_MOUNTED
@@ -6630,6 +6783,11 @@ PRI fl_close_no_lock(handle) : status | open_mode, chain_block_address, head_blo
 '
 ' @param handle - handle to close
 ' @returns status - SUCCESS or error code
+' @local open_mode - File open mode (read/write/append/readwrite)
+' @local chain_block_address - Physical address of current chain block
+' @local head_block_id - ID of file's head block
+' @local chain_block_id - Logical ID of current chain block
+' @local chainState - State machine for chain traversal
 
   fl_errorCode := SUCCESS
 
@@ -6674,6 +6832,11 @@ PRI fl_finish_open_read(p_filename, max_file_length) : handle | signature, block
 ' @param p_filename - address of filename zstring
 ' @param max_file_length - max circular length (0 for normal)
 ' @returns handle - handle or negative error code
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local block_id - Logical Flash block ID
+' @local lenInBytes - File length in bytes
+' @local offsetInBytes - Current read offset in bytes
+' @local bNeedSeek - TRUE if seek is needed before read
 
   ifnot signature := fl_get_file_head_signature(p_filename)
     return fl_set_error(E_FILE_NOT_FOUND)
@@ -6706,6 +6869,8 @@ PRI fl_finish_open_write(p_filename, max_file_length) : handle | signature, ptr
 ' @param p_filename - address of filename zstring
 ' @param max_file_length - max circular length (0 for normal)
 ' @returns handle - handle or negative error code
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local ptr - Working pointer
 
   handle := fl_new_handle(p_filename)
   if handle < 0
@@ -6724,6 +6889,11 @@ PRI fl_finish_open_append(p_filename, max_file_length) : handle | signature, end
 ' @param p_filename - address of filename zstring
 ' @param max_file_length - max circular length (0 for normal)
 ' @returns handle - handle or negative error code
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local end_block_address - Address of last block in file
+' @local endPtr - End-of-data pointer within Flash block buffer
+' @local bytes_used - Number of data bytes used in block
+' @local ptr - Working pointer
 
   handle := fl_new_handle(p_filename)
   if handle < 0
@@ -6741,6 +6911,8 @@ PRI fl_finish_open_readwrite(p_filename) : handle | signature, head_block_id
 '
 ' @param p_filename - address of filename zstring
 ' @returns handle - handle or negative error code
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local head_block_id - ID of file's head block
 
   handle := fl_new_handle(p_filename)
   if handle < 0
@@ -6762,6 +6934,8 @@ PRI fl_open(p_filename, mode) : handle | findings, bFileExists
 ' @param p_filename - address of filename zstring
 ' @param mode - FILEMODE_READ, FILEMODE_WRITE, FILEMODE_APPEND, etc.
 ' @returns handle - handle or negative error code
+' @local findings - Search result flags from fl_exists_no_lock()
+' @local bFileExists - TRUE if file already exists
 
   fl_errorCode := SUCCESS
   handle := FL_NOT_VALID
@@ -6812,6 +6986,7 @@ PRI fl_open_circular(p_filename, mode, max_file_length) : handle | bFileExists
 ' @param mode - "r"/"R" or "a"/"A"
 ' @param max_file_length - max file size in bytes
 ' @returns handle - handle or negative error code
+' @local bFileExists - TRUE if file already exists
 
   if max_file_length < 1
     return fl_set_error(E_FLASH_BAD_FILE_LENGTH)
@@ -6909,6 +7084,9 @@ PRI fl_read(handle, p_buffer, count) : bytes_read | byteIndex, readValue, checkV
 ' @param p_buffer - destination buffer
 ' @param count - max bytes to read
 ' @returns bytes_read - bytes actually read
+' @local byteIndex - Current byte index in read/write loop
+' @local readValue - Byte value read from Flash file
+' @local checkValue - Byte value read back for verification
 
   fl_errorCode := SUCCESS
 
@@ -6933,6 +7111,10 @@ PRI fl_write(handle, p_buffer, count) : bytes_written | checkValue, byteIndex, w
 ' @param p_buffer - source buffer
 ' @param count - bytes to write
 ' @returns bytes_written - bytes actually written
+' @local checkValue - Byte value read back for verification
+' @local byteIndex - Current byte index in read/write loop
+' @local wr_value - Byte value being written
+' @local wr_status - Write operation status code
 
   fl_errorCode := SUCCESS
 
@@ -6958,6 +7140,10 @@ PRI fl_seek(handle, position, whence) : end_position | file_length, file_positio
 ' @param position - byte position or offset
 ' @param whence - SK_FILE_START or SK_CURRENT_POSN
 ' @returns end_position - resulting position or negative error code
+' @local file_length - Total file length in bytes
+' @local file_position - Current position within file
+' @local block_id - Logical Flash block ID
+' @local pBuff - Flash block buffer pointer
 
   if handle < 0 or handle > MAX_OPEN_FILES - 1
     return fl_set_error(E_FLASH_BAD_HANDLE)
@@ -7001,6 +7187,7 @@ PRI fl_delete(p_filename) : status | signature
 '
 ' @param p_filename - address of filename zstring
 ' @returns status - SUCCESS or error code
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   status := fl_errorCode := SUCCESS
 
@@ -7019,6 +7206,10 @@ PRI fl_rename(p_cur_filename, p_new_filename) : status | signature, new_block_ad
 ' @param p_cur_filename - current filename
 ' @param p_new_filename - new filename
 ' @returns status - SUCCESS or error code
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local new_block_address - Address of newly allocated Flash block
+' @local cur_block_address - Address of current Flash block
+' @local next_cycle_bits - Cycle bits for next Flash block generation
 
   fl_errorCode := SUCCESS
 
@@ -7067,6 +7258,7 @@ PRI fl_file_size(p_filename) : size_in_bytes | signature
 '
 ' @param p_filename - address of filename zstring
 ' @returns size_in_bytes - file size or negative error code
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   fl_errorCode := SUCCESS
 
@@ -7082,6 +7274,7 @@ PRI fl_stats() : used_blocks, free_blocks, file_count | block_address
 ' @returns used_blocks - blocks in use
 ' @returns free_blocks - free blocks
 ' @returns file_count - number of files
+' @local block_address - Physical Flash block address
 
   fl_errorCode := SUCCESS
 
@@ -7105,6 +7298,9 @@ PRI fl_directory(p_block_id, p_filename, p_file_size) : status | blockID, block_
 ' @param p_filename - pointer to 128-byte filename buffer
 ' @param p_file_size - pointer to LONG receiving file size
 ' @returns status - SUCCESS
+' @local blockID - Logical block ID for Flash file chain
+' @local block_address - Physical Flash block address
+' @local signature - Block header signature (type + CRC + filename CRC)
 
   fl_errorCode := SUCCESS
 
@@ -7127,6 +7323,15 @@ PRI fl_create_file(p_filename, fill_value, byte_count) : status | signature, hea
 ' @param fill_value - initial byte value
 ' @param byte_count - desired file length in bytes
 ' @returns status - SUCCESS or error code
+' @local signature - Block header signature (type + CRC + filename CRC)
+' @local head_block_id - ID of file's head block
+' @local block_id - Logical Flash block ID
+' @local block_address - Physical Flash block address
+' @local notHead - TRUE if block is a body block (not head)
+' @local dataOffset - Byte offset within Flash block data area
+' @local isLast - TRUE if this is the last block in chain
+' @local currOffset - Current byte offset in write operation
+' @local NextID_EndPtr - Packed next-block-ID and end-pointer value
 
   fl_errorCode := SUCCESS
 

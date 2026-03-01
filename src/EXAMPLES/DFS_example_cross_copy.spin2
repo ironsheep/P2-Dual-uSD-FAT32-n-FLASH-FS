@@ -45,6 +45,12 @@ VAR
     byte  buf2[BUFFER_SIZE]
 
 PUB go() | status, handle, bytes_read, bMatch, i
+'' Copy files between SD and Flash and verify round-trip integrity.
+'' @local status - Operation status code
+'' @local handle - File handle
+'' @local bytes_read - Number of bytes read
+'' @local bMatch - TRUE if buffers match after round-trip
+'' @local i - Loop index for byte comparison
 
     debug("=== Cross-Device Copy Example ===")
     debug(" ")
@@ -147,6 +153,7 @@ PUB go() | status, handle, bytes_read, bMatch, i
 
 
 PRI cleanup()
+' Delete test files and shut down driver cleanly.
 
     dfs.deleteFile(dfs.DEV_SD, @sdOriginal)
     dfs.deleteFile(dfs.DEV_SD, @sdRoundTrip)

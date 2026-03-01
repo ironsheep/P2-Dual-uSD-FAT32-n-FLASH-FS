@@ -164,6 +164,9 @@ VAR { parser }
 
 
 PUB main() | len, eCmd
+'' Interactive shell main loop - initialize terminal, mount devices, and run REPL.
+'' @local len - Input line length
+'' @local eCmd - Parsed command enum value
 
   serial.start(BR_TERM)
   waitms(250)
@@ -230,7 +233,7 @@ PUB show_prompt()
 
 PRI prompt_len() : len
 
-'' Return length of current prompt text (for cursor positioning)
+' Return length of current prompt text (for cursor positioning)
 
   if (activeDev == ACTIVE_FLASH)
     if (flashMounted)
@@ -412,7 +415,7 @@ PUB do_mount() | p_arg, status
 
 PRI mount_sd() | status
 
-'' Mount SD card
+' Mount SD card
 
   if (sdMounted)
     serial.fstr0(@"SD card is already mounted\r\n")
@@ -432,7 +435,7 @@ PRI mount_sd() | status
 
 PRI mount_flash() | status
 
-'' Mount Flash filesystem
+' Mount Flash filesystem
 
   if (flashMounted)
     serial.fstr0(@"Flash is already mounted\r\n")
@@ -480,7 +483,7 @@ PUB do_unmount() | p_arg
 
 PRI unmount_sd()
 
-'' Unmount SD card
+' Unmount SD card
 
   if (not sdMounted)
     serial.fstr0(@"SD card is not mounted\r\n")
@@ -493,7 +496,7 @@ PRI unmount_sd()
 
 PRI unmount_flash()
 
-'' Unmount Flash filesystem
+' Unmount Flash filesystem
 
   if (not flashMounted)
     serial.fstr0(@"Flash is not mounted\r\n")
@@ -713,7 +716,7 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
 
 PRI do_flash_dir() | count, total_size, status
 
-'' List Flash filesystem contents using directory() iteration
+' List Flash filesystem contents using directory() iteration
 
   if (not check_flash_mount())
     return
@@ -876,7 +879,7 @@ PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, c, i
 
 PRI do_flash_type() | p_name, handle, bytes_read, total, c, i
 
-'' Display contents of Flash text file
+' Display contents of Flash text file
 
   if (not check_flash_mount())
     return
@@ -980,7 +983,7 @@ PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, i, c
 
 PRI do_flash_hexdump() | p_name, handle, bytes_read, offset, i, c
 
-'' Display Flash file contents in hex format
+' Display Flash file contents in hex format
 
   if (not check_flash_mount())
     return
@@ -1178,7 +1181,7 @@ PUB do_copy() | p_src, p_dst, srcDev, dstDev, p_src_leaf, p_dst_leaf, src_has_pa
 
 PRI do_sd_copy(p_src, p_dst) | p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total
 
-'' Same-device SD copy
+' Same-device SD copy
 
   if (strcomp(p_src, p_dst))
     serial.fstr0(@"Cannot copy file to itself\r\n")
@@ -1249,7 +1252,7 @@ PRI do_sd_copy(p_src, p_dst) | p_src_leaf, p_dst_leaf, src_has_path, dst_has_pat
 
 PRI do_flash_copy(p_src, p_dst) | h_src, h_dst, bytes_read, total
 
-'' Same-device Flash copy
+' Same-device Flash copy
 
   if (strcomp(p_src, p_dst))
     serial.fstr0(@"Cannot copy file to itself\r\n")
@@ -1282,11 +1285,11 @@ PRI do_flash_copy(p_src, p_dst) | h_src, h_dst, bytes_read, total
 
 PRI parse_device_prefix(p_str) : dev, p_name | i
 
-'' Parse optional device prefix from string.
-'' "sd:FILE" -> (ACTIVE_SD, ^"FILE")
-'' "flash:FILE" -> (ACTIVE_FLASH, ^"FILE")
-'' "fl:FILE" -> (ACTIVE_FLASH, ^"FILE")
-'' "FILE" -> (-1, ^"FILE")
+' Parse optional device prefix from string.
+' "sd:FILE" -> (ACTIVE_SD, ^"FILE")
+' "flash:FILE" -> (ACTIVE_FLASH, ^"FILE")
+' "fl:FILE" -> (ACTIVE_FLASH, ^"FILE")
+' "FILE" -> (-1, ^"FILE")
 
   dev := -1
   p_name := p_str
@@ -1562,7 +1565,7 @@ PUB do_audit() | pStr, status, used, free_ct, file_count, iter_count, iter_bytes
 
 PRI do_flash_audit() | status, used, free_ct, file_count, iter_count, iter_bytes, fsize
 
-'' Flash audit: canMount health check + stats + file iteration verification.
+' Flash audit: canMount health check + stats + file iteration verification.
 
   serial.fstr0(@"Flash Filesystem Audit (Read-Only)\r\n")
   serial.fstr0(@"\r\n")
@@ -1683,8 +1686,8 @@ PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after
 
 PRI do_flash_fsck() | status, used_before, free_before, files_before, used_after, free_after, files_after
 
-'' Flash FSCK: canMount health check, then remount to repair if issues found.
-'' The Flash mount process automatically resolves duplicate IDs, orphaned blocks, and bad CRC.
+' Flash FSCK: canMount health check, then remount to repair if issues found.
+' The Flash mount process automatically resolves duplicate IDs, orphaned blocks, and bad CRC.
 
   serial.fstr0(@"Flash Filesystem Check & Repair (FSCK)\r\n")
   serial.fstr0(@"\r\n")
@@ -1936,6 +1939,7 @@ PUB do_tree() | p_path
 
 
 PUB not_implemented()
+'' Print "not implemented" message for the current command.
 
   serial.fstr1(@"%s is not implemented\r\n", token(0))
 
@@ -1945,7 +1949,7 @@ CON { helper methods }
 
 PRI start_driver() : status
 
-'' Initialize driver and track state
+' Initialize driver and track state
 
   if (driverStarted)
     return 0
@@ -1957,7 +1961,7 @@ PRI start_driver() : status
 
 PRI stop_driver()
 
-'' Stop driver and track state
+' Stop driver and track state
 
   stop_driver()
   driverStarted := false
@@ -1965,7 +1969,7 @@ PRI stop_driver()
 
 PRI write_sd_demo_file(p_name, p_content) | handle, len
 
-'' Write demo content to SD file
+' Write demo content to SD file
 
   len := strsize(p_content)
   serial.fstr2(@"  Writing %s (%d bytes)...\r\n", p_name, len)
@@ -1981,7 +1985,7 @@ PRI write_sd_demo_file(p_name, p_content) | handle, len
 
 PRI write_flash_demo_file(p_name, p_content) | handle, len
 
-'' Write demo content to Flash file
+' Write demo content to Flash file
 
   len := strsize(p_content)
   serial.fstr2(@"  Writing %s (%d bytes)...\r\n", p_name, len)
@@ -1997,7 +2001,7 @@ PRI write_flash_demo_file(p_name, p_content) | handle, len
 
 PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
 
-'' Split a path at the last "/" and cd to the parent directory (SD only).
+' Split a path at the last "/" and cd to the parent directory (SD only).
 
   slash_pos := -1
   i := 0
@@ -2024,7 +2028,7 @@ PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
 
 PRI path_leaf(p_path) : p_leaf | slash_pos, i
 
-'' Return pointer to the leaf portion of a path (after last "/").
+' Return pointer to the leaf portion of a path (after last "/").
 
   slash_pos := -1
   i := 0
@@ -2041,7 +2045,7 @@ PRI path_leaf(p_path) : p_leaf | slash_pos, i
 
 PRI nav_back(p_parent) | depth, i
 
-'' Navigate back up after a temporary cd into a parent path.
+' Navigate back up after a temporary cd into a parent path.
 
   depth := 1
   i := 0
@@ -2055,7 +2059,7 @@ PRI nav_back(p_parent) | depth, i
 
 PRI tree_walk(p_path, depth) | dh, status, p_name, attrib, i, name_buf[4]
 
-'' Recursively display directory tree (SD only).
+' Recursively display directory tree (SD only).
 
   if depth > 8
     tree_indent(depth)
@@ -2110,7 +2114,7 @@ PRI tree_walk(p_path, depth) | dh, status, p_name, attrib, i, name_buf[4]
 
 PRI tree_indent(depth) | i
 
-'' Print tree indentation
+' Print tree indentation
 
   repeat depth
     serial.fstr0(@"  ")
@@ -2118,7 +2122,7 @@ PRI tree_indent(depth) | i
 
 PRI tree_skip_to(dh, p_past_name) | status, p_name
 
-'' Advance directory handle past the named entry.
+' Advance directory handle past the named entry.
 
   repeat
     status := dfs.readDirectoryHandle(dh)
@@ -2131,7 +2135,7 @@ PRI tree_skip_to(dh, p_past_name) | status, p_name
 
 PRI show_sd_summary() | total_mb, size_gb
 
-'' Show brief card summary after mount
+' Show brief card summary after mount
 
   total_mb := dfs.cardSizeSectors() / 2048
   size_gb := (total_mb + 953) / 954
@@ -2143,7 +2147,7 @@ PRI show_sd_summary() | total_mb, size_gb
 
 PRI check_sd_mount() : ok
 
-'' Returns true if SD card is mounted
+' Returns true if SD card is mounted
 
   ok := sdMounted
   if (ok == false)
@@ -2152,7 +2156,7 @@ PRI check_sd_mount() : ok
 
 PRI check_flash_mount() : ok
 
-'' Returns true if Flash is mounted
+' Returns true if Flash is mounted
 
   ok := flashMounted
   if (ok == false)
@@ -2161,7 +2165,7 @@ PRI check_flash_mount() : ok
 
 PRI go_up_directory() | i, len
 
-'' Navigate up one directory level (SD)
+' Navigate up one directory level (SD)
 
   len := strsize(@cwd)
   if (len <= 1)
@@ -2186,7 +2190,7 @@ PRI go_up_directory() | i, len
 
 PRI update_cwd(p_path) | len, cwd_len
 
-'' Update current working directory string
+' Update current working directory string
 
   cwd_len := strsize(@cwd)
   len := strsize(p_path)
@@ -2201,6 +2205,7 @@ PRI update_cwd(p_path) | len, cwd_len
 
 
 PRI bad_syntax()
+' Print syntax error message with help hint.
 
   serial.fstr0(@"Syntax error. Type 'help' for command list.\r\n")
 
@@ -2211,14 +2216,27 @@ CON { struct accessors }
 ' MBR partition entry accessors
 
 PRI partType(^dfs.mbr_partition_t p) : value
+' Get partition type byte from MBR partition entry.
+'
+' @param p - Pointer to MBR partition entry struct
+' @returns value - Partition type code
   return p.partType
 
 PRI partLbaStart(^dfs.mbr_partition_t p) : value
+' Get LBA start sector from MBR partition entry.
+'
+' @param p - Pointer to MBR partition entry struct
+' @returns value - First sector of partition (LBA)
   return p.lbaStart
 
 ' VBR accessor
 
 PRI vbrOemNameByte(^dfs.vbr_t p, idx) : value
+' Get single byte from VBR OEM name field.
+'
+' @param p - Pointer to VBR struct
+' @param idx - Byte index within OEM name (0-7)
+' @returns value - OEM name byte at index
   return p.oemName[idx]
 
 
@@ -2227,7 +2245,7 @@ CON { shared utility methods }
 
 PRI confirmYN(p_prompt) : confirmed | c
 
-'' Prompt user for y/n confirmation with 10-second timeout
+' Prompt user for y/n confirmation with 10-second timeout
 
   serial.fstr1(@"%s (y/N)? \r", p_prompt)
   c := serial.rxtime(10_000)
@@ -2243,7 +2261,7 @@ PRI confirmYN(p_prompt) : confirmed | c
 
 PRI lookupMID(mid) : p_name | p, entryMID
 
-'' Look up manufacturer name from MID byte.
+' Look up manufacturer name from MID byte.
 
   p := @midTable
   repeat
@@ -2259,7 +2277,7 @@ PRI lookupMID(mid) : p_name | p, entryMID
 
 PRI hexDigit(nibble) : ch
 
-'' Convert 0-15 to ASCII hex digit
+' Convert 0-15 to ASCII hex digit
 
   if nibble < 10
     return "0" + nibble
@@ -2268,7 +2286,7 @@ PRI hexDigit(nibble) : ch
 
 PRI getCardType(ocr, sizeMB) : p_type
 
-'' Determine card type from OCR CCS bit and capacity.
+' Determine card type from OCR CCS bit and capacity.
 
   if (ocr & (1 << 30)) == 0
     return @ctSDSC
@@ -2279,7 +2297,7 @@ PRI getCardType(ocr, sizeMB) : p_type
 
 PRI getSDSpecVersion(^dfs.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
 
-'' Decode SD spec version from SCR register struct.
+' Decode SD spec version from SCR register struct.
 
   sdSpec := p_scr.sdSpec & $0F
   spec3 := (p_scr.sdSpec3Ext >> 7) & 1
@@ -2309,7 +2327,7 @@ PRI getSDSpecVersion(^dfs.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
 
 PRI detectFilesystem() : p_fsName | pType
 
-'' Determine filesystem type from partition type byte.
+' Determine filesystem type from partition type byte.
 
   dfs.readSectorRaw(0, @buf2)
 
@@ -2332,7 +2350,7 @@ PRI detectFilesystem() : p_fsName | pType
 
 PRI resolveType07() : p_fsName | partStart
 
-'' Distinguish exFAT from NTFS for partition type $07.
+' Distinguish exFAT from NTFS for partition type $07.
 
   partStart := partLbaStart(pPart)
   if partStart == 0
@@ -2350,7 +2368,7 @@ PRI resolveType07() : p_fsName | partStart
 
 PRI lcstr(p_str) : p_lcstr | c
 
-'' Converts p_str to lowercase
+' Converts p_str to lowercase
 
   p_lcstr := p_str
 
@@ -2581,7 +2599,7 @@ CON { init routines }
 
 PRI wait_for_terminal(clear, delay)
 
-'' Wait for terminal to be open and key pressed
+' Wait for terminal to be open and key pressed
 
   serial.rxflush()
   serial.rx()

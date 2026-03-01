@@ -42,6 +42,12 @@ VAR
     byte  buffer[512]
 
 PUB go() | workerCog, status, handle, bytes_read, free_sectors
+'' Demonstrate basic dual filesystem operations - mount, write, read, free space.
+'' @local workerCog - Driver worker cog ID
+'' @local status - Operation status code
+'' @local handle - File handle
+'' @local bytes_read - Number of bytes read
+'' @local free_sectors - Free space on device
 
     debug("=== Dual Filesystem Basic Example ===")
     debug(" ")
