@@ -236,6 +236,7 @@ CON ' error codes
   E_FLASH_BAD_FILE_LENGTH  = -112  ' File length given is negative or zero
   E_FLASH_BAD_SEEK_ARG     = -113  ' Invalid seek argument
   E_FLASH_FILE_EXISTS      = -114  ' Flash file already exists (rename/create_file target)
+  E_FLASH_NO_BUFFER        = -115  ' No Flash buffer available (all in use)
 
   ' ═══════════════════════════════════════════════════════════════════════════
   ' Unified Device Error Codes
@@ -247,11 +248,21 @@ CON ' error codes
 CON ' V3 multi-file handle configuration
   ' ═══════════════════════════════════════════════════════════════════════════
   ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
-  ' User can override MAX_OPEN_FILES in their top-level CON section before OBJ
-  ' Memory cost: 544 bytes per handle (32 bytes state + 512 bytes buffer)
-  ' Default 6 covers 2-3 cogs with mixed file/directory operations
+  ' User can override MAX_OPEN_FILES and MAX_FLASH_BUFFERS in OBJ declaration:
+  '   fs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 4, MAX_FLASH_BUFFERS = 2
+  '
+  ' MAX_OPEN_FILES  - Total handles shared between SD and Flash devices.
+  '                   Drives SD sector buffers (512 B each) + Flash handle state (~148 B each).
+  '                   Default 6 covers 2-3 cogs with mixed file/directory operations.
+  '
+  ' MAX_FLASH_BUFFERS - How many Flash files can be open simultaneously.
+  '                     Drives Flash block buffers (4096 B each). Independent of handle count.
+  '                     Flash directory/exists/stats/delete/rename ops need zero buffers.
+  '                     Default 3 (read + write + spare for Flash-to-Flash copy).
+  '                     Set to 0 for SD-only builds (Flash mount still works, open fails).
   ' ═══════════════════════════════════════════════════════════════════════════
   MAX_OPEN_FILES = 6            ' Default number of handles (user-overridable)
+  MAX_FLASH_BUFFERS = 3         ' Default Flash buffer pool size (user-overridable)
 
   ' Handle state flags (stored in h_flags array)
   HF_FREE   = 0                 ' Handle slot is available
@@ -631,8 +642,12 @@ DAT '' singleton control - SHARED across all object instances
   fl_hCircularLength LONG  0[MAX_OPEN_FILES]
   fl_hFilename     BYTE    0[MAX_OPEN_FILES * FL_FILENAME_SIZE]
 
-  ' Per-handle 4KB block buffers
-  fl_hBlockBuff    BYTE    0[MAX_OPEN_FILES * BLOCK_SIZE]
+  ' Flash buffer pool management (decoupled from handle count)
+  fl_buf_owner     BYTE    $FF[MAX_FLASH_BUFFERS]    ' Handle owning each buffer ($FF = free)
+  fl_hBufIndex     BYTE    $FF[MAX_OPEN_FILES]       ' Buffer index per handle ($FF = none)
+
+  ' Flash block buffers — sized by MAX_FLASH_BUFFERS, not MAX_OPEN_FILES
+  fl_hBlockBuff    BYTE    0[MAX_FLASH_BUFFERS * BLOCK_SIZE]
 
   ' Temporary block buffer (mount scanning, block moves)
   fl_tmpBlockBuff  BYTE    0[BLOCK_SIZE]
@@ -1328,8 +1343,13 @@ PRI freeHandle(handle)
 ' Release a handle back to the free pool - clears all state and marks slot as available.
 ' Does NOT validate handle - caller must ensure handle is valid.
 ' Does NOT flush dirty buffers - caller must do that before calling.
+' Defensively releases any Flash buffer still attached (prevents leaks from any teardown path).
 '
 ' @param handle - Handle index to release
+
+  ' Defensive: release Flash buffer if still attached
+  if fl_hBufIndex[handle] <> $FF
+    fl_free_buffer(handle)
 
   h_device[handle] := DEV_SD
   h_flags[handle] := HF_FREE
@@ -3473,6 +3493,10 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
   ' Clear Flash handle state
   bytefill(@fl_hStatus, 0, MAX_OPEN_FILES)
 
+  ' Reset Flash buffer pool
+  bytefill(@fl_buf_owner, $FF, MAX_FLASH_BUFFERS)
+  bytefill(@fl_hBufIndex, $FF, MAX_OPEN_FILES)
+
   ' Clear translation tables
   bytefill(@fl_IDToBlocks, 0, ID_TO_BLOCKS_SZ * 2)                               ' WORD array
   bytefill(@fl_IDValids, 0, FL_FLAGS_SIZE)
@@ -3781,12 +3805,49 @@ PRI fl_filename_pointer(handle) : p_filename
 
 PRI fl_buffer_pointer(handle) : p_buffer
 ' Return pointer to the 4KB block buffer for this handle.
-' Port of flash_fs.spin2 buffer_pointer().
+' Uses fl_hBufIndex indirection to map handle to buffer pool slot.
 '
-' @param handle - a handle to an open file
+' @param handle - a handle to an open file (must have buffer assigned)
 ' @returns p_buffer - address of the 4KB buffer
 
-  return @fl_hBlockBuff + handle << BLOCK_SIZE_EXP
+  return @fl_hBlockBuff + fl_hBufIndex[handle] << BLOCK_SIZE_EXP
+
+PRI fl_alloc_buffer(handle) : status | bufIdx
+' Assign a free buffer from the pool to a handle.
+' Called by fl_new_handle() after allocateHandle() succeeds.
+'
+' @param handle - handle to assign a buffer to
+' @returns status - SUCCESS or E_FLASH_NO_BUFFER
+
+  repeat bufIdx from 0 to MAX_FLASH_BUFFERS - 1
+    if fl_buf_owner[bufIdx] == $FF
+      fl_buf_owner[bufIdx] := handle
+      fl_hBufIndex[handle] := bufIdx
+      return SUCCESS
+
+  return E_FLASH_NO_BUFFER
+
+PRI fl_free_buffer(handle) | bufIdx
+' Release buffer from handle back to the pool.
+' Safe to call when handle has no buffer ($FF).
+'
+' @param handle - handle whose buffer to release
+
+  bufIdx := fl_hBufIndex[handle]
+  if bufIdx <> $FF
+    fl_buf_owner[bufIdx] := $FF
+    fl_hBufIndex[handle] := $FF
+
+PRI fl_has_free_buffer() : bAvail | bufIdx
+' Check if any buffer pool slot is available without allocating.
+' Used for early-exit error checking before expensive operations.
+'
+' @returns bAvail - TRUE if at least one buffer is free
+
+  repeat bufIdx from 0 to MAX_FLASH_BUFFERS - 1
+    if fl_buf_owner[bufIdx] == $FF
+      return TRUE
+  return FALSE
 
 PRI fl_ensure_handle_mode(handle, open_mode_bits) : status
 ' Determine if handle is open with desired Flash mode.
@@ -3814,16 +3875,23 @@ PRI fl_has_free_handle() : bAvail | idx
       return TRUE
   return FALSE
 
-PRI fl_new_handle(p_filename) : handle
-' Allocate a unified handle and configure it for Flash use.
+PRI fl_new_handle(p_filename) : handle | status
+' Allocate a unified handle and buffer, configure for Flash use.
 ' Adapted from flash_fs.spin2 new_handle() for unified handle pool.
+' Buffer is assigned from the pool; if exhausted, handle is freed.
 '
 ' @param p_filename - address of filename zstring
-' @returns handle - handle index or E_FLASH_NO_HANDLE
+' @returns handle - handle index, E_FLASH_NO_HANDLE, or E_FLASH_NO_BUFFER
 
   handle := allocateHandle()
   if handle < 0
     return fl_set_error(E_FLASH_NO_HANDLE)
+
+  ' Attach a buffer from the pool
+  status := fl_alloc_buffer(handle)
+  if status <> SUCCESS
+    freeHandle(handle)
+    return fl_set_error(E_FLASH_NO_BUFFER)
 
   ' Mark as Flash device handle with read flag (caller overrides fl_hStatus)
   h_device[handle] := DEV_FLASH
@@ -3835,10 +3903,11 @@ PRI fl_new_handle(p_filename) : handle
 
 PRI fl_free_handle(handle)
 ' Release a Flash handle back to the unified pool.
-' Clears Flash-specific state and calls freeHandle().
+' Releases buffer back to pool, clears Flash-specific state, calls freeHandle().
 '
 ' @param handle - handle to release
 
+  fl_free_buffer(handle)
   fl_hStatus[handle] := 0
   fl_hHeadBlockID[handle] := FL_NOT_VALID
   fl_hChainBlockID[handle] := 0
@@ -6144,6 +6213,9 @@ PUB unmount(dev) : status | did_unmount
       ' Clear Flash handle state
       bytefill(@fl_hStatus, 0, MAX_OPEN_FILES)
       wordfill(@fl_hHeadBlockID, FL_NOT_VALID, MAX_OPEN_FILES)
+      ' Reset Flash buffer pool
+      bytefill(@fl_buf_owner, $FF, MAX_FLASH_BUFFERS)
+      bytefill(@fl_hBufIndex, $FF, MAX_OPEN_FILES)
       flash_mounted := FALSE
       did_unmount := TRUE
       debug("  [unmount] Flash unmounted")
@@ -7275,6 +7347,7 @@ PUB string_for_error(code) : p_str
     E_FLASH_BAD_FILE_LENGTH: return @s_flash_bad_file_len
     E_FLASH_BAD_SEEK_ARG:    return @s_flash_bad_seek_arg
     E_FLASH_FILE_EXISTS:     return @s_flash_file_exists
+    E_FLASH_NO_BUFFER:       return @s_flash_no_buffer
     E_BAD_DEVICE:            return @s_bad_device
     E_DEVICE_NOT_MOUNTED:    return @s_device_not_mounted
     E_NOT_SUPPORTED:         return @s_not_supported
@@ -7317,6 +7390,7 @@ DAT '' error strings for string_for_error()
   s_flash_bad_file_len BYTE "Flash bad file length", 0
   s_flash_bad_seek_arg BYTE "Flash bad seek argument", 0
   s_flash_file_exists BYTE  "Flash file already exists", 0
+  s_flash_no_buffer   BYTE  "Flash no buffer available", 0
   s_bad_device        BYTE  "Bad device", 0
   s_device_not_mounted BYTE "Device not mounted", 0
   s_not_supported     BYTE  "Not supported", 0

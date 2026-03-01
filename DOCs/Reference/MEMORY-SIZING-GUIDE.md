@@ -17,7 +17,8 @@ A practical guide to determining how much hub RAM your Spin2 program and its com
 6. [Comparing Build Configurations](#6-comparing-build-configurations)
 7. [Analyzing a Multi-Object Program](#7-analyzing-a-multi-object-program)
 8. [Sizing Audit Methodology](#8-sizing-audit-methodology)
-9. [Quick Reference](#9-quick-reference)
+9. [SD vs Flash Size Breakdown](#9-sd-vs-flash-size-breakdown)
+10. [Quick Reference](#10-quick-reference)
 
 ---
 
@@ -344,19 +345,19 @@ The dual-FS driver supports conditional compilation via preprocessor defines. To
 ```bash
 # Minimal build (no optional SD features)
 pnut-ts -m dual_sd_fat32_flash_fs.spin2
-# => Total Size: 70,956 bytes (70,952 code/data + 4 var bytes), 252 methods
+# => Total Size: 58,832 bytes (58,828 code/data + 4 var bytes), 255 methods
 
 # Full build (all optional SD features)
 pnut-ts -m -D SD_INCLUDE_ALL dual_sd_fat32_flash_fs.spin2
-# => Total Size: 73,496 bytes (73,492 code/data + 4 var bytes), 305 methods
+# => Total Size: 61,396 bytes (61,392 code/data + 4 var bytes), 308 methods
 ```
 
 Comparison:
 
 | | Minimal | Full | Delta |
 |---|---|---|---|
-| Methods | 252 | 305 | +53 |
-| Code/Data | 70,952 B | 73,492 B | +2,540 B |
+| Methods | 255 | 308 | +53 |
+| Code/Data | 58,828 B | 61,392 B | +2,564 B |
 | VAR | 4 B | 4 B | +0 B |
 
 The DAT section is identical in both builds (data doesn't change). Only method table entries and bytecodes are added by optional features. This tells you the conditional compilation gates affect only code, not static data.
@@ -473,11 +474,12 @@ Group variables into logical categories (buffers, state, pin config, etc.) and t
 | SD handle buffers | H_BUF (6 handles x 512 B) | 3,072 B |
 | SD copy buffer | COPY_BUF | 512 B |
 | Flash translation tables | FL_IDTOBLOCKS, FL_IDVALIDS, FL_BLOCKSTATES | ~8,200 B |
-| Flash handle buffers | FL_HBLOCKBUFF (6 x 4 KB) | 24,576 B |
+| Flash buffer pool | FL_HBLOCKBUFF (`MAX_FLASH_BUFFERS` x 4 KB, default 3) | 12,288 B |
+| Flash buffer pool tracking | FL_BUF_OWNER + FL_HBUFINDEX | 9 B |
 | Flash temp buffer | FL_TMPBLOCKBUFF | 4,096 B |
 | Flash CWD per cog | FL_COG_CWD (8 x 128 B) | 1,024 B |
 
-The Flash handle buffers and translation tables dominate, accounting for the majority of the driver's ~72 KB footprint.
+The Flash buffer pool and translation tables dominate. With `MAX_FLASH_BUFFERS` decoupled from `MAX_OPEN_FILES` (default 3 vs 6), the buffer pool is now 12,288 B instead of 24,576 B, saving ~12 KB.
 
 ### Step 4: Measure Real-World Programs
 
@@ -512,7 +514,113 @@ This produces a repeatable baseline. When you upgrade the compiler or refactor c
 
 ---
 
-## 9. Quick Reference
+## 9. SD vs Flash Size Breakdown
+
+The unified driver combines two independent filesystems. This section quantifies each subsystem's contribution.
+
+### Reference Driver Baselines
+
+Compiling the original standalone drivers establishes a baseline for what each filesystem costs in isolation:
+
+| Driver | Code/Data | Methods | DAT | Bytecodes |
+|---|---|---|---|---|
+| Ref SD (`micro_sd_fat32_fs`, full) | 23,024 B | 206 | 5,727 B | 16,469 B |
+| Ref Flash (`flash_fs`) | 28,744 B | 85 | 20,122 B | 8,278 B |
+| Sum of both | 51,768 B | 291 | 25,849 B | 24,747 B |
+| **Unified driver** (full, default) | **61,392 B** | **308** | **~33,465 B** | **~26,700 B** |
+| **Merging overhead** | **+9,624 B** | +17 | +7,616 B | +1,953 B |
+
+The unified driver is 19% larger than the sum of the two reference drivers (down from 42% before buffer pool decoupling). Most of the remaining overhead is in DAT (static data).
+
+### DAT Breakdown by Subsystem
+
+The DAT section dominates the driver at ~45,744 bytes (62% of total code/data). Here is every significant allocation grouped by subsystem:
+
+| Subsystem | DAT Item | Size |
+|---|---|---|
+| **Flash buffer pool** | `FL_HBLOCKBUFF` (`MAX_FLASH_BUFFERS` x 4,096 B, default 3) | 12,288 B |
+| **Flash buffer tracking** | `FL_BUF_OWNER[3]` + `FL_HBUFINDEX[6]` | 9 B |
+| **Flash translation tables** | `FL_IDTOBLOCKS` (file-to-block mapping) | 5,952 B |
+| | `FL_BLOCKSTATES` (per-block state) | 992 B |
+| | `FL_IDVALIDS` (per-file-ID valid flags) | 496 B |
+| | Scratch LONGs (`FL_IDTOBLOCK`, etc.) | 12 B |
+| **Flash temp buffer** | `FL_TMPBLOCKBUFF` (4,096 B block) | 4,096 B |
+| **Flash handle state** | `FL_HSTATUS` through `FL_HFILENAME` (6 handles) | 906 B |
+| **Flash misc** | `FL_COG_CWD` (8 cogs x 128 B) | 1,024 B |
+| | `FL_DIR_ENTRY_NAME`, `FL_ERRORCODE`, etc. | 144 B |
+| *Flash subtotal* | | *25,919 B (77%)* |
+| **SD sector buffers** | `DIR_BUF`, `FAT_BUF`, `BUF` (3 x 512 B + pad) | 1,580 B |
+| **SD handle buffers** | `H_BUF` (6 handles x 512 B) + `H_BUF_SECTOR` | 3,096 B |
+| **SD handle state** | `H_DEVICE` through `H_CLUSTER` (6 handles) | 174 B |
+| **SD metadata** | FAT pointers, cluster info, card state, diagnostics | 269 B |
+| **SD copy buffer** | `COPY_BUF` (512 B for copyFile) | 512 B |
+| *SD subtotal* | | *5,631 B (12%)* |
+| **Shared** | Worker COG stack (256 LONGs) | 1,040 B |
+| | State vars + IPC parameter block | 216 B |
+| | Error message strings | ~659 B |
+| *Shared subtotal* | | *~1,915 B (4%)* |
+| **Total DAT** | | **~33,465 B** |
+
+### Full Driver by Subsystem
+
+Combining DAT with estimated bytecodes (proportioned from reference driver ratios):
+
+| | SD | Flash | Shared | Total |
+|---|---|---|---|---|
+| DAT (buffers + state) | 5,631 B | 25,919 B | 1,915 B | 33,465 B |
+| Bytecodes (est.) | ~16,500 B | ~8,500 B | ~1,700 B | ~26,700 B |
+| Method table | -- | -- | 1,224 B | 1,224 B |
+| **Total** | **~22,100 B (36%)** | **~34,400 B (56%)** | **~4,900 B (8%)** | **~61,400 B** |
+
+Flash accounts for 56% of the driver, reduced from 63% by the buffer pool decoupling. Flash bytecodes are smaller than SD bytecodes (8.5 KB vs 16.5 KB) because the Flash filesystem is structurally simpler.
+
+> **Note**: These figures reflect default `MAX_FLASH_BUFFERS = 3`. Previous releases allocated one 4 KB buffer per handle (6 x 4,096 = 24,576 B). The buffer pool saves 12,288 bytes with identical functionality for typical applications.
+
+### Sources of Merging Overhead
+
+The 21,728-byte overhead from combining the two drivers into one:
+
+| Source | Bytes | Notes |
+|---|---|---|
+| Flash buffer pool: 2 -> 3 slots | +4,096 B | 1 extra buffer x 4,096 B (pool decoupled from handles) |
+| `FL_COG_CWD` (CWD emulation) | +1,024 B | 8 cogs x 128 B; not in ref Flash |
+| `COPY_BUF` (cross-device copy) | +512 B | New for copyFile() |
+| `FL_DIR_ENTRY_NAME` | +128 B | CWD directory enumeration buffer |
+| `SAVED_DATA` arrays | +96 B | 3 x 8 LONGs for multi-cog IPC |
+| Error message strings (Flash) | ~659 B | `string_for_error()` lookup table |
+| Bus switching + dispatch bytecodes | ~1,781 B | Device routing, SPI mode switching |
+| Misc (pin vars, device tracking, pad) | ~1,144 B | |
+| Flash buffer pool tracking | +9 B | `fl_buf_owner[3]` + `fl_hBufIndex[6]` |
+| **Total** | **+9,440 B** | |
+
+With the buffer pool decoupled from handles, the merging overhead is greatly reduced. The reference Flash driver defaults to 2 open files (8 KB of buffers); the unified driver's pool of 3 buffers (12 KB) adds only 4 KB.
+
+### Handle and Buffer Cost per Slot
+
+Handles and Flash buffers are now independently sized:
+
+| Resource | Per-Unit Cost | What It Controls |
+|---|---|---|
+| Handle (`MAX_OPEN_FILES`) | ~688 B | 28 B SD state + 512 B SD buffer + 148 B Flash state |
+| Flash buffer (`MAX_FLASH_BUFFERS`) | 4,097 B | 4,096 B block buffer + 1 B owner tracking |
+
+With the default configuration (6 handles, 3 buffers): 6 x 688 + 3 x 4,097 = 4,128 + 12,291 = 16,419 B for handle/buffer storage. Override in OBJ:
+
+```spin2
+OBJ
+  fs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 4, MAX_FLASH_BUFFERS = 2
+```
+
+| Use Case | MAX_OPEN_FILES | MAX_FLASH_BUFFERS | Total Handle+Buffer |
+|---|---|---|---|
+| SD-only system | 4 | 0 | 2,752 B |
+| Typical dual-FS | 6 | 3 | 16,419 B |
+| Flash-heavy | 6 | 5 | 24,613 B |
+| Minimal embedded | 3 | 2 | 10,258 B |
+
+---
+
+## 10. Quick Reference
 
 ### Generate Files
 
@@ -558,6 +666,8 @@ Available RAM       = 524,288 - Runtime Hub RAM
 
 | Build | Code/Data | Methods | Binary |
 |---|---|---|---|
-| Minimal (no defines) | 70,952 B | 252 | 77,164 B |
-| Full (`SD_INCLUDE_ALL`) | 73,492 B | 305 | 79,704 B |
-| Delta | +2,540 B | +53 | +2,540 B |
+| Minimal (no defines) | 58,828 B | 255 | 65,040 B |
+| Full (`SD_INCLUDE_ALL`) | 61,392 B | 308 | 67,604 B |
+| Delta | +2,564 B | +53 | +2,564 B |
+
+> Default `MAX_FLASH_BUFFERS = 3` (decoupled from `MAX_OPEN_FILES = 6`). Previous releases with per-handle buffers were ~12 KB larger.

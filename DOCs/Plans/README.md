@@ -10,14 +10,18 @@ Implementation plans, punch lists, and design documents for the dual-FS project.
 | [CODE-STYLE-GUIDE.md](CODE-STYLE-GUIDE.md) | Coding style conventions for the project |
 | [PENDING-api-tutorial-mount-patterns.md](PENDING-api-tutorial-mount-patterns.md) | Multi-cog mount/unmount best practices (pending) |
 
-## Completed
+## Completed (archived)
+
+Completed plans are in `archive/` (gitignored, local-only). Kept for reference but not tracked in version control.
 
 | Document | Description |
 |----------|-------------|
-| [Phases-4-7-Implementation-Plan.md](Phases-4-7-Implementation-Plan.md) | Phases 4-7: test migration, cross-device ops, shell, examples |
-| [Phase3-Flash-File-Operations-Plan.md](Phase3-Flash-File-Operations-Plan.md) | Phase 3: Flash file operations integration |
-| [Phase-5b-Post-v1.0.0-SD-Updates-Plan.md](Phase-5b-Post-v1.0.0-SD-Updates-Plan.md) | Phase 5b: post-v1.0.0 SD driver updates |
-| [Feature-Parity-Plan.md](Feature-Parity-Plan.md) | Feature parity: SD/Flash API alignment, utilities, docs |
+| Phases-4-7-Implementation-Plan.md | Phases 4-7: test migration, cross-device ops, shell, examples |
+| Phase3-Flash-File-Operations-Plan.md | Phase 3: Flash file operations integration |
+| Phase-5b-Post-v1.0.0-SD-Updates-Plan.md | Phase 5b: post-v1.0.0 SD driver updates |
+| Feature-Parity-Plan.md | Feature parity: SD/Flash API alignment, utilities, docs |
+| Regression-Test-Coverage-Gaps.md | Regression test coverage expansion (32 suites, 912 tests) |
+| Decouple-Flash-Block-Buffers.md | Flash buffer pool decoupling (~12 KB savings) |
 
 ## Deferred
 

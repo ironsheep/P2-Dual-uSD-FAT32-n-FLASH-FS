@@ -402,7 +402,8 @@ When a path-based method opens a file, it allocates a handle, sets `h_device` to
 | `fl_hSeekFileOffset` | LONG | File byte offset from seek position |
 | `fl_hCircularLength` | LONG | Length of circular file (0 = normal file) |
 | `fl_hFilename[128]` | BYTE | Cached filename (128 bytes per handle) |
-| `fl_hBlockBuff[4096]` | BYTE | Per-handle 4KB block buffer |
+| `fl_hBufIndex` | BYTE | Buffer pool index for this handle (`$FF` = none) |
+| `fl_hBlockBuff[4096]` | BYTE | 4KB block buffer (from buffer pool, not per-handle) |
 
 ### Handle Lifecycle
 
@@ -411,6 +412,10 @@ allocateHandle()      Find free slot (h_flags == HF_FREE)
        |
        v
   Set h_device        Tag as DEV_SD or DEV_FLASH
+       |
+       v
+  [Flash only]        fl_alloc_buffer() — attach buffer from pool
+                      If pool exhausted: freeHandle(), return E_FLASH_NO_BUFFER
        |
        v
   Populate state      SD: h_flags, h_start_clus, h_sector, etc.
@@ -422,6 +427,9 @@ allocateHandle()      Find free slot (h_flags == HF_FREE)
        v
   Close               SD: flush dirty buffer, update directory entry
                       Flash: flush block buffer, finalize chain
+       |
+       v
+  [Flash only]        fl_free_buffer() — release buffer back to pool
        |
        v
   freeHandle()        Clear all state, h_flags := HF_FREE
@@ -464,8 +472,14 @@ Each SD handle also has its own 512-byte sector buffer (`h_buf`), eliminating th
 
 ### Flash Buffers
 
-- Per-handle 4KB block buffers (`fl_hBlockBuff`) — one per handle, holds the current block being read or written
-- Temporary 4KB block buffer (`fl_tmpBlockBuff`) — used during mount scanning and block move operations
+Flash block buffers are managed as a **pool** sized by `MAX_FLASH_BUFFERS` (default 3), independent of `MAX_OPEN_FILES`:
+
+- **Buffer pool** (`fl_hBlockBuff`) — `MAX_FLASH_BUFFERS` x 4,096 bytes. Buffers are assigned to handles on `open()` and released on `close()`. Pool tracking uses `fl_buf_owner[MAX_FLASH_BUFFERS]` (which handle owns each buffer) and `fl_hBufIndex[MAX_OPEN_FILES]` (which buffer is assigned to each handle).
+- **Temporary block buffer** (`fl_tmpBlockBuff`) — 4,096 bytes. Used during mount scanning, block moves, directory listing, exists, file_size, delete, rename, and format operations. Independent of the handle buffer pool.
+
+Operations that use **no handle buffer**: mount, directory, exists, file_size, file_size_unused, stats, deleteFile, rename, changeDirectory, freeSpace, serial_number, format. These use `fl_tmpBlockBuff` or in-memory translation tables.
+
+Operations that **require a handle buffer**: open (read or write), rd_byte/rd_str/rd_long, wr_byte/wr_str/wr_long, seek, flush, close. The buffer is attached at `open()` and detached at `close()`.
 
 ### Copy Buffer
 
@@ -481,7 +495,8 @@ Each SD handle also has its own 512-byte sector buffer (`h_buf`), eliminating th
 | Per-handle SD state (28 bytes x 6) | 168 bytes | Flags, position, cluster, etc. |
 | Per-handle SD buffers (512 bytes x 6) | 3,072 bytes | Sector cache per handle |
 | Per-handle Flash state (~148 bytes x 6) | 888 bytes | Status, IDs, seek, filename |
-| Per-handle Flash buffers (4096 bytes x 6) | 24,576 bytes | Block buffer per handle |
+| Flash buffer pool (4096 bytes x 3) | 12,288 bytes | `MAX_FLASH_BUFFERS` block buffers |
+| Flash buffer pool tracking | 9 bytes | `fl_buf_owner[3]` + `fl_hBufIndex[6]` |
 | Flash translation tables | ~7,456 bytes | IDToBlocks + IDValids + BlockStates |
 | Temporary Flash block buffer | 4,096 bytes | Mount scanning |
 | Per-cog CWD (8 LONGs) | 32 bytes | SD only |
@@ -490,30 +505,69 @@ Each SD handle also has its own 512-byte sector buffer (`h_buf`), eliminating th
 | Mailbox registers | 40 bytes | pb_cmd through pb_data2 |
 | Worker cog stack | 1,024 bytes | 256 LONGs |
 | Stack guard | 16 bytes | 4 LONGs sentinel |
-| **Total (6 handles, default)** | **~43,588 bytes** | ~42.6 KB |
+| **Total (6 handles, 3 buffers)** | **~31,309 bytes** | ~30.6 KB |
 
-The dominant cost is per-handle Flash block buffers (4 KB each). SD-only applications would use ~6 KB for handle state and buffers.
+Flash buffer pool sizing is independent of handle count. Reducing `MAX_FLASH_BUFFERS` from 6 to 3 (default) saves 12,288 bytes compared to previous releases. SD-only applications can set `MAX_FLASH_BUFFERS = 0` to eliminate Flash buffers entirely.
 
-### Choosing the Handle Count
+### Choosing Handle and Buffer Counts
 
-Override `MAX_OPEN_FILES` in your top-level CON section:
+Two independent constants control memory allocation:
+
+- **`MAX_OPEN_FILES`** — Total handles shared between SD and Flash. Drives SD sector buffers (512 B each) and Flash handle state arrays (~148 B each). Default 6. SD needs handles for files AND directories (a dir listing + a file read = 2 handles). Flash uses zero handles for directory operations.
+- **`MAX_FLASH_BUFFERS`** — How many Flash files can be open simultaneously. Drives Flash block buffers (4,096 B each). Default 3. Independent of handle count. A system with 6 handles may only ever have 2-3 Flash files open at once.
+
+Override both in the OBJ declaration:
 
 ```spin2
-CON
-  MAX_OPEN_FILES = 8
-
 OBJ
-  fs : "dual_sd_fat32_flash_fs"
+  fs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 4, MAX_FLASH_BUFFERS = 2
 ```
 
-**Per-handle memory cost**: ~4,668 bytes (28 bytes SD state + 512 bytes SD buffer + 148 bytes Flash state + 4,096 bytes Flash buffer = 4,784 bytes per additional handle, less the state arrays that are already allocated).
+**Cost per additional unit**:
 
-| Usage Pattern | Handles Needed |
-|---------------|----------------|
-| Read or write a single file | 1 |
-| Copy operation (source + destination) | 2 |
-| Single file + directory enumeration | 2 |
-| Cross-device copy + directory browsing | 3 |
+| Resource | Per-Unit Cost | What It Enables |
+|----------|---------------|-----------------|
+| Handle (`MAX_OPEN_FILES`) | ~688 B | 28 B SD state + 512 B SD buffer + 148 B Flash state |
+| Flash buffer (`MAX_FLASH_BUFFERS`) | 4,097 B | 4,096 B block buffer + 1 B owner tracking |
+
+**How to choose `MAX_FLASH_BUFFERS`**:
+- **2** = enough for read + write (or cross-device copy)
+- **3** = Flash-to-Flash copy + one additional file (default, recommended)
+- **0** = SD-only build (Flash mount still works, but `open()` fails with `E_FLASH_NO_BUFFER`)
+
+**How to choose `MAX_OPEN_FILES`**: Count max simultaneous open files + directory enumerations across all cogs.
+- **4** = typical single-cog app
+- **6** = 2-3 cogs doing file access (default)
+- **8** = maximum practical (limited by hub RAM)
+
+| Usage Pattern | Handles | Flash Buffers |
+|---------------|---------|---------------|
+| Read or write a single file | 1 | 1 |
+| Copy operation (source + destination) | 2 | 0-2 |
+| Single file + directory enumeration | 2 | 0-1 |
+| Cross-device copy + directory browsing | 3 | 1 |
+| Flash-to-Flash copy | 2 | 2 |
+
+### Flash Buffer Pool — Deferred Allocation
+
+Flash handle buffers are allocated from a fixed pool at runtime, not statically per handle. This decouples Flash memory cost from the total handle count.
+
+**Algorithm**:
+1. `open(DEV_FLASH, ...)` calls `fl_alloc_buffer(handle)` — scans `fl_buf_owner[]` for a free slot (`$FF`)
+2. If found: assigns the buffer to the handle and proceeds normally
+3. If pool exhausted: frees the handle and returns `E_FLASH_NO_BUFFER`
+4. `close(handle)` calls `fl_free_buffer(handle)` — returns the buffer to the pool
+
+Operations that consume **zero buffers** from the pool: mount, directory listing, exists, file_size, stats, deleteFile, rename, changeDirectory, freeSpace, serial_number, format. These use `fl_tmpBlockBuff` or in-memory translation tables.
+
+The pool is reset to all-free on `mount(DEV_FLASH)` and `unmount(DEV_FLASH)`.
+
+| Scenario | Behavior |
+|----------|----------|
+| All buffers in use | `open()` returns `E_FLASH_NO_BUFFER`, handle freed |
+| Close then reopen | Buffer released on close, available for next open |
+| `MAX_FLASH_BUFFERS = 0` | SD-only build. Flash open fails. Flash mount/stats/delete still work |
+| `MAX_FLASH_BUFFERS = MAX_OPEN_FILES` | Equivalent to pre-pool behavior (every handle can get a buffer) |
 
 ## Conditional Compilation
 

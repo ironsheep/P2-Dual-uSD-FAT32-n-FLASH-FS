@@ -28,6 +28,9 @@ logs/
 # Staging files (cleanup deferred until driver is working)
 src/phase3_flash_methods.spin2
 
+# Completed plans archive (kept locally, not in git)
+DOCs/Plans/archive/
+
 # Claude Code
 CLAUDE.md
 .claude/
