@@ -28,7 +28,7 @@
 ''
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_RAW        ' Raw sector access
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
-''   #PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control
+''   #PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control (requires SD_INCLUDE_REGISTERS)
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
 ''
 ''   OBJ
@@ -50,6 +50,13 @@
 #ENDIF
 #IFNDEF SD_INCLUDE_DEBUG
 #DEFINE SD_INCLUDE_DEBUG
+#ENDIF
+#ENDIF
+
+' SD_INCLUDE_SPEED requires SD_INCLUDE_REGISTERS (checkCMD6Support → readSCRRaw)
+#IFDEF SD_INCLUDE_SPEED
+#IFNDEF SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_REGISTERS
 #ENDIF
 #ENDIF
 
@@ -106,7 +113,7 @@ CON ' command codes for worker cog
   CMD_DEBUG_CLEAR_ROOT = 26 ' DEBUG: Clear root directory (fixes corruption)
 #ENDIF
 
-  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read (always available for readVBRRaw)
+  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read (infrastructure — used across multiple feature flags)
 
 #IFDEF SD_INCLUDE_RAW
   CMD_INIT_CARD_ONLY = 22   ' Initialize card without filesystem (raw mode)
@@ -114,6 +121,7 @@ CON ' command codes for worker cog
   CMD_READ_SECTORS  = 18    ' Raw multi-block read: param0=start_sector, param1=count, param2=buffer ptr
   CMD_WRITE_SECTORS = 19    ' Raw multi-block write: param0=start_sector, param1=count, param2=buffer ptr
   CMD_WRITE_SECTOR_RAW = 21 ' Raw single sector write: param0=sector, param1=buffer ptr
+  CMD_TEST_CMD13       = 82 ' Test CMD13: returns R2 response in data0
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
@@ -121,6 +129,12 @@ CON ' command codes for worker cog
   CMD_READ_CID         = 27 ' Read CID register: param0=buffer ptr
   CMD_READ_CSD         = 28 ' Read CSD register: param0=buffer ptr
   CMD_READ_SD_STATUS   = 29 ' Read SD Status (ACMD13): 64-byte register via CMD55+CMD13
+#ENDIF
+
+#IFDEF SD_INCLUDE_SPEED
+  CMD_ATTEMPT_HIGH_SPEED  = 83 ' Attempt 50 MHz high-speed: returns data0=boolean
+  CMD_CHECK_HS_CAPABILITY = 84 ' Check CMD6 high-speed support: returns data0=boolean
+  CMD_SET_SPI_SPEED       = 85 ' Set SPI clock frequency: param0=freq in Hz
 #ENDIF
 
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -1054,6 +1068,10 @@ PRI fs_worker() | cur_cmd
       CMD_GET_CARD_SIZE:
         pb_data0 := do_get_card_size()
         pb_status := SUCCESS
+
+      CMD_TEST_CMD13:
+        pb_data0 := do_test_cmd13()
+        pb_status := SUCCESS
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
@@ -1068,6 +1086,20 @@ PRI fs_worker() | cur_cmd
 
       CMD_READ_SD_STATUS:
         pb_status := do_read_sd_status(pb_param0)
+#ENDIF
+
+#IFDEF SD_INCLUDE_SPEED
+      CMD_ATTEMPT_HIGH_SPEED:
+        pb_data0 := do_attempt_high_speed()
+        pb_status := SUCCESS
+
+      CMD_CHECK_HS_CAPABILITY:
+        pb_data0 := do_check_hs_capability()
+        pb_status := SUCCESS
+
+      CMD_SET_SPI_SPEED:
+        do_set_spi_speed(pb_param0)
+        pb_status := SUCCESS
 #ENDIF
 
       ' ═══════════════════════════════════════════════════════════════════════
@@ -1786,6 +1818,47 @@ PRI do_get_card_size() : result | csd[4], c_size, read_bl_len, c_size_mult
     c_size |= csd.byte[9]
     result := (c_size + 1) << 10                                                ' * 1024 sectors (512KB units)
     debug("  [do_get_card_size] CSD v2.0: ", udec(result), " sectors")
+
+PRI do_test_cmd13() : r2_response | r1, status
+' Internal CMD13 test — runs on worker cog where SPI pins are configured.
+' Sends CMD13 (SEND_STATUS) and returns raw R2 response word.
+'
+' @returns r2_response - R2 response word ($0000=OK, $FFFF=timeout, other=error)
+' @local r1 - R1 response byte
+' @local status - Status byte from R2
+
+  ' Send dummy clocks with CS HIGH to ensure card is ready
+  pinh(cs)
+  sp_transfer_8($FF)
+  sp_transfer_8($FF)
+
+  ' CMD13 requires CS to be asserted
+  pinl(cs)
+
+  ' Send CMD13 with no argument (RCA = 0x0000 for SPI mode)
+  sp_transfer_8($40 | CMD13)                                                    ' Command byte: 0x40 | 13 = 0x4D
+  sp_transfer_8($00)                                                            ' Argument bytes (RCA, unused in SPI)
+  sp_transfer_8($00)
+  sp_transfer_8($00)
+  sp_transfer_8($00)
+  sp_transfer_8($FF)                                                            ' CRC disabled after init in SPI mode
+
+  ' Get R1 response (first byte of R2)
+  r1 := waitR1Response()
+  if r1 < 0
+    debug("  [do_test_cmd13] TIMEOUT waiting for R1")
+    pinh(cs)
+    return $FFFF
+
+  ' Get status byte (second byte of R2)
+  status := sp_transfer_8($FF)
+
+  pinh(cs)                                                                      ' Deselect card
+
+  ' Combine into R2 response word
+  r2_response := (r1 << 8) | status
+
+  debug("  [do_test_cmd13] R2=$", uhex_word_(r2_response))
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
@@ -1843,6 +1916,84 @@ PRI do_read_sd_status(p_buf) : result
   else
     debug("  [do_read_sd_status] SD Status read failed")
     return E_IO_ERROR
+#ENDIF
+
+#IFDEF SD_INCLUDE_SPEED
+PRI do_attempt_high_speed() : hs_ok | i, mismatch
+' Internal high-speed attempt — runs on worker cog where SPI pins are configured.
+' Queries capability, switches mode, verifies with sector read/write.
+' Uses existing DAT buffers (@buf + @dir_buf) instead of stack locals to stay
+' within the worker cog's 1024-byte stack limit.
+'
+' @returns hs_ok - TRUE if 50 MHz active, FALSE if fell back to 25 MHz
+' @local i - Loop counter
+' @local mismatch - Count of mismatched longs
+
+  debug("  [do_attempt_high_speed] Attempting high-speed mode...")
+
+  ' Skip if card is known to be slow (e.g., PNY)
+  if card_is_slow
+    debug("  [do_attempt_high_speed] Skipped - card flagged as slow")
+    return false
+
+  ' Check if card supports high-speed
+  if not queryHighSpeedSupport()
+    debug("  [do_attempt_high_speed] Card does not support high-speed")
+    return false
+
+  ' Switch to high-speed mode
+  if not switchToHighSpeed()
+    debug("  [do_attempt_high_speed] Failed to switch to high-speed")
+    return false
+
+  ' Set 50 MHz SPI clock
+  do_set_spi_speed(50_000_000)
+  debug("  [do_attempt_high_speed] SPI set to 50 MHz, verifying...")
+
+  ' Verify by reading a sector, writing it back, reading again
+  ' Use root directory sector as test (always valid after mount)
+  ' CRITICAL: Use existing DAT buffers to avoid stack overflow:
+  '   @buf (BUF_DATA) — primary read/write buffer
+  '   @dir_buf — save original data for comparison
+  if readSector(root_sec, BUF_DATA) < 0
+    debug("  [do_attempt_high_speed] Read FAILED at 50 MHz")
+    return false
+  bytemove(@dir_buf, @buf, 512)                                                ' Save original to dir_buf
+
+  writeSector(root_sec, BUF_DATA)                                              ' Write same data back
+  bytefill(@buf, $AA, 512)                                                     ' Poison buf
+
+  if readSector(root_sec, BUF_DATA) < 0                                        ' Re-read into buf
+    debug("  [do_attempt_high_speed] Verify read FAILED at 50 MHz")
+    return false
+
+  ' Compare dir_buf (original) vs buf (re-read) long-by-long
+  mismatch := 0
+  repeat i from 0 to 127
+    if LONG[@dir_buf][i] <> LONG[@buf][i]
+      mismatch++
+
+  if mismatch > 0
+    debug("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
+    debug("  [do_attempt_high_speed] Falling back to 25 MHz")
+    do_set_spi_speed(25_000_000)
+    dir_sec_in_buf := -1                                                       ' Invalidate dir cache (we borrowed dir_buf)
+    return false
+
+  debug("  [do_attempt_high_speed] VERIFIED - 50 MHz high-speed mode ACTIVE")
+  dir_sec_in_buf := -1                                                         ' Invalidate dir cache (we borrowed dir_buf)
+  return true
+
+PRI do_check_hs_capability() : capable | status[16]
+' Internal high-speed capability check — runs on worker cog.
+' Uses CMD6 mode 0 (check without switch) to query function group 1.
+'
+' @returns capable - TRUE if high-speed function is supported
+' @local status - CMD6 status structure (16 longs = 64 bytes)
+
+  if not sendCMD6($00FFFFF1, @status)
+    return false
+  return (status.byte[13] & $02) <> 0
 #ENDIF
 
 PRI do_open(name_ptr) : result | search_result
@@ -3120,7 +3271,7 @@ PRI reinitCard() : ok | resp, t, saved_freq
   ' STEP 2: Initialize smart pins at slow clock (400 kHz)
   ' ──────────────────────────────────────────────────────────
   initSPIPins()
-  setSPISpeed(400_000)
+  do_set_spi_speed(400_000)
   waitus(100)
 
   ' Send dummy clocks via smart pins
@@ -3194,9 +3345,9 @@ PRI reinitCard() : ok | resp, t, saved_freq
   ' STEP 7: Restore original SPI speed
   ' ──────────────────────────────────────────────────────────
   if saved_freq > 0
-    setSPISpeed(saved_freq)
+    do_set_spi_speed(saved_freq)
   else
-    setSPISpeed(25_000_000)                                                        ' Fallback to 25 MHz
+    do_set_spi_speed(25_000_000)                                                        ' Fallback to 25 MHz
 
   ' Stabilize at new clock rate
   pinh(cs)
@@ -5171,46 +5322,23 @@ PUB cardSizeSectors() : result
 
 #IFDEF SD_INCLUDE_RAW
 PUB testCMD13() : r2_response | r1, status
-'' TEST ONLY: Send CMD13 and return raw R2 response.
+'' TEST ONLY: Send CMD13 and return raw R2 response via worker cog.
 '' For testing/validation of CMD13 (SEND_STATUS) functionality.
 '' NOTE: This is a diagnostic method - not for normal operation.
 ''
 '' @returns r2_response - R2 response word ($0000=OK, $FFFF=timeout, other=error)
-'' @local r1 - R1 response byte
-'' @local status - Status byte from R2
+'' @local r1 - R1 response byte (extracted from r2_response)
+'' @local status - Status byte (extracted from r2_response)
 
-  ' Send dummy clocks with CS HIGH to ensure card is ready
-  pinh(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($FF)
-
-  ' CMD13 requires CS to be asserted
-  pinl(cs)
-
-  ' Send CMD13 with no argument (RCA = 0x0000 for SPI mode)
-  sp_transfer_8($40 | CMD13)                                                    ' Command byte: 0x40 | 13 = 0x4D
-  sp_transfer_8($00)                                                            ' Argument bytes (RCA, unused in SPI)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($FF)                                                            ' CRC disabled after init in SPI mode
-
-  ' Get R1 response (first byte of R2)
-  r1 := waitR1Response()
-  if r1 < 0
-    debug("  [testCMD13] TIMEOUT waiting for R1")
-    pinh(cs)
+  if cog_id == -1
     return $FFFF
+  send_command(CMD_TEST_CMD13, 0, 0, 0, 0)
+  r2_response := LONG[@saved_data0][COGID()]
 
-  ' Get status byte (second byte of R2)
-  status := sp_transfer_8($FF)
+  ' Decode R2 response for debug output (no SPI — just reads the returned value)
+  r1 := r2_response >> 8
+  status := r2_response & $FF
 
-  pinh(cs)                                                                      ' Deselect card
-
-  ' Combine into R2 response word
-  r2_response := (r1 << 8) | status
-
-  ' Log detailed results
   debug("  [testCMD13] R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), " -> R2=$", uhex_word_(r2_response))
   if r1 <> 0
     debug("    R1 errors:")
@@ -5320,6 +5448,20 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : result
     result := LONG[@saved_data0][COGID()]
   else
     result := 0
+
+PUB readVBRRaw(p_buf) : status
+'' Read Volume Boot Record (512 bytes) into buffer.
+'' Card must be mounted for this method to work (VBR location determined at mount).
+''
+'' @param p_buf - Pointer to 512-byte buffer to receive VBR data
+'' @returns status - SUCCESS or negative error code (E_NOT_MOUNTED)
+
+  if not (flags & F_MOUNTED)
+    debug("  [readVBRRaw] FAILED: Card not mounted")
+    return set_error(E_NOT_MOUNTED)
+  status := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0)
+  if status <> SUCCESS
+    set_error(status)
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
@@ -5407,20 +5549,6 @@ PUB getOCR() : ocr
 
   ocr := ocr_value
   debug("  [getOCR] OCR = $", uhex_long(ocr))
-
-PUB readVBRRaw(p_buf) : status
-'' Read Volume Boot Record (512 bytes) into buffer.
-'' Card must be mounted for this method to work (VBR location determined at mount).
-''
-'' @param p_buf - Pointer to 512-byte buffer to receive VBR data
-'' @returns status - SUCCESS or negative error code (E_NOT_MOUNTED)
-
-  if not (flags & F_MOUNTED)
-    debug("  [readVBRRaw] FAILED: Card not mounted")
-    return set_error(E_NOT_MOUNTED)
-  status := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 #ENDIF
 
 PRI readCSD(p_csd) : result | t, i
@@ -5702,14 +5830,14 @@ PRI setOptimalSpeed()
 ' PNY cards limited to 20 MHz, others use max speed (up to 25 MHz).
 
   if card_is_slow
-    setSPISpeed(20_000_000)                                                     ' 20 MHz for PNY cards
+    do_set_spi_speed(20_000_000)                                                     ' 20 MHz for PNY cards
     debug("  [setOptimalSpeed] Limited to 20 MHz for slow card")
   else
     ' Use card's reported max speed, capped at 25 MHz for SPI mode
     if card_max_speed_hz > 25_000_000
-      setSPISpeed(25_000_000)
+      do_set_spi_speed(25_000_000)
     else
-      setSPISpeed(card_max_speed_hz)
+      do_set_spi_speed(card_max_speed_hz)
     debug("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 #IFDEF SD_INCLUDE_SPEED
@@ -5830,67 +5958,27 @@ PRI switchToHighSpeed() : result | status[16]
   debug("  [switchToHighSpeed] Successfully switched to high-speed mode")
   return true
 
-PUB attemptHighSpeed() : hs_ok | test_buf[128], verify_buf[128], i, mismatch
-'' Attempt to enable 50 MHz high-speed mode with verification.
+PUB attemptHighSpeed() : hs_ok
+'' Attempt to enable 50 MHz high-speed mode with verification via worker cog.
 '' Queries capability, switches mode, verifies with sector read/write.
 '' Safe to call - will not break operation on failure.
 ''
 '' @returns hs_ok - TRUE if 50 MHz active, FALSE if fell back to 25 MHz
-'' @local test_buf - Test data buffer (128 longs = 512 bytes)
-'' @local verify_buf - Verification buffer (128 longs = 512 bytes)
-'' @local i - Loop counter
-'' @local mismatch - Count of mismatched longs
 
-  debug("  [attemptHighSpeed] Attempting high-speed mode...")
-
-  ' Skip if card is known to be slow (e.g., PNY)
-  if card_is_slow
-    debug("  [attemptHighSpeed] Skipped - card flagged as slow")
+  if cog_id == -1
     return false
+  send_command(CMD_ATTEMPT_HIGH_SPEED, 0, 0, 0, 0)
+  hs_ok := LONG[@saved_data0][COGID()]
 
-  ' Check if card supports high-speed
-  if not queryHighSpeedSupport()
-    debug("  [attemptHighSpeed] Card does not support high-speed")
-    return false
+PUB setSPISpeed(freq)
+'' Set SPI clock frequency via worker cog.
+'' Routes through worker cog which owns the SPI clock smart pin.
+''
+'' @param freq - Target SPI frequency in Hz (e.g., 400_000 or 25_000_000)
 
-  ' Switch to high-speed mode
-  if not switchToHighSpeed()
-    debug("  [attemptHighSpeed] Failed to switch to high-speed")
-    return false
-
-  ' Set 50 MHz SPI clock
-  setSPISpeed(50_000_000)
-  debug("  [attemptHighSpeed] SPI set to 50 MHz, verifying...")
-
-  ' Verify by reading a sector, writing it back, reading again
-  ' Use root directory sector as test (always valid after mount)
-  if readSector(root_sec, BUF_DATA) < 0
-    debug("  [attemptHighSpeed] Read FAILED at 50 MHz")
-    return false
-  longmove(@test_buf, @buf, 128)                                                ' Copy 512 bytes
-
-  writeSector(root_sec, BUF_DATA)                                               ' Write same data back
-  bytefill(@buf, $AA, 512)                                                      ' Clear buffer with pattern
-
-  if readSector(root_sec, BUF_DATA) < 0                                         ' Read again
-    debug("  [attemptHighSpeed] Verify read FAILED at 50 MHz")
-    return false
-  longmove(@verify_buf, @buf, 128)
-
-  ' Compare
-  mismatch := 0
-  repeat i from 0 to 127
-    if test_buf[i] <> verify_buf[i]
-      mismatch++
-
-  if mismatch > 0
-    debug("  [attemptHighSpeed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
-    debug("  [attemptHighSpeed] Falling back to 25 MHz")
-    setSPISpeed(25_000_000)
-    return false
-
-  debug("  [attemptHighSpeed] VERIFIED - 50 MHz high-speed mode ACTIVE")
-  return true
+  if cog_id == -1
+    return
+  send_command(CMD_SET_SPI_SPEED, freq, 0, 0, 0)
 #ENDIF
 
 PUB getSPIFrequency() : hz
@@ -5954,17 +6042,17 @@ PUB checkCMD6Support() : supported | scr[2], sd_spec
   debug("  [checkCMD6Support] SCR: $", uhex_byte_(scr.byte[0]), " $", uhex_byte_(scr.byte[1]), " SD_SPEC=", udec_(sd_spec))
   return sd_spec >= 2                                                           '  CMD6 supported in SD 2.0+
 
-PUB checkHighSpeedCapability() : capable | status[16]
-'' Check if card reports high-speed capability - queries function group 1.
-'' Uses CMD6 mode 0 (check without switch).
+PUB checkHighSpeedCapability() : capable
+'' Check if card reports high-speed capability via worker cog.
+'' Uses CMD6 mode 0 (check without switch) to query function group 1.
 '' Requires CMD6 support - call checkCMD6Support() first.
 ''
 '' @returns capable - TRUE if high-speed function is supported
-'' @local status - CMD6 status structure (16 longs = 64 bytes)
 
-  if not sendCMD6($00FFFFF1, @status)
+  if cog_id == -1
     return false
-  return (status.byte[13] & $02) <> 0
+  send_command(CMD_CHECK_HS_CAPABILITY, 0, 0, 0, 0)
+  capable := LONG[@saved_data0][COGID()]
 #ENDIF
 
 PRI readSCR(p_scr) : result | t, i
@@ -7521,24 +7609,25 @@ PUB setVolumeLabel(dev, p_label) : status
     set_error(status)
 
 #IFDEF SD_INCLUDE_DEBUG
-PUB debugDumpRootDir() | sec, i, p_entry
-'' DEBUG: Dump root directory entries to debug output.
+PUB debugDumpRootDir() | sec, i, p_entry, local_buf[128]
+'' DEBUG: Dump root directory entries to debug output via worker cog.
 '' This is a diagnostic function for debugging. It reads the root directory
-'' and prints each entry's first 11 bytes (filename) and first cluster.
-'' Called from test cog so output appears in headless logs.
+'' through the worker cog (which owns SPI pins) and prints each entry's
+'' first 11 bytes (filename) and first cluster.
 ''
 '' @local sec - Current sector being read
 '' @local i - Entry index counter
 '' @local p_entry - Pointer to current directory entry
+'' @local local_buf - Local 512-byte buffer for sector data (128 longs)
 
   sec := root_sec
   debug("  [debugDumpRootDir] root_sec=", udec_(sec), " cog_dir_sec=", udec_(cog_dir_sec[COGID()]))
-  if readSector(sec, BUF_DIR) < 0
-    debug("  [debugDumpRootDir] Read FAILED for sector ", udec_(sec))
+  if send_command(CMD_READ_SECTOR_RAW, sec, @local_buf, 0, 0) <> SUCCESS
+    debug("  [debugDumpRootDir] FAILED to read root directory sector")
     return
-  debug("  [debugDumpRootDir] Read sector ", udec_(sec), " into dir_buf")
+  debug("  [debugDumpRootDir] Read sector ", udec_(sec), " via worker cog")
   repeat i from 0 to 15                                                         ' First 16 entries
-    p_entry := @dir_buf + (i * 32)
+    p_entry := @local_buf + (i * 32)
     if byte[p_entry] == 0
       debug("  Entry ", udec_(i), ": [END OF DIR]")
       quit
@@ -7865,11 +7954,11 @@ PRI initSPIPins()
   ' SCK PIN: P_TRANSITION mode for clock generation
   ' X register: half-period in clocks (time between transitions)
   ' Y register: Number of transitions (2 per bit) - loaded via WYPIN per transfer
-  ' Configure with FLTL -> WRPIN, then WXPIN/DRVL in setSPISpeed()
+  ' Configure with FLTL -> WRPIN, then WXPIN/DRVL in do_set_spi_speed()
   ' ════════════════════════════════════════════════════════════════════
   pinfloat(sck)                                                                 ' FLTL - reset smart pin
   wrpin(sck, spi_clk_mode)                                                      ' P_TRANSITION | P_OE
-  ' X register (half-period) will be set by setSPISpeed()
+  ' X register (half-period) will be set by do_set_spi_speed()
   debug("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting setSPISpeed)")
 
   ' ════════════════════════════════════════════════════════════════════
@@ -7921,19 +8010,18 @@ PRI configureEvent(event_config) | ev
         setse1  ev
   end
 
-PUB setSPISpeed(freq) | half_period, actual_freq
-'' Set SPI clock frequency - configure SPI clock speed for sysclk-independent operation.
-'' Made public for speed characterization testing.
-'' Using P_TRANSITION mode: X = half-period (time between transitions)
-'' Reference: ManAtWork SpiFlash.spin2
-''
-'' Formula: half_period = clkfreq / (freq * 2)
-'' For 400 kHz: half_period = 320M / 800k = 400 clocks
-'' For 25 MHz: half_period = 320M / 50M = 6.4 -> minimum 4
-''
-'' @param freq - Target SPI frequency in Hz (e.g., 400_000 or 25_000_000)
-'' @local half_period - Calculated half-period in system clocks
-'' @local actual_freq - Actual achieved frequency
+PRI do_set_spi_speed(freq) | half_period, actual_freq
+' Set SPI clock frequency — worker-cog only (directly reconfigures SPI clock smart pin).
+' Using P_TRANSITION mode: X = half-period (time between transitions).
+' Reference: ManAtWork SpiFlash.spin2
+'
+' Formula: half_period = clkfreq / (freq * 2)
+' For 400 kHz: half_period = 320M / 800k = 400 clocks
+' For 25 MHz: half_period = 320M / 50M = 6.4 -> minimum 4
+'
+' @param freq - Target SPI frequency in Hz (e.g., 400_000 or 25_000_000)
+' @local half_period - Calculated half-period in system clocks
+' @local actual_freq - Actual achieved frequency
 
   ' Calculate half-period (time between transitions) in system clocks
   ' Use ceiling division to ensure we never exceed target frequency
@@ -8144,7 +8232,7 @@ PRI initCard() : result | t, resp, card_version, acmd41_arg
   ' ============================================
   debug("    [initCard] Step 3.5: Initializing smart pins (ManAtWork pattern)...")
   initSPIPins()
-  setSPISpeed(400_000)                                                          ' 400 kHz for init
+  do_set_spi_speed(400_000)                                                          ' 400 kHz for init
   waitus(100)                                                                   ' Let smart pins settle
 
   ' Send dummy clocks using smart pins
@@ -9210,15 +9298,19 @@ PUB displayEntry() | address, char, ascii_ptr, i
             byte[ascii_ptr + i] := char // 26 + "a"
     debug(uhex_word_(address),uhex_byte_array_(@entry_buffer + address,8),"-",uhex_byte_array_(@entry_buffer + address + 8,8)," | ",lstr_(ascii_ptr,16))
 
-PUB displayFAT(cluster)
-'' Display FAT sector containing cluster number - reads and displays FAT entries.
+PUB displayFAT(cluster) | local_buf[128]
+'' Display FAT sector containing cluster number via worker cog.
+'' Reads through worker cog (which owns SPI pins) then copies to @buf
+'' for displaySector().
 ''
 '' @param cluster - Cluster number to display FAT sector for
+'' @local local_buf - Local 512-byte buffer for sector data (128 longs)
 
   n_sec := fat_sec + cluster >> 7
-  if readSector(n_sec, BUF_DATA) < 0                                            ' Uses BUF_DATA since displaySector reads from buf
-    debug("  [displayFAT] Read FAILED for sector ", udec_(n_sec))
+  if send_command(CMD_READ_SECTOR_RAW, n_sec, @local_buf, 0, 0) <> SUCCESS
+    debug("  [displayFAT] FAILED to read FAT sector")
     return
+  bytemove(@buf, @local_buf, 512)                                              ' Copy to @buf for displaySector()
   displaySector()
 #ENDIF
 
