@@ -88,7 +88,7 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     debug("==============================================")
 
     ' ----------------------------------
-    ' TEST GROUP: SD regression — init and mount still work
+    ' TEST GROUP: SD regression -- init and mount still work
     ' ----------------------------------
     utils.startTestGroup(@"SD regression: init and mount")
 

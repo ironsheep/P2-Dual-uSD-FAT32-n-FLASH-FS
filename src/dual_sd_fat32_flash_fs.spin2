@@ -1,10 +1,10 @@
 {Spin2_v45}
-{{┌──────────────────────────────────────────┐
-  │ Dual Filesystem Driver — Release v0.2.0  │  Unified SD + Flash filesystem driver
-  │ Based on: Chris Gadd SD V3, Chip Gracey  │  for the P2 Edge Module
-  │ flash_fs, combined by S.M. Moraco        │
-  │ Copyright (c) 2023-2026                  │  Both devices share SPI bus (P58-P61)
-  └──────────────────────────────────────────┘  with P60/P61 role-swapping
+{{+------------------------------------------+
+  | Dual Filesystem Driver -- Release v0.2.0  |  Unified SD + Flash filesystem driver
+  | Based on: Chris Gadd SD V3, Chip Gracey  |  for the P2 Edge Module
+  | flash_fs, combined by S.M. Moraco        |
+  | Copyright (c) 2023-2026                  |  Both devices share SPI bus (P58-P61)
+  +------------------------------------------+  with P60/P61 role-swapping
 
   ' Initialize driver (store pins, start worker cog)
   fs.init(SD_CS, MOSI, MISO, SD_SCK)
@@ -20,9 +20,9 @@
   fs.closeFileHandle(handle)
 }}
 
-'' ═══════════════════════════════════════════════════════════════════════════════
+'' ===============================================================================
 '' CONDITIONAL COMPILATION - Optional Feature Modules
-'' ═══════════════════════════════════════════════════════════════════════════════
+'' ===============================================================================
 '' Default: MINIMAL driver (core file operations only)
 '' To enable optional features, use #PRAGMA EXPORTDEF in your top-level file:
 ''
@@ -36,7 +36,7 @@
 ''
 '' Or define SD_INCLUDE_ALL to include everything:
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_ALL
-'' ═══════════════════════════════════════════════════════════════════════════════
+'' ===============================================================================
 
 #IFDEF SD_INCLUDE_ALL
 #IFNDEF SD_INCLUDE_RAW
@@ -53,7 +53,7 @@
 #ENDIF
 #ENDIF
 
-' SD_INCLUDE_SPEED requires SD_INCLUDE_REGISTERS (checkCMD6Support → readSCRRaw)
+' SD_INCLUDE_SPEED requires SD_INCLUDE_REGISTERS (checkCMD6Support -> readSCRRaw)
 #IFDEF SD_INCLUDE_SPEED
 #IFNDEF SD_INCLUDE_REGISTERS
 #DEFINE SD_INCLUDE_REGISTERS
@@ -61,9 +61,9 @@
 #ENDIF
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' DEVICE CONSTANTS - Target device for path-based and device-level calls
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
   DEV_SD    = 0       ' microSD card (FAT32)
   DEV_FLASH = 1       ' Onboard 16MB Flash chip
   DEV_BOTH  = 2       ' Both devices (for mount/unmount)
@@ -72,9 +72,9 @@ CON ' ════════════════════════�
   SD_VERSION    = 300  ' SD sub-driver version (from micro_sd_fat32_fs V3.0)
   FLASH_VERSION = 200  ' Flash sub-driver version (from flash_fs V2.0)
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' FLASH FILE OPEN MODE CONSTANTS
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
   FILEMODE_READ            = $72      ' "r"
   FILEMODE_WRITE           = $77      ' "w"
   FILEMODE_APPEND          = $61      ' "a"
@@ -113,7 +113,7 @@ CON ' command codes for worker cog
   CMD_DEBUG_CLEAR_ROOT = 26 ' DEBUG: Clear root directory (fixes corruption)
 #ENDIF
 
-  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read (infrastructure — used across multiple feature flags)
+  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read (infrastructure -- used across multiple feature flags)
 
 #IFDEF SD_INCLUDE_RAW
   CMD_INIT_CARD_ONLY = 22   ' Initialize card without filesystem (raw mode)
@@ -137,9 +137,9 @@ CON ' command codes for worker cog
   CMD_SET_SPI_SPEED       = 85 ' Set SPI clock frequency: param0=freq in Hz
 #ENDIF
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' V3 Handle-Based File Commands (multi-file support)
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   CMD_OPEN_READ   = 30      ' Open file for reading: param0=path ptr, returns data0=handle
   CMD_OPEN_WRITE  = 31      ' Open file for writing (append): param0=path ptr, returns data0=handle
   CMD_CREATE      = 32      ' Create new file for writing: param0=path ptr, returns data0=handle
@@ -161,9 +161,9 @@ CON ' command codes for worker cog
   CMD_SD_FILE_SIZE_UNUSED = 49 ' Get SD file slack space: param0=name ptr, returns data0=unused bytes
   ' Note: CMD 50+ reserved for Flash commands
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' Flash-Specific Commands (Phase 2+)
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   CMD_FLASH_MOUNT       = 50       ' Mount Flash filesystem
   CMD_FLASH_FORMAT      = 51       ' Format Flash filesystem
   CMD_FLASH_OPEN        = 52       ' Open Flash file with mode
@@ -223,18 +223,18 @@ CON ' error codes
   E_DISK_FULL       = -60       ' No free clusters
   E_NO_LOCK         = -64       ' Couldn't allocate hardware lock
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' V3 Multi-File Handle Error Codes
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   E_TOO_MANY_FILES    = -90     ' All file handles are in use
   E_INVALID_HANDLE    = -91     ' Handle out of range or not open
   E_FILE_ALREADY_OPEN = -92     ' File is already open for writing (single-writer policy)
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' Unified Flash Error Codes (ADR-7: single unified error code table)
   ' Mapped from flash_fs.spin2 error codes into non-overlapping range
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   E_FLASH_BAD_HANDLE       = -100  ' Flash handle is invalid
   E_FLASH_NO_HANDLE        = -101  ' Out of available Flash handles
   E_FLASH_DRIVE_FULL       = -102  ' Out of space on Flash chip
@@ -252,15 +252,15 @@ CON ' error codes
   E_FLASH_FILE_EXISTS      = -114  ' Flash file already exists (rename/create_file target)
   E_FLASH_NO_BUFFER        = -115  ' No Flash buffer available (all in use)
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' Unified Device Error Codes
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   E_BAD_DEVICE             = -120  ' Invalid device parameter (not DEV_SD or DEV_FLASH)
   E_DEVICE_NOT_MOUNTED     = -121  ' Requested device not mounted
   E_NOT_SUPPORTED          = -122  ' Operation not supported on this device
 
 CON ' V3 multi-file handle configuration
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
   ' User can override MAX_OPEN_FILES and MAX_FLASH_BUFFERS in OBJ declaration:
   '   fs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 4, MAX_FLASH_BUFFERS = 2
@@ -274,7 +274,7 @@ CON ' V3 multi-file handle configuration
   '                     Flash directory/exists/stats/delete/rename ops need zero buffers.
   '                     Default 3 (read + write + spare for Flash-to-Flash copy).
   '                     Set to 0 for SD-only builds (Flash mount still works, open fails).
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   MAX_OPEN_FILES = 6            ' Default number of handles (user-overridable)
   MAX_FLASH_BUFFERS = 3         ' Default Flash buffer pool size (user-overridable)
 
@@ -360,18 +360,18 @@ CON ' Flash filesystem geometry and constants
   LONGS_IN_BODY_BLOCK = BYTES_IN_BODY_BLOCK / 4     ' 1022 longs per body block
 
 CON ' SD card command codes and tokens for multi-block operations
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' SD SPI Commands for multi-block operations (reference: SD Physical Layer Spec)
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   CMD12  = 12                   ' STOP_TRANSMISSION - terminates multi-block read/write
   CMD13  = 13                   ' SEND_STATUS - get card status register (R2 response)
   CMD18  = 18                   ' READ_MULTIPLE_BLOCK - read consecutive sectors
   CMD25  = 25                   ' WRITE_MULTIPLE_BLOCK - write consecutive sectors
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' Card Status Register (CSR) bits - returned by CMD13 (R2 response = R1 + status byte)
   ' Reference: SD Physical Layer Spec section 4.10.1
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' R2 response is 2 bytes: first byte = R1, second byte = status flags
   ' Status byte bit definitions (directly from SD spec):
   CSR_CARD_IS_LOCKED    = $01  ' Bit 0: Card is locked
@@ -383,9 +383,9 @@ CON ' SD card command codes and tokens for multi-block operations
   CSR_ERASE_PARAM       = $40  ' Bit 6: Invalid erase parameter
   CSR_OUT_OF_RANGE      = $80  ' Bit 7: Out of range / CSD overwrite error
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' SD SPI Data Tokens (reference: SD Physical Layer Spec section 7.3.3)
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   TOKEN_START_BLOCK      = $FE ' Start token for single-block read/write and multi-block read
   TOKEN_START_MULTI_WRITE = $FC ' Start token for each block in multi-block WRITE
   TOKEN_STOP_TRAN        = $FD ' Stop token to terminate multi-block WRITE (not CMD12!)
@@ -397,11 +397,11 @@ CON ' SD card command codes and tokens for multi-block operations
   DATA_WRITE_ERROR       = $0D ' Lower 5 bits = xxx01101 = write error
 
 CON ' struct types - SD card register and FAT32 on-disk data structures
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' Struct type definitions for card registers, filesystem structures, and
   ' directory entries. Exported automatically to consumer objects via OBJ.
   ' All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
 
   ' --- SD Card Registers ---
 
@@ -443,25 +443,25 @@ CON ' struct types - SD card register and FAT32 on-disk data structures
   '  FSInfo sector: 4+480+4+4+4+12+4 = 512 bytes
 
 DAT '' singleton control - SHARED across all object instances
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' SINGLETON CONTROL - Must be initialized to "not started" state
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   cog_id        LONG    -1              ' Worker cog ID (-1 = not started)
   api_lock      LONG    -1              ' Hardware lock ID (-1 = not allocated)
   driver_mode   LONG    0               ' Current mode: MODE_NONE, MODE_RAW, or MODE_FILESYSTEM
   sd_mounted    LONG    0               ' TRUE if SD filesystem is mounted
   flash_mounted LONG    0               ' TRUE if Flash filesystem is mounted
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' CMD13 STATUS STAGING - Preserved for diagnostic inspection
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   last_cmd13_r1     BYTE    0           ' Last R1 byte from CMD13
   last_cmd13_status BYTE    0           ' Last STATUS byte from CMD13
   last_cmd13_error  WORD    0           ' Last non-zero R2 (preserved until next error)
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' PARAMETER BLOCK - Communication between API and worker cog
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   pb_cmd        LONG    0               ' Command (0 = idle/done)
   pb_status     LONG    0               ' Result status code
   pb_caller     LONG    0               ' Caller's cog ID (for COGATN signal)
@@ -477,17 +477,17 @@ DAT '' singleton control - SHARED across all object instances
   saved_data1   LONG    0[8]            ' Snapshot of pb_data1, one per cog
   saved_data2   LONG    0[8]            ' Snapshot of pb_data2, one per cog
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' WORKER COG STACK
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   cog_stack     LONG    0[STACK_SIZE]   ' Worker cog stack
   cog_stack_guard LONG  0[STACK_GUARD_LONGS]  ' Stack overflow sentinel ($CC fill)
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' SPI PIN CONFIGURATION (set once at init)
   ' SD pins: sd_cs_pin=P60, mosi_pin=P59, miso_pin=P58, sd_sck_pin=P61
   ' Flash pins derived from swap: flash_cs_pin=sd_sck_pin, flash_sck_pin=sd_cs_pin
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   cs            LONG    0               ' SD chip select pin (also flash_sck_pin)
   mosi          LONG    0               ' Shared MOSI pin
   miso          LONG    0               ' Shared MISO pin
@@ -495,11 +495,11 @@ DAT '' singleton control - SHARED across all object instances
   flash_cs_pin  LONG    0               ' Flash chip select (= sd_sck_pin, P61)
   flash_sck_pin LONG    0               ' Flash serial clock (= sd_cs_pin, P60)
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' SMART PIN SPI CONFIGURATION (Phase 1 Performance Sprint)
   ' P_TRANSITION for clock, P_SYNC_TX for transmit, P_SYNC_RX for receive
   ' B-input offset links MOSI/MISO to SCK for synchronized operation
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   spi_clk_mode  LONG    0               ' P_PULSE | P_OE for SCK
   spi_tx_mode   LONG    0               ' P_SYNC_TX | P_OE for MOSI
   spi_rx_mode   LONG    0               ' P_SYNC_RX for MISO
@@ -509,9 +509,9 @@ DAT '' singleton control - SHARED across all object instances
   use_smartpin  LONG    0               ' 0 = bit-bang (fallback), 1 = smart pin mode
   sp_debug_ctr  LONG    0               ' Debug counter for sp_transfer_8
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' FILESYSTEM STATE (moved from VAR)
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   fat_sec       LONG    0               ' Starting sector of FAT
   fat2_sec      LONG    0               ' Starting sector of FAT2 (mirror)
   sec_per_fat   LONG    0               ' Sectors per FAT
@@ -534,9 +534,9 @@ DAT '' singleton control - SHARED across all object instances
   vbr_sec       LONG    0               ' Volume Boot Record sector
   ocr_value     LONG    0               ' Cached OCR register (from CMD58)
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' ADAPTIVE TIMING (Phase 2 - Card identification and speed adjustment)
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   card_mfr_id   LONG    0               ' Manufacturer ID from CID (byte 0)
   card_serial_number LONG 0            ' Product serial number from CID (PSN, bytes 9-12)
   card_max_speed_hz LONG 0              ' Maximum speed from CSD TRAN_SPEED (Hz)
@@ -545,14 +545,14 @@ DAT '' singleton control - SHARED across all object instances
   card_read_timeout_ms  LONG  100       ' Read timeout in ms (from CSD or spec default)
   card_write_timeout_ms LONG  500       ' Write timeout in ms (from CSD or spec default)
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' PER-COG ERROR STORAGE (for thread-safe error reporting)
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   last_error    LONG    0[8]            ' One slot per possible cog
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' DIAGNOSTIC: Capture data inside readSector for debugging from test cog
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   diag_last_sector   LONG    0          ' Last sector read
   diag_last_buftype  LONG    0          ' Last buf_type used
   diag_last_token    LONG    0          ' Last start token received
@@ -574,12 +574,12 @@ DAT '' singleton control - SHARED across all object instances
   diag_crc_retries   LONG    0          ' Count of CRC retry attempts
   diag_crc_enabled   BYTE    1          ' CRC validation enabled (1=on, 0=off)
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' WRITE DIAGNOSTICS (set by writeSector, readable from any cog)
   ' Codes: 0=not called, 1=CMD24 fatal, 2=data-response timeout,
   '        3=data CRC reject, 4=data write-err reject, 5=data unknown reject,
   '        6=busy timeout, 7=success
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   diag_write_result  LONG    0          ' Outcome code of last writeSector call
   diag_write_r1      LONG    0          ' CMD24 R1 response byte
   diag_write_dresp   LONG    0          ' Data response token from card
@@ -590,10 +590,10 @@ DAT '' singleton control - SHARED across all object instances
   test_force_write_crc_error  BYTE    0  ' Flag: corrupt next write CRC (one-shot)
   test_error_count            LONG    0  ' Count of injected errors triggered
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' BUFFERS (must be in DAT for worker cog access)
   ' DIAGNOSTIC: Separate buffers for each sector type to isolate conflicts
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   dir_buf       BYTE    0[512]          ' Directory sector buffer
   fat_buf       BYTE    0[512]          ' FAT sector buffer
   buf           BYTE    0[512]          ' Data sector buffer
@@ -604,10 +604,10 @@ DAT '' singleton control - SHARED across all object instances
   vol_label     BYTE    0[12]           ' Volume label (11 chars + null)
   copy_buf      BYTE    0[512]          ' Scratch buffer for copyFile() operations
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' V3 FILE HANDLE TABLE - 28 bytes per handle
   ' Each handle tracks an independently open file with its own state
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   h_device      BYTE    0[MAX_OPEN_FILES]     ' Device: DEV_SD or DEV_FLASH (for routing handle ops)
   h_flags       BYTE    0[MAX_OPEN_FILES]     ' Handle state: HF_FREE, HF_READ, HF_WRITE (| HF_DIRTY)
   h_attr        BYTE    0[MAX_OPEN_FILES]     ' FAT directory entry attributes byte
@@ -619,18 +619,18 @@ DAT '' singleton control - SHARED across all object instances
   h_dir_sector  LONG    0[MAX_OPEN_FILES]     ' Sector containing directory entry
   h_cluster     LONG    0[MAX_OPEN_FILES]     ' Current cluster in FAT chain
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' V3 PER-HANDLE DATA BUFFERS - 512 bytes per handle
   ' Each handle has its own buffer to eliminate thrashing when switching files
   ' Cost: 512 bytes per handle, but provides significant performance benefit
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   h_buf         BYTE    0[512 * MAX_OPEN_FILES]   ' Per-handle sector buffers
   h_buf_sector  LONG    0[MAX_OPEN_FILES]         ' Sector currently in each buffer (-1 = invalid)
 
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
   ' FLASH FILESYSTEM STATE (Phase 2)
   ' Translation tables, handle state, and block buffers for Flash device
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' ===========================================================================
 
   ' SPI bus device tracking
   current_spi_device  LONG  -1                    ' Currently configured SPI device (-1=none, 0=SD, 1=Flash)
@@ -660,7 +660,7 @@ DAT '' singleton control - SHARED across all object instances
   fl_buf_owner     BYTE    $FF[MAX_FLASH_BUFFERS]    ' Handle owning each buffer ($FF = free)
   fl_hBufIndex     BYTE    $FF[MAX_OPEN_FILES]       ' Buffer index per handle ($FF = none)
 
-  ' Flash block buffers — sized by MAX_FLASH_BUFFERS, not MAX_OPEN_FILES
+  ' Flash block buffers -- sized by MAX_FLASH_BUFFERS, not MAX_OPEN_FILES
   fl_hBlockBuff    BYTE    0[MAX_FLASH_BUFFERS * BLOCK_SIZE]
 
   ' Temporary block buffer (mount scanning, block moves)
@@ -689,15 +689,15 @@ CON ' ==========================================================================
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' MULTI-COG LIFECYCLE METHODS
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 PUB init(sd_cs, _mosi, _miso, sd_sck) : workerCog
 '' Initialize the unified filesystem driver (singleton).
 '' Stores pin assignments, derives Flash pins from the P60/P61 swap,
 '' allocates hardware lock, and starts the worker cog.
-'' Does NOT mount any filesystem — call mount() after init().
+'' Does NOT mount any filesystem -- call mount() after init().
 ''
 '' Pin wiring on P2 Edge Module:
 ''   SD:    CS=sd_cs (P60), MOSI=_mosi (P59), MISO=_miso (P58), SCK=sd_sck (P61)
@@ -966,10 +966,10 @@ PUB sync() : status
   if status <> SUCCESS
     set_error(status)
 
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 ' V3 HANDLE-BASED PUBLIC API
 ' Multi-file support with independent file handles
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 
 
 CON ' =============================================================================
@@ -1083,9 +1083,9 @@ PUB flush(handle) : status
     return set_error(E_FLASH_BAD_HANDLE)
   return syncHandle(handle)
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' CROSS-DEVICE OPERATIONS
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 PUB openFileRead(dev, p_path) : handle | fl_path[32]
 '' Open file for reading (V3 multi-file) - opens existing file and returns handle.
@@ -1301,7 +1301,7 @@ PUB seek(handle, position, whence) : end_position | abs_pos
 
 PUB flashSeek(handle, position, whence) : end_position
 '' Seek within a Flash file with whence parameter (SK_FILE_START or SK_CURRENT_POSN).
-'' Deprecated — use seek(handle, position, whence) instead (works for both devices).
+'' Deprecated -- use seek(handle, position, whence) instead (works for both devices).
 ''
 '' @param handle - Valid Flash file handle
 '' @param position - Byte position (absolute) or offset (relative)
@@ -1479,9 +1479,9 @@ PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status | srcHandle, dstHa
     set_error(status)
   return status
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' ERROR REPORTING
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 CON ' =============================================================================
@@ -1492,7 +1492,7 @@ PUB openDirectory(dev, p_path) : handle
 '' SD only. Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
 '' Pass "" or "." to enumerate calling cog's current working directory.
 '' Handles share the existing file handle pool (MAX_OPEN_FILES total).
-'' Flash: Not supported — use directory() for Flash file iteration with CWD filtering.
+'' Flash: Not supported -- use directory() for Flash file iteration with CWD filtering.
 ''
 '' @param dev - DEV_SD only (DEV_FLASH returns E_NOT_SUPPORTED)
 '' @param p_path - Pointer to null-terminated path string
@@ -1529,9 +1529,9 @@ PUB closeDirectoryHandle(handle)
 
   send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' UNIFIED DEVICE-LEVEL METHODS (ADR-9)
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 PUB readDirectory(entry) : p_entry
 '' Read directory entry (multi-cog safe) - iterates through directory entries.
@@ -1559,7 +1559,7 @@ PUB newDirectory(dev, name_ptr) : status
       if status <> SUCCESS
         set_error(status)
     DEV_FLASH:
-      ' Flash directories are implicit — they exist when files with matching path prefixes exist.
+      ' Flash directories are implicit -- they exist when files with matching path prefixes exist.
       ' mkdir just validates the request and succeeds. Empty directories vanish naturally.
       ifnot flash_mounted
         return set_error(E_NOT_MOUNTED)
@@ -1591,10 +1591,10 @@ PUB changeDirectory(dev, name_ptr) : status
 
 PUB directory(dev, p_block_id, p_filename, p_file_size) : status | tmpName[32]
 '' Get next Flash directory entry (iterates files), filtered by CWD.
-'' Flash only — caller sets LONG[p_block_id] to 0 before first call, auto-incremented.
+'' Flash only -- caller sets LONG[p_block_id] to 0 before first call, auto-incremented.
 '' When no more files, p_filename[0] will be 0.
 '' Only returns files that are direct children of the current working directory.
-'' The CWD prefix is stripped — p_filename receives the bare filename only.
+'' The CWD prefix is stripped -- p_filename receives the bare filename only.
 ''
 '' @param dev - Must be DEV_FLASH
 '' @param p_block_id - Pointer to LONG block ID counter (auto-advanced)
@@ -1618,7 +1618,7 @@ PUB directory(dev, p_block_id, p_filename, p_file_size) : status | tmpName[32]
       BYTE[p_filename][0] := 0
       return SUCCESS
     if fl_cwd_matches(@tmpName, p_filename)
-      ' Match found — p_filename now has the bare (CWD-stripped) name
+      ' Match found -- p_filename now has the bare (CWD-stripped) name
       return SUCCESS
 
 
@@ -1681,11 +1681,11 @@ PUB file_size(dev, p_filename) : size | cmd_status, fl_path[32]
     other:
       size := E_BAD_DEVICE
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' FLASH-STYLE API (Phase 3)
     ' Mode-based open, circular files, create_file, close, flush.
     ' SD operations mapped to SD handle commands where applicable.
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 PUB file_size_unused(dev, p_filename) : size_unused | fl_path[32]
 '' Get unused (slack) bytes for a file.
@@ -2288,7 +2288,7 @@ PUB testCMD13() : r2_response | r1, status
   send_command(CMD_TEST_CMD13, 0, 0, 0, 0)
   r2_response := LONG[@saved_data0][COGID()]
 
-  ' Decode R2 response for debug output (no SPI — just reads the returned value)
+  ' Decode R2 response for debug output (no SPI -- just reads the returned value)
   r1 := r2_response >> 8
   status := r2_response & $FF
 
@@ -2416,7 +2416,7 @@ PUB readVBRRaw(p_buf) : status
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' CARD IDENTIFICATION METHODS (for diagnostic tools)
     ' These methods provide raw register access for card characterization.
     ' Call initCardOnly() or mount() before using these methods.
@@ -2431,7 +2431,7 @@ CON ' ════════════════════════�
     '     mdt := ENDIANW(WORD[@cid_buf + 13])   ' CID manufacturing date
     '   Also consider STRUCT (available at v45+) to define cid_t, csd_t, scr_t
     '   types here and export them for consumer objects.
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 #ENDIF
 
@@ -2953,9 +2953,9 @@ PRI fs_worker() | cur_cmd
 
     debug("  [fs_worker] Received command ", udec_(cur_cmd))
 
-    ' ═══════════════════════════════════════════════════════════════════════
+    ' =======================================================================
     ' MODE ENFORCEMENT: Reject commands invalid for current mode
-    ' ═══════════════════════════════════════════════════════════════════════
+    ' =======================================================================
     ' File system commands require MODE_FILESYSTEM
     ' Raw sector commands are allowed in both MODE_RAW and MODE_FILESYSTEM
     ' Mode transitions (MOUNT, UNMOUNT, INIT_CARD_ONLY) have their own logic
@@ -3107,9 +3107,9 @@ PRI fs_worker() | cur_cmd
         pb_status := SUCCESS
 #ENDIF
 
-      ' ═══════════════════════════════════════════════════════════════════════
+      ' =======================================================================
       ' V3 Handle-Based File Commands
-      ' ═══════════════════════════════════════════════════════════════════════
+      ' =======================================================================
       CMD_OPEN_READ:
         pb_data0 := do_open_read(pb_param0)                                       ' Returns handle or error
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
@@ -3172,9 +3172,9 @@ PRI fs_worker() | cur_cmd
         else
           pb_status := E_INVALID_HANDLE
 
-      ' ═══════════════════════════════════════════════════════════════════════
+      ' =======================================================================
       ' V3 Directory Handle Commands
-      ' ═══════════════════════════════════════════════════════════════════════
+      ' =======================================================================
       CMD_OPEN_DIR:
         pb_data0 := do_open_dir(pb_param0)                                           ' Returns handle or error
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
@@ -3360,9 +3360,9 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 
   return status
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' V3 FILE HANDLE MANAGEMENT HELPERS
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 CON ' =============================================================================
@@ -3449,9 +3449,9 @@ PRI initHandleTable() | i
   repeat i from 0 to MAX_OPEN_FILES - 1
     freeHandle(i)
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' STRUCT ACCESSOR HELPERS (workaround: pnut-ts v51a ^structName not in locals)
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 CON ' =============================================================================
@@ -3628,9 +3628,9 @@ PRI dirEntSetModifyStamp(^dir_entry_t p, stamp)
   p.wrtTime := stamp & $FFFF
   p.wrtDate := stamp >> 16
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 CON ' =============================================================================
@@ -3816,10 +3816,10 @@ PRI do_close() : status
   bytefill(@entry_buffer, 0, 32)
   flags := flags & !F_NEWDIR
 
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 ' V3 HANDLE-BASED FILE OPERATIONS
 ' These functions use the multi-file handle system for independent file access
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 
 PRI do_open_read(p_path) : handle | start_cluster
 ' Open file for reading (V3 handle) - opens existing file and returns handle.
@@ -3958,7 +3958,7 @@ PRI do_create(p_path) : handle | temp, first_cluster
 
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   if entry_address == 0
-    debug("  [do_create] entry_address=0 — path not valid, aborting")
+    debug("  [do_create] entry_address=0 -- path not valid, aborting")
     freeHandle(handle)
     return E_FILE_NOT_FOUND
 
@@ -4393,11 +4393,11 @@ PRI do_sync_all() : status | i
   debug("  [do_sync_all] All handles synced")
   return SUCCESS
 
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 ' V3 DIRECTORY HANDLE OPERATIONS
 ' Directory handles share the existing unified handle pool.
 ' A directory handle reuses per-handle fields with HF_DIR flag.
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 
 PRI do_open_dir(p_path) : handle | start_cluster
 ' Open directory for enumeration (V3 handle) - returns handle for iterating entries.
@@ -4551,7 +4551,7 @@ PRI do_newfile(name_ptr) : status | temp
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
   if entry_address == 0
-    debug("  [do_newfile] entry_address=0 — path not valid, aborting")
+    debug("  [do_newfile] entry_address=0 -- path not valid, aborting")
     return E_FILE_NOT_FOUND
 
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
@@ -4582,7 +4582,7 @@ PRI do_newdir(name_ptr) : status | temp
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
   if entry_address == 0
-    debug("  [do_newdir] entry_address=0 — path not valid, aborting")
+    debug("  [do_newdir] entry_address=0 -- path not valid, aborting")
     return E_FILE_NOT_FOUND
 
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
@@ -4957,10 +4957,10 @@ PRI do_readdir(entry_num) : p_entry | idx, char, attrib
       readNextSector(BUF_DIR)
   return E_FILE_NOT_FOUND
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' FLASH SPI ENGINE AND MOUNT LOGIC (Phase 2)
     ' All methods run in the worker cog context (called from fs_worker dispatch)
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 #IFDEF SD_INCLUDE_RAW
@@ -5019,7 +5019,7 @@ PRI do_get_card_size() : sector_count | csd[4], c_size, read_bl_len, c_size_mult
     debug("  [do_get_card_size] CSD v2.0: ", udec(sector_count), " sectors")
 
 PRI do_test_cmd13() : r2_response | r1, status
-' Internal CMD13 test — runs on worker cog where SPI pins are configured.
+' Internal CMD13 test -- runs on worker cog where SPI pins are configured.
 ' Sends CMD13 (SEND_STATUS) and returns raw R2 response word.
 '
 ' @returns r2_response - R2 response word ($0000=OK, $FFFF=timeout, other=error)
@@ -5121,7 +5121,7 @@ PRI do_read_sd_status(p_buf) : status
 
 #IFDEF SD_INCLUDE_SPEED
 PRI do_attempt_high_speed() : hs_ok | i, mismatch
-' Internal high-speed attempt — runs on worker cog where SPI pins are configured.
+' Internal high-speed attempt -- runs on worker cog where SPI pins are configured.
 ' Queries capability, switches mode, verifies with sector read/write.
 ' Uses existing DAT buffers (@buf + @dir_buf) instead of stack locals to stay
 ' within the worker cog's 1024-byte stack limit.
@@ -5154,8 +5154,8 @@ PRI do_attempt_high_speed() : hs_ok | i, mismatch
   ' Verify by reading a sector, writing it back, reading again
   ' Use root directory sector as test (always valid after mount)
   ' CRITICAL: Use existing DAT buffers to avoid stack overflow:
-  '   @buf (BUF_DATA) — primary read/write buffer
-  '   @dir_buf — save original data for comparison
+  '   @buf (BUF_DATA) -- primary read/write buffer
+  '   @dir_buf -- save original data for comparison
   if readSector(root_sec, BUF_DATA) < 0
     debug("  [do_attempt_high_speed] Read FAILED at 50 MHz")
     return false
@@ -5186,7 +5186,7 @@ PRI do_attempt_high_speed() : hs_ok | i, mismatch
   return true
 
 PRI do_check_hs_capability() : capable | status[16]
-' Internal high-speed capability check — runs on worker cog.
+' Internal high-speed capability check -- runs on worker cog.
 ' Uses CMD6 mode 0 (check without switch) to query function group 1.
 '
 ' @returns capable - TRUE if high-speed function is supported
@@ -5271,18 +5271,18 @@ PRI reinitCard() : ok | resp, t, saved_freq
   dir_sec_in_buf := -1                                                             ' Invalidate dir sector cache
   fat_sec_in_buf := -1                                                             ' Invalidate FAT sector cache
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 1: GPIO recovery flush (4096 clocks with CS HIGH)
-  ' Must happen BEFORE smart pin setup — uses raw GPIO.
+  ' Must happen BEFORE smart pin setup -- uses raw GPIO.
   ' The SD card may be stuck mid-transfer; flush clears it.
   '
   ' CRITICAL: Must fully reset smart pins first! pinfloat()
   ' only clears DIR, not the wrpin mode register. If smart
   ' pin modes remain active, pinh/pinl produce smart pin
   ' behavior (high-speed transitions) instead of clean GPIO.
-  ' PINCLEAR does both: DIR=0 and WRPIN(pin,0) — the standard
+  ' PINCLEAR does both: DIR=0 and WRPIN(pin,0) -- the standard
   ' way to stop smart pin operation before reprogramming.
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   pinclear(cs)
   pinclear(sck)
   pinclear(mosi)
@@ -5300,9 +5300,9 @@ PRI reinitCard() : ok | resp, t, saved_freq
     waitus(10)
   debug("    [reinitCard] GPIO recovery flush complete (4096 clocks)")
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 2: Initialize smart pins at slow clock (400 kHz)
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   initSPIPins()
   do_set_spi_speed(400_000)
   waitus(100)
@@ -5312,9 +5312,9 @@ PRI reinitCard() : ok | resp, t, saved_freq
     sp_transfer_8($FF)
   debug("    [reinitCard] Smart pins ready at 400 kHz")
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 3: CMD0 - GO_IDLE_STATE
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   resp := 0
   repeat 5
     resp := cmd(0, 0)
@@ -5328,21 +5328,21 @@ PRI reinitCard() : ok | resp, t, saved_freq
 
   debug("    [reinitCard] CMD0 OK")
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 4: CMD8 - SEND_IF_COND
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   resp := cmd(8, $000001AA)
 
   if resp == 0
-    ' v1.x card — shouldn't happen for 128GB but handle it
+    ' v1.x card -- shouldn't happen for 128GB but handle it
     saved_acmd41_arg := $00000000
   elseif (resp & $FFF) == $1AA
     saved_acmd41_arg := $40000000
   debug("    [reinitCard] CMD8 done, acmd41_arg=$", uhex_long_(saved_acmd41_arg))
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 5: ACMD41 - SD_SEND_OP_COND (loop until ready)
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   t := getct() + clkfreq * 2                                                       ' 2 second timeout
 
   repeat
@@ -5361,9 +5361,9 @@ PRI reinitCard() : ok | resp, t, saved_freq
 
   debug("    [reinitCard] ACMD41 complete - card ready")
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 6: CMD58 - READ_OCR (restore HCS addressing)
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   resp := cmd(58, 0)
   ocr_value := resp
 
@@ -5374,9 +5374,9 @@ PRI reinitCard() : ok | resp, t, saved_freq
 
   debug("    [reinitCard] CMD58 done, hcs=", udec_(hcs))
 
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   ' STEP 7: Restore original SPI speed
-  ' ──────────────────────────────────────────────────────────
+  ' ----------------------------------------------------------
   if saved_freq > 0
     do_set_spi_speed(saved_freq)
   else
@@ -5799,7 +5799,7 @@ PRI fl_can_mount() : ok | block_address, blockTypeBits, signature, bad_count, du
         ifnot fl_trace_file_set_flags(block_address, true)
           fl_trace_file_set_flags(block_address, false)
 
-  ' Pass 3: Count dead blocks (read-only — do NOT cancel)
+  ' Pass 3: Count dead blocks (read-only -- do NOT cancel)
   repeat FL_BLOCKS with block_address
     if field[fl_BlockState][block_address] == B_TEMP
       fl_read_block_addr(block_address, @signature, $000, $003)
@@ -5840,7 +5840,7 @@ PRI fl_check_block_read_only(thisBlockAddress) : bad_count, dupe_count | otherBl
     field[fl_BlockState][thisBlockAddress] := B_TEMP
     return
 
-  ' Duplicate ID found — resolve in tables only (no cancel)
+  ' Duplicate ID found -- resolve in tables only (no cancel)
   otherBlockAddress := field[fl_IDToBlock][thisBlockID]
   dupe_count++
 
@@ -5875,12 +5875,12 @@ PRI do_flash_serial_number() : sn_hi, sn_lo
 
   debug("  [do_flash_serial_number] ID: $", uhex_long_(sn_hi), "_", uhex_long_(sn_lo))
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' FLASH DIRECTORY EMULATION (caller-cog helpers)
     ' These PRI methods run in the calling cog, using COGID() to index per-cog CWD.
     ' Flash filenames support "/" characters (up to 127 chars). CWD is stored as a
     ' prefix string that gets prepended to filenames transparently.
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 CON ' =============================================================================
@@ -5911,7 +5911,7 @@ PRI fl_prepend_cwd(p_dest, p_name) | p_cwd, cwd_len, name_len
   bytefill(p_dest, 0, FL_FILENAME_SIZE)
 
   if cwd_len == 0
-    ' At root — just copy the filename
+    ' At root -- just copy the filename
     strcopy(p_dest, p_name, FL_FILENAME_SIZE - 1)
   else
     ' Build: CWD + "/" + name
@@ -5951,14 +5951,14 @@ PRI fl_change_cwd(p_path) | p_cwd, cwd_len, path_len, idx
         BYTE[p_cwd][idx] := 0
         return
       idx--
-    ' No "/" found — CWD is a single segment, clear to root
+    ' No "/" found -- CWD is a single segment, clear to root
     BYTE[p_cwd] := 0
     return
 
-  ' Relative path — append to CWD
+  ' Relative path -- append to CWD
   path_len := strsize(p_path)
   if cwd_len == 0
-    ' At root — set CWD to this path directly
+    ' At root -- set CWD to this path directly
     strcopy(p_cwd, p_path, FL_FILENAME_SIZE - 1)
   else
     ' Append: CWD + "/" + path
@@ -5984,7 +5984,7 @@ PRI fl_cwd_matches(p_stored_name, p_bare_name) : matches | p_cwd, cwd_len, name_
   name_len := strsize(p_stored_name)
 
   if cwd_len == 0
-    ' At root — match files that have no "/" in their name
+    ' At root -- match files that have no "/" in their name
     repeat idx from 0 to name_len - 1
       if BYTE[p_stored_name][idx] == "/"
         return false
@@ -6005,17 +6005,17 @@ PRI fl_cwd_matches(p_stored_name, p_bare_name) : matches | p_cwd, cwd_len, name_
     if BYTE[p_stored_name][idx] == "/"
       return false
 
-  ' It's a direct child — extract the bare name
+  ' It's a direct child -- extract the bare name
   strcopy(p_bare_name, p_stored_name + cwd_len + 1, FL_FILENAME_SIZE - 1)
   return true
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' PHASE 3: FLASH FILE OPERATIONS (worker cog internal methods)
     ' Ported from flash_fs.spin2 with fl_ prefix, adapted for unified driver.
-    ' All methods run in worker cog — no locks, no mount checks (dispatch handles).
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' All methods run in worker cog -- no locks, no mount checks (dispatch handles).
+    ' ===========================================================================
 
-' ─── Step 3: Non-SPI Helpers ────────────────────────────────────────────────
+' --- Step 3: Non-SPI Helpers ------------------------------------------------
 
 
 CON ' =============================================================================
@@ -6286,7 +6286,7 @@ PRI fl_is_old_format_file_head(block_address, pBlockBuffer) : oldFormatStatus | 
   fnmCrc32 := getcrc(pBlockBuffer, $AD0424F3 rev 31, strsize(pBlockBuffer) + 1)
   oldFormatStatus := possOldCRC == fnmCrc32
 
-' ─── Step 4: Block-Chain Read Helpers ───────────────────────────────────────
+' --- Step 4: Block-Chain Read Helpers ---------------------------------------
 
 PRI fl_get_file_head_signature(p_filename) : foundSignature | tmpFilenameCRC, block_address, signature[2], bIsOldFmt
 ' Look up file by name and return block state bits of file's head block.
@@ -6459,7 +6459,7 @@ PRI fl_seek_no_locks(handle, file_position) | pBuff, block_id, endPtr, fileOffse
   fl_hSeekPtr[handle] := fl_hEndPtr[handle] := endPtr
   fl_read_block_id(block_id, pBuff, $000, $FFF)
 
-' ─── Step 5: Write Helpers ──────────────────────────────────────────────────
+' --- Step 5: Write Helpers --------------------------------------------------
 
 PRI fl_next_block_address() : block_address | blockFreeCount, freeBlockAddress, freeIndex, next_cycle_bits
 ' Return address of next block to write to (with wear-leveling).
@@ -6482,7 +6482,7 @@ PRI fl_next_block_address() : block_address | blockFreeCount, freeBlockAddress, 
     field[fl_BlockState][block_address] := B_TEMP
     return
 
-  ' Block is HEAD or BODY — must evict it
+  ' Block is HEAD or BODY -- must evict it
   freeIndex := abs getrnd() // blockFreeCount
   repeat FL_BLOCKS with freeBlockAddress
     ifnot field[fl_BlockState][freeBlockAddress]
@@ -6633,7 +6633,7 @@ PRI fl_froncate_file(head_block_id, limit_in_bytes) | size_in_bytes, block_addre
     field[fl_IDToBlock][head_block_id] := block_address
     field[fl_BlockState][block_address] := B_HEAD
 
-' ─── Step 6: Core I/O Engine ───────────────────────────────────────────────
+' --- Step 6: Core I/O Engine -----------------------------------------------
 
 PRI fl_rd_byte_no_locks(handle) : byte_value | pBuff, signature, isSeeking, endPtr
 ' Read next byte from Flash file.
@@ -6925,11 +6925,11 @@ PRI fl_finish_open_readwrite(p_filename) : handle | signature, head_block_id
     fl_build_head_block(fl_buffer_pointer(handle), fl_filename_pointer(handle), head_block_id)
     fl_start_modify(handle, FL_H_READWRITE, head_block_id, 0, false)
 
-' ─── Step 7: Top-Level Flash Operations ────────────────────────────────────
+' --- Step 7: Top-Level Flash Operations ------------------------------------
 
 PRI fl_open(p_filename, mode) : handle | findings, bFileExists
 ' Open Flash file in mode.
-' Port of flash_fs.spin2 open() — no mount check, no lock.
+' Port of flash_fs.spin2 open() -- no mount check, no lock.
 '
 ' @param p_filename - address of filename zstring
 ' @param mode - FILEMODE_READ, FILEMODE_WRITE, FILEMODE_APPEND, etc.
@@ -6980,7 +6980,7 @@ PRI fl_open(p_filename, mode) : handle | findings, bFileExists
 
 PRI fl_open_circular(p_filename, mode, max_file_length) : handle | bFileExists
 ' Open Flash circular file.
-' Port of flash_fs.spin2 open_circular() — no mount check, no lock.
+' Port of flash_fs.spin2 open_circular() -- no mount check, no lock.
 '
 ' @param p_filename - address of filename zstring
 ' @param mode - "r"/"R" or "a"/"A"
@@ -7032,7 +7032,7 @@ PRI fl_open_circular(p_filename, mode, max_file_length) : handle | bFileExists
 
 PRI fl_close(handle) : status
 ' Close a Flash file handle.
-' Port of flash_fs.spin2 close() — no mount check, no lock.
+' Port of flash_fs.spin2 close() -- no mount check, no lock.
 '
 ' @param handle - handle to close
 ' @returns status - SUCCESS or error code
@@ -7050,7 +7050,7 @@ PRI fl_close(handle) : status
 
 PRI fl_flush(handle) : status
 ' Flush pending Flash writes (close then reopen in append).
-' Port of flash_fs.spin2 flush() — no mount check, no lock.
+' Port of flash_fs.spin2 flush() -- no mount check, no lock.
 '
 ' @param handle - handle to flush
 ' @returns status - SUCCESS or error code
@@ -7078,7 +7078,7 @@ PRI fl_flush(handle) : status
 
 PRI fl_read(handle, p_buffer, count) : bytes_read | byteIndex, readValue, checkValue
 ' Read bytes from a Flash file.
-' Port of flash_fs.spin2 read() — no mount check, no lock.
+' Port of flash_fs.spin2 read() -- no mount check, no lock.
 '
 ' @param handle - handle to file open for reading
 ' @param p_buffer - destination buffer
@@ -7105,7 +7105,7 @@ PRI fl_read(handle, p_buffer, count) : bytes_read | byteIndex, readValue, checkV
 
 PRI fl_write(handle, p_buffer, count) : bytes_written | checkValue, byteIndex, wr_value, wr_status
 ' Write bytes to a Flash file.
-' Port of flash_fs.spin2 write() — no mount check, no lock.
+' Port of flash_fs.spin2 write() -- no mount check, no lock.
 '
 ' @param handle - handle to file open for writing
 ' @param p_buffer - source buffer
@@ -7134,7 +7134,7 @@ PRI fl_write(handle, p_buffer, count) : bytes_written | checkValue, byteIndex, w
 
 PRI fl_seek(handle, position, whence) : end_position | file_length, file_position, block_id, pBuff
 ' Seek within a Flash file.
-' Port of flash_fs.spin2 seek() — no mount check, no lock.
+' Port of flash_fs.spin2 seek() -- no mount check, no lock.
 '
 ' @param handle - handle to open file
 ' @param position - byte position or offset
@@ -7183,7 +7183,7 @@ PRI fl_seek(handle, position, whence) : end_position | file_length, file_positio
 
 PRI fl_delete(p_filename) : status | signature
 ' Delete a Flash file.
-' Port of flash_fs.spin2 delete() — no mount check, no lock.
+' Port of flash_fs.spin2 delete() -- no mount check, no lock.
 '
 ' @param p_filename - address of filename zstring
 ' @returns status - SUCCESS or error code
@@ -7201,7 +7201,7 @@ PRI fl_delete(p_filename) : status | signature
 
 PRI fl_rename(p_cur_filename, p_new_filename) : status | signature, new_block_address, cur_block_address, next_cycle_bits
 ' Rename a Flash file.
-' Port of flash_fs.spin2 rename() — no mount check, no lock.
+' Port of flash_fs.spin2 rename() -- no mount check, no lock.
 '
 ' @param p_cur_filename - current filename
 ' @param p_new_filename - new filename
@@ -7244,7 +7244,7 @@ PRI fl_rename(p_cur_filename, p_new_filename) : status | signature, new_block_ad
 
 PRI fl_exists(p_filename) : bExists
 ' Check if Flash file exists.
-' Port of flash_fs.spin2 exists() — no mount check, no lock.
+' Port of flash_fs.spin2 exists() -- no mount check, no lock.
 '
 ' @param p_filename - address of filename zstring
 ' @returns bExists - TRUE if file exists
@@ -7254,7 +7254,7 @@ PRI fl_exists(p_filename) : bExists
 
 PRI fl_file_size(p_filename) : size_in_bytes | signature
 ' Get Flash file size by name.
-' Port of flash_fs.spin2 file_size() — no mount check, no lock.
+' Port of flash_fs.spin2 file_size() -- no mount check, no lock.
 '
 ' @param p_filename - address of filename zstring
 ' @returns size_in_bytes - file size or negative error code
@@ -7269,7 +7269,7 @@ PRI fl_file_size(p_filename) : size_in_bytes | signature
 
 PRI fl_stats() : used_blocks, free_blocks, file_count | block_address
 ' Get Flash filesystem statistics.
-' Port of flash_fs.spin2 stats() — no mount check, no lock.
+' Port of flash_fs.spin2 stats() -- no mount check, no lock.
 '
 ' @returns used_blocks - blocks in use
 ' @returns free_blocks - free blocks
@@ -7292,7 +7292,7 @@ PRI fl_stats() : used_blocks, free_blocks, file_count | block_address
 
 PRI fl_directory(p_block_id, p_filename, p_file_size) : status | blockID, block_address, signature
 ' Get next Flash file entry for directory iteration.
-' Port of flash_fs.spin2 directory() — no mount check, no lock.
+' Port of flash_fs.spin2 directory() -- no mount check, no lock.
 '
 ' @param p_block_id - pointer to current block ID (auto-advanced)
 ' @param p_filename - pointer to 128-byte filename buffer
@@ -7317,7 +7317,7 @@ PRI fl_directory(p_block_id, p_filename, p_file_size) : status | blockID, block_
 
 PRI fl_create_file(p_filename, fill_value, byte_count) : status | signature, head_block_id, block_id, block_address, notHead, dataOffset, isLast, currOffset, NextID_EndPtr
 ' Create pre-allocated Flash file filled with specified value.
-' Port of flash_fs.spin2 create_file() — no mount check, no lock.
+' Port of flash_fs.spin2 create_file() -- no mount check, no lock.
 '
 ' @param p_filename - address of filename zstring
 ' @param fill_value - initial byte value
@@ -7372,10 +7372,10 @@ PRI fl_create_file(p_filename, fill_value, byte_count) : status | signature, hea
   until isLast
 
   fl_activate_block(field[fl_IDToBlock][head_block_id], %011)
-CON ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ===========================================================================
     ' PUBLIC API - Multi-cog safe via worker cog
     ' All operations are serialized through send_command()
-    ' ═══════════════════════════════════════════════════════════════════════════
+    ' ===========================================================================
 
 
 CON ' =============================================================================
@@ -7710,43 +7710,43 @@ PRI initSPIPins()
   debug("    [initSPIPins]   spi_rx_mode=$", uhex_long(spi_rx_mode), " (P_SYNC_RX | P_PLUS3_B)")
   debug("    [initSPIPins]   SCK=P", udec_(sck), " MOSI=P", udec_(mosi), " MISO=P", udec_(miso))
 
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   ' CS PIN: Standard GPIO (unchanged from bit-bang)
   ' CS is manually controlled - LOW = selected, HIGH = deselected
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   pinh(cs)                                                                      ' Start deselected
 
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   ' SCK PIN: P_TRANSITION mode for clock generation
   ' X register: half-period in clocks (time between transitions)
   ' Y register: Number of transitions (2 per bit) - loaded via WYPIN per transfer
   ' Configure with FLTL -> WRPIN, then WXPIN/DRVL in do_set_spi_speed()
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   pinfloat(sck)                                                                 ' FLTL - reset smart pin
   wrpin(sck, spi_clk_mode)                                                      ' P_TRANSITION | P_OE
   ' X register (half-period) will be set by do_set_spi_speed()
   debug("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting setSPISpeed)")
 
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   ' MOSI PIN: P_SYNC_TX mode for synchronized transmit
   ' B-input set via P_PLUS2_B (clock from SCK which is 2 pins higher)
   ' X register: %M_NNNNN where M=mode (1=start/stop), N=bits-1
   ' Y register: Data to transmit - loaded via WYPIN per transfer
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN yet)
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   pinfloat(mosi)                                                                ' DIRL - reset smart pin
   wrpin(mosi, spi_tx_mode)                                                      ' P_SYNC_TX | P_OE | P_PLUS2_B
   wxpin(mosi, %1_00111)                                                         ' Start-stop mode, 8 bits default
   pinh(mosi)                                                                    ' DIRH - enable smart pin
   debug("    [initSPIPins]   MOSI configured: P_SYNC_TX | P_PLUS2_B (enabled)")
 
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   ' MISO PIN: P_SYNC_RX mode for synchronized receive
   ' B-input set via P_PLUS3_B (clock from SCK which is 3 pins higher)
   ' X register: %M_NNNNN where M=mode (1=post-edge for SPI mode 0), N=bits-1
   ' Z register: Received data - read via RDPIN per transfer
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN needed)
-  ' ════════════════════════════════════════════════════════════════════
+  ' ====================================================================
   pinfloat(miso)                                                                ' DIRL - reset smart pin
   wrpin(miso, spi_rx_mode)                                                      ' P_SYNC_RX | P_PLUS3_B
   wxpin(miso, %1_00111)                                                         ' On-edge sample (SPI mode 0), 8 bits
@@ -7777,7 +7777,7 @@ PRI configureEvent(event_config) | ev
   end
 
 PRI do_set_spi_speed(freq) | half_period, actual_freq
-' Set SPI clock frequency — worker-cog only (directly reconfigures SPI clock smart pin).
+' Set SPI clock frequency -- worker-cog only (directly reconfigures SPI clock smart pin).
 ' Using P_TRANSITION mode: X = half-period (time between transitions).
 ' Reference: ManAtWork SpiFlash.spin2
 '
@@ -8217,10 +8217,10 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
   init_phase := $4000_0000                                                      ' Sample mid-bit for stability
   align_delay := spi_period                                                     ' Wait one half-period before streamer
 
-  ' ════════════════════════════════════════════════════════════════════════════
+  ' ============================================================================
   ' CRC RETRY LOOP: Re-read on CRC mismatch (industry standard practice)
   ' Card has no CRC-error state - it just sees another CMD17 on retry
-  ' ════════════════════════════════════════════════════════════════════════════
+  ' ============================================================================
   repeat attempt from 1 to MAX_READ_CRC_RETRIES
 
     ' Send CMD17 (READ_SINGLE_BLOCK)
@@ -8245,11 +8245,11 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
         long[p_cache] := -1
         return -1
 
-    ' ══════════════════════════════════════════════════════════════════════════
+    ' ==========================================================================
     ' STREAMER BULK TRANSFER: Receive 512 bytes from MISO to hub buffer
     ' Pattern: SETXFRQ -> WRFAST -> WYPIN(clk) -> WAITX -> XINIT -> WAITXFI
     ' CRITICAL: Must disable MISO smart pin before streamer capture!
-    ' ══════════════════════════════════════════════════════════════════════════
+    ' ==========================================================================
 
     ' CRITICAL FIX: Disable MISO smart pin before streamer capture
     ' The smart pin interferes with streamer's direct pin reading
@@ -8265,9 +8265,9 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
     diag_before_b3 := byte[p_buf+3]
     diag_spi_period := spi_period
 
-    ' ══════════════════════════════════════════════════════════════════════════
+    ' ==========================================================================
     ' STREAMER BULK TRANSFER: 512 bytes from MISO to hub via DMA
-    ' ══════════════════════════════════════════════════════════════════════════
+    ' ==========================================================================
     org
           dirl    _sck                              ' Reset SCK: counter stops, output LOW, Y=0
           drvl    _sck                              ' Re-enable: DIR=1 restarts base period counter fresh
@@ -8534,10 +8534,10 @@ PRI writeSector(sector, buf_type) : ok | _sck, _mosi, p_buf, stream_mode, clk_co
     debug("  [writeSector] CMD24 warning: R1=$", uhex_byte_(resp), " (stale bits, proceeding)")
   sp_transfer_8($FE)                                                            ' Data start token
 
-  ' ════════════════════════════════════════════════════════════════════════════
+  ' ============================================================================
   ' STREAMER BULK TRANSFER: Send 512 bytes from hub buffer to MOSI
   ' Pattern: SETXFRQ -> RDFAST -> XINIT -> WYPIN(clk) -> WAITXFI
-  ' ════════════════════════════════════════════════════════════════════════════
+  ' ============================================================================
   ' Mode word format: base_mode | (pin << 17) | bit_count
   ' For 512 bytes: 512 * 8 = 4096 bits = $1000
   stream_mode := STREAM_TX_BASE | (_mosi << 17) | (512 * 8)                     ' TX mode + MOSI pin + bit count
@@ -8766,10 +8766,10 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     sectors_written := 0                                                          ' Card reports error - writes can't be trusted
     return
 
-' ════════════════════════════════════════════════════════════════════════════════
+' ================================================================================
 ' MULTI-BLOCK HELPER FUNCTIONS
 ' These factor out common patterns used by readSectors() and writeSectors()
-' ════════════════════════════════════════════════════════════════════════════════
+' ================================================================================
 
 PRI waitR1Response() : response | t, resp
 ' Wait for R1 response (non-$FF byte) - polls for R1 response after sending a command.
@@ -8937,9 +8937,9 @@ PRI checkCardStatus(caller) : status | r1, r2_status
 
   pinh(cs)                                                                      ' Deselect card
 
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   ' STAGE CMD13 RESULTS - Preserve for diagnostic inspection
-  ' ═══════════════════════════════════════════════════════════════════════
+  ' =======================================================================
   last_cmd13_r1 := r1
   last_cmd13_status := status
   if r1 <> 0 or r2_status <> 0
@@ -9610,81 +9610,81 @@ PRI readSectorSlow(sector, p_buffer) : status | data, i, timeout
 #ENDIF
 
 CON {{     FAT32 file system
-  ┌─────────────────────────┐     The master boot record contains 446 bytes of boot code
-  │ Master Boot Record      │      followed by four 16-byte partition entries
-  │                         │      terminated with $55 $AA in the final 2 bytes
-  │ Partitions      $55 $AA │     The 16-byte partition
-  ├─────────────────────────┤     ┌──────┬───────┬──────┬─────┬───────┬───────────┐
-  │ Reserved                │     │ Boot │ CHS   │ Type │ CHS │ LBA   │ Number of │  Type code located at byte address $1C2
-  ├─────────────────────────┤     │ Flag │ Begin │ Code │ End │ Begin │ Sectors   │   Type code = $0B or $0C for FAT32
-  │ Volume Boot Record 1    │     ├──────┼───────┼──────┼─────┼───────┼───────────┤  LBA Begin contains address of volume boot record (VBR)
-  ├─────────────────────────┤     │      │       │  5   │     │ 9-12  │           │   VBR address located at byte address $1C6
-  │ Reserved                │     └──────┴───────┴──────┴─────┴───────┴───────────┘
-  ├─────────────────────────┤     Volume boot record contains
-  │ Volume Boot Record 2    │     ┌─────────────────────────────────┬────────┬──────┬────────────────────┐
-  ├─────────────────────────┤     │          Field                  │ Offset │ Size │ Value              │
-  │ Reserved                │     ├─────────────────────────────────┼────────┼──────┼────────────────────┤
-  ├─────────────────────────┤     │ Bytes per Sector                │  $0B   │ 16b  │       512          │
-  │ File allocation table 1 │     │ Sectors per Cluster             │  $0D   │  8b  │1/2/4/8/16/32/64/128│
-  ├─────────────────────────┤     │ Number of Reserved Sectors      │  $0E   │ 16b  │                    │
-  │ File allocation table 2 │     │ Number of FATs                  │  $10   │  8b  │        2           │
-  ├─────────────────────────┤     │ Sectors per FAT                 │  $24   │ 32b  │                    │
-  │ Root directory and      │     │ Root Directory of First Cluster │  $2C   │ 32b  │        2           │
-  │  Data region            │     │ Signature                       │ $1FE   │ 16b  │      $AA55         │
-  │                         │     └─────────────────────────────────┴────────┴──────┴────────────────────┘
-  │                         │      The address of the 1st FAT is VBR address + number of reserved sectors
-  │                         │      The address of the root directory is FAT address + number of FATs x sectors per fat
-  └─────────────────────────┘
+  +-------------------------+     The master boot record contains 446 bytes of boot code
+  | Master Boot Record      |      followed by four 16-byte partition entries
+  |                         |      terminated with $55 $AA in the final 2 bytes
+  | Partitions      $55 $AA |     The 16-byte partition
+  +-------------------------+     +------+-------+------+-----+-------+-----------+
+  | Reserved                |     | Boot | CHS   | Type | CHS | LBA   | Number of |  Type code located at byte address $1C2
+  +-------------------------+     | Flag | Begin | Code | End | Begin | Sectors   |   Type code = $0B or $0C for FAT32
+  | Volume Boot Record 1    |     +------+-------+------+-----+-------+-----------+  LBA Begin contains address of volume boot record (VBR)
+  +-------------------------+     |      |       |  5   |     | 9-12  |           |   VBR address located at byte address $1C6
+  | Reserved                |     +------+-------+------+-----+-------+-----------+
+  +-------------------------+     Volume boot record contains
+  | Volume Boot Record 2    |     +---------------------------------+--------+------+--------------------+
+  +-------------------------+     |          Field                  | Offset | Size | Value              |
+  | Reserved                |     +---------------------------------+--------+------+--------------------+
+  +-------------------------+     | Bytes per Sector                |  $0B   | 16b  |       512          |
+  | File allocation table 1 |     | Sectors per Cluster             |  $0D   |  8b  |1/2/4/8/16/32/64/128|
+  +-------------------------+     | Number of Reserved Sectors      |  $0E   | 16b  |                    |
+  | File allocation table 2 |     | Number of FATs                  |  $10   |  8b  |        2           |
+  +-------------------------+     | Sectors per FAT                 |  $24   | 32b  |                    |
+  | Root directory and      |     | Root Directory of First Cluster |  $2C   | 32b  |        2           |
+  |  Data region            |     | Signature                       | $1FE   | 16b  |      $AA55         |
+  |                         |     +---------------------------------+--------+------+--------------------+
+  |                         |      The address of the 1st FAT is VBR address + number of reserved sectors
+  |                         |      The address of the root directory is FAT address + number of FATs x sectors per fat
+  +-------------------------+
                                   The file system directory contains 32-byte entries for each file in the root directory
-                                  ┌─────────────────────────────────┬────────┬──────┐
-                                  │          Field                  │ Offset │ Size │  The first byte of the short filename indicates the type of entry
-                                  ├─────────────────────────────────┼────────┼──────┤   Normal entry     - as expected   "FILENAMETXT"
-                                  │ Short Filename                  │  $00   │ 11B  │   Unused/deleted   - 1st byte $E5  "åILENAMETXT"
-                                  │ Attrib Byte                     │  $0B   │  1B  │   End of directory - 1st byte $00
-                                  │ Date of creation                │  $0E   │  4B  │
-                                  │ First Cluster High              │  $14   │  2B  │
-                                  │ Date of modification            │  $16   │  4B  │
-                                  │ First Cluster Low               │  $1A   │  2B  │
-                                  │ File Size                       │  $1C   │  4B  │
-                                  └─────────────────────────────────┴────────┴──────┘
+                                  +---------------------------------+--------+------+
+                                  |          Field                  | Offset | Size |  The first byte of the short filename indicates the type of entry
+                                  +---------------------------------+--------+------+   Normal entry     - as expected   "FILENAMETXT"
+                                  | Short Filename                  |  $00   | 11B  |   Unused/deleted   - 1st byte $E5  "\xE5ILENAMETXT"
+                                  | Attrib Byte                     |  $0B   |  1B  |   End of directory - 1st byte $00
+                                  | Date of creation                |  $0E   |  4B  |
+                                  | First Cluster High              |  $14   |  2B  |
+                                  | Date of modification            |  $16   |  4B  |
+                                  | First Cluster Low               |  $1A   |  2B  |
+                                  | File Size                       |  $1C   |  4B  |
+                                  +---------------------------------+--------+------+
                                   Attrib byte contains bitfields
-                                  ┌───┬───────────┬─────┬────────────────────────────────────┐
-                                  │bit│ Function  │ LFN │ Comment                            │
-                                  ├───┼───────────┼─────┼────────────────────────────────────┤
-                                  │ 7 │ Unused    │  0  │ Should be zero                     │
-                                  │ 6 │ Unused    │  0  │ Should be zero                     │
-                                  │ 5 │ Archive   │  x  │ Has been changed since last backup │
-                                  │ 4 │ Directory │  x  │ Is a subdirectory                  │
-                                  │ 3 │ Volume ID │  1  │ Filename is Volume ID              │
-                                  │ 2 │ System    │  1  │ File is operating system           │
-                                  │ 1 │ Hidden    │  1  │ Should not show in dir listing     │
-                                  │ 0 │ Read Only │  1  │ Should not allow writing           │
-                                  └───┴───────────┴─────┴────────────────────────────────────┘
+                                  +---+-----------+-----+------------------------------------+
+                                  |bit| Function  | LFN | Comment                            |
+                                  +---+-----------+-----+------------------------------------+
+                                  | 7 | Unused    |  0  | Should be zero                     |
+                                  | 6 | Unused    |  0  | Should be zero                     |
+                                  | 5 | Archive   |  x  | Has been changed since last backup |
+                                  | 4 | Directory |  x  | Is a subdirectory                  |
+                                  | 3 | Volume ID |  1  | Filename is Volume ID              |
+                                  | 2 | System    |  1  | File is operating system           |
+                                  | 1 | Hidden    |  1  | Should not show in dir listing     |
+                                  | 0 | Read Only |  1  | Should not allow writing           |
+                                  +---+-----------+-----+------------------------------------+
                                   Each entry in the file allocation table is 32 bits, entry 0 is associated with cluster 0, entry 1/cluster 1, and so on
                                    The 32-bit value contains 0 if the associated cluster is available
                                    contains $0FFF_FFFF if the data in the associated cluster ends in that cluster
                                    contains the address of the next cluster in the file if the file occupies multiple clusters
-                                  ┌───────────┬───────────┬───────────┬───────────┐
-              clusters $00 - $03  │ 0FFF_FFFF │ 0FFF_FFFF │ 0FFF_FFFF │ 0FFF_FFFF │  1st four clusters occupied by self-contained files
-                       $04 - $07  │ 0000_0005 │ 0000_0006 │ 0000_0007 │ 0FFF_FFFF │  next four clusters occupied by a file in sequential clusters
-                       $08 - $0B  │ 0000_000A │ 0FFF_FFFF │ 0000_000C │ 0FFF_FFFF │  a fragmented file starts in cluster 8, and occupies clusters 10, 12, and ends in 14
-                       $0C - $0F  │ 0000_000E │ 0000_0000 │ 0FFF_FFFF │ 0000_0000 │  clusters 13 and 15 are unused
+                                  +-----------+-----------+-----------+-----------+
+              clusters $00 - $03  | 0FFF_FFFF | 0FFF_FFFF | 0FFF_FFFF | 0FFF_FFFF |  1st four clusters occupied by self-contained files
+                       $04 - $07  | 0000_0005 | 0000_0006 | 0000_0007 | 0FFF_FFFF |  next four clusters occupied by a file in sequential clusters
+                       $08 - $0B  | 0000_000A | 0FFF_FFFF | 0000_000C | 0FFF_FFFF |  a fragmented file starts in cluster 8, and occupies clusters 10, 12, and ends in 14
+                       $0C - $0F  | 0000_000E | 0000_0000 | 0FFF_FFFF | 0000_0000 |  clusters 13 and 15 are unused
 }}
 CON
 {{
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                   TERMS OF USE: MIT License                                                  │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation    │
-│files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy,    │
-│modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software│
-│is furnished to do so, subject to the following conditions:                                                                   │
-│                                                                                                                              │
-│The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.│
-│                                                                                                                              │
-│THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE          │
-│WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR         │
-│COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,   │
-│ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                         │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------------------------------------------------------------------+
+|                                                   TERMS OF USE: MIT License                                                  |
++------------------------------------------------------------------------------------------------------------------------------+
+|Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation    |
+|files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy,    |
+|modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software|
+|is furnished to do so, subject to the following conditions:                                                                   |
+|                                                                                                                              |
+|The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.|
+|                                                                                                                              |
+|THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE          |
+|WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR         |
+|COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,   |
+|ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                         |
++------------------------------------------------------------------------------------------------------------------------------+
 }}

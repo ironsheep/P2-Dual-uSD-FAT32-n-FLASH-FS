@@ -105,9 +105,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     result := dfs.debugClearRootDir()
     debug("  Clear result: ", sdec_(result))
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' TEST GROUP: Empty file operations in root directory
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     utils.startTestGroup(@"Empty File Operations (Root)")
 
     ' Test #1: Create empty file (0 bytes, like touch)
@@ -138,9 +138,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     handle := dfs.openFileRead(dfs.DEV_SD, @emptyFile)
     utils.evaluateSingleValue(handle, @"openFileRead() after delete", E_FILE_NOT_FOUND)
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' TEST GROUP: Dir enumeration immediately after file creation
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     utils.startTestGroup(@"Dir After Create (Cache Coherence)")
 
     ' Test #5: Create file then immediately enumerate directory
@@ -202,9 +202,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     dfs.deleteFile(dfs.DEV_SD, @testfile1)
     dfs.deleteFile(dfs.DEV_SD, @testfile2)
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' TEST GROUP: Subdirectory creation and file operations
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     utils.startTestGroup(@"Subdirectory File Operations")
 
     ' Test #7: mkdir and cd into subdirectory
@@ -301,9 +301,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     utils.evaluateSubBool(result > count, @"new file visible after cache", true)
     utils.showSubTestResults()
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' TEST GROUP: Delete in subdirectory
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     utils.startTestGroup(@"Delete in Subdirectory")
 
     ' Test #12: Delete empty file in subdirectory
@@ -337,9 +337,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     utils.evaluateSubBool(count == 3, @"correct count after deletes", true)
     utils.showSubTestResults()
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' TEST GROUP: Rename in subdirectory
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     utils.startTestGroup(@"Rename in Subdirectory")
 
     ' Test #16: Create empty file and rename it
@@ -364,9 +364,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
         dfs.closeFileHandle(handle)
     utils.showSubTestResults()
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' TEST GROUP: Navigation and operations across directories
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     utils.startTestGroup(@"Cross-Directory Operations")
 
     ' Test #18: cd .. then cd back, files still visible
@@ -390,9 +390,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     utils.evaluateSubBool(count >= 3, @"files survived cd round-trip", true)
     utils.showSubTestResults()
 
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     ' CLEANUP
-    ' ══════════════════════════════════════════════════════════════════════
+    ' ======================================================================
     debug(" ")
     debug("* Cleaning up test files...")
 
@@ -415,3 +415,32 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
     debug(" ")
     debug("* Subdirectory Ops Tests Complete")
     debug("END_SESSION")
+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

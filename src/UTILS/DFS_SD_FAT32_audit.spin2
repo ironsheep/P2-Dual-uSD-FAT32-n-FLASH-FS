@@ -11,7 +11,7 @@
 '' =================================================================================================
 ''
 ''  Thin wrapper that launches the Audit library in a temporary cog
-''  and displays output via debug(). Read-only — does not modify card.
+''  and displays output via debug(). Read-only -- does not modify card.
 ''
 '' =================================================================================================
 

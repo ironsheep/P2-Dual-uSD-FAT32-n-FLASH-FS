@@ -58,7 +58,7 @@ CON { FAT32 structure constants }
   FAT_FREE        = $00000000     ' Free cluster
   FAT_BAD         = $0FFFFFF7     ' Bad cluster marker
 
-  ' Bitmap capacity (256KB covers up to 2M clusters — sufficient for cards up to 64GB)
+  ' Bitmap capacity (256KB covers up to 2M clusters -- sufficient for cards up to 64GB)
   BITMAP_LONGS        = 65536             ' 256KB
   MAX_BITMAP_CLUSTERS = BITMAP_LONGS * 32 ' 2,097,152 clusters
 
@@ -270,7 +270,7 @@ PRI doStart(cs, mosi, miso, sck, mode) : ok
 ' =========================================================================
 
 PRI run() | result, cardSectors
-' Cog entry point — initializes card and dispatches to audit or fsck
+' Cog entry point -- initializes card and dispatches to audit or fsck
 ' When this method returns, the cog stops automatically
 
     ' Initialize card for raw sector access

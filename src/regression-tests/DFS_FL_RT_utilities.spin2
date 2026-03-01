@@ -79,9 +79,9 @@ PRI initIfNotAlready()
         varSignature[cogid()] := TEST_SIGNATURE
         debug("* init VAR")
 
-' ═══════════════════════════════════════════════════════════════════════════════
-' FRAMEWORK METHODS — Test structure and lifecycle
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
+' FRAMEWORK METHODS -- Test structure and lifecycle
+' ===============================================================================
 
 PUB startTestGroup(pDescription)
 '' Start a new test group with heading
@@ -166,9 +166,9 @@ PUB setCheckCountPerTest(countTests)
 
     subTestPer[cogid()] := countTests
 
-' ═══════════════════════════════════════════════════════════════════════════════
-' EVALUATION METHODS — Generic value/bool comparisons
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
+' EVALUATION METHODS -- Generic value/bool comparisons
+' ===============================================================================
 
 PUB evaluateSubValue(result, pMessage, expectedResult) | bPassed, pPassFail
 '' Evaluate a sub-test value (for multiple checks within a test)
@@ -328,9 +328,9 @@ PUB evaluateBufferMatch(pBuffer1, pBuffer2, length, pMessage) | bPassed, pPassFa
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-' ═══════════════════════════════════════════════════════════════════════════════
-' FLASH-SPECIFIC EVALUATION METHODS — Error status and filesystem stats
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
+' FLASH-SPECIFIC EVALUATION METHODS -- Error status and filesystem stats
+' ===============================================================================
 
 PUB evaluateSubStatus(result, pMessage, expectedResult) | ecGot, ecExpected, bPassed, pPassFail
 '' Evaluate a sub-test error status with human-readable error names
@@ -482,9 +482,9 @@ PUB evaluateFileStatsRange(pfilename, expectedBlockCount, expectedMinBytesUsed, 
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-' ═══════════════════════════════════════════════════════════════════════════════
-' FLASH DIAGNOSTIC METHODS — Display filesystem information
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
+' FLASH DIAGNOSTIC METHODS -- Display filesystem information
+' ===============================================================================
 
 PUB showChipAndDriverVersion() | sn_hi, sn_lo
 '' Display Flash chip serial number and driver version
@@ -555,9 +555,9 @@ PUB ensureEmptyDirectory() | blockID, byteCount, bPassed, pPassFail
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 ' FLASH FILE SIZE CALCULATION UTILITIES
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 
 PUB blockCountForFileSize(fileSizeInBytes) : blockCount | remainingSize, overflowBodyCount
 '' Return number of blocks needed for given file size
@@ -669,9 +669,9 @@ dirEnd          LONG    0              ' ptr = NULL, no more entries
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 ' FILE TYPE UTILITIES
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 
 PUB isBinaryFile(pFilename) : bIsBinaryStatus | pFileType
 '' Check if filename has .bin extension
@@ -719,9 +719,9 @@ PUB ReadFile(pFilename, pStr, maxlen) | handle, byteCount
     else
         bytefill(pStr, $ff, maxlen)
 
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 ' MEMORY DUMP UTILITIES
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 
 PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, rowLen, pCurrByte, lastRowByteCount, bytesSoFar, offset
 '' Dump memory contents in hex format with offset prefix
@@ -770,9 +770,9 @@ PRI dbgMemDumpRow(pBytes, lenBytes, offset)
 
     debug(" ", uhex_long_(offset), ": ", uhex_byte_array_(pBytes, lenBytes))
 
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 ' TEST DATA GENERATION UTILITIES
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 
 PUB fillBufferWithPattern(pBuffer, length, startValue) | idx
 '' Fill buffer with incrementing pattern (0-255 repeating)
@@ -812,9 +812,9 @@ PUB verifyBufferValue(pBuffer, length, value) : bMatch | idx
             debug("  Value mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(value))
             quit
 
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 ' BUFFER OVERFLOW GUARD UTILITIES
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 
 PUB initGuard(pGuardStart)
 '' Fill guard zone with sentinel bytes
@@ -839,9 +839,9 @@ PUB initAndCheckGuard(pGuardStart, pMessage) : bIntact
     bIntact := checkGuard(pGuardStart, pMessage)
     initGuard(pGuardStart)
 
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 ' CRC UTILITY
-' ═══════════════════════════════════════════════════════════════════════════════
+' ===============================================================================
 
 PUB record_crc(p_record_buffer, record_length) : crc
 '' Calculate CRC-32 of a record buffer (excludes last 4 bytes where CRC is stored).

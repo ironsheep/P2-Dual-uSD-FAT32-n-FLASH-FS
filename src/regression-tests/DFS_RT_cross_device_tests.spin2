@@ -431,7 +431,7 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
 
     ' Test: copyFile when destination already exists on Flash (should overwrite)
     utils.startTest(@"copyFile to existing Flash file overwrites")
-    ' flFileCopy was created earlier — write new content to SD source
+    ' flFileCopy was created earlier -- write new content to SD source
     dfs.deleteFile(dfs.DEV_SD, @sdFile1)
     handle := dfs.createFileNew(dfs.DEV_SD, @sdFile1)
     if handle >= 0

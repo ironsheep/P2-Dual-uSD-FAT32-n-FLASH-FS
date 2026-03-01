@@ -303,9 +303,9 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
     debug("END_SESSION")
 
 
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 ' WORKER COG METHODS
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 
 PRI worker_singleton_test(worker_id) | cogResult
     '' Worker cog: Test that init() returns the singleton cog ID
@@ -380,9 +380,9 @@ PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
         worker_status[worker_id] := STATUS_FAIL
 
 
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 ' HELPER METHODS
-' ═══════════════════════════════════════════════════════════════════════════
+' ===========================================================================
 
 PRI waitForWorkers() | i, allDone
     '' Wait for all worker cogs to complete

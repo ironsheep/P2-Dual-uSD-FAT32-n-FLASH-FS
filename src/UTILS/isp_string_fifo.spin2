@@ -16,7 +16,7 @@
 ''
 ''  Design:
 ''    - 16 slots x 128 bytes = 2 KB
-''    - Producer calls put() / putFmtN() — blocks (spin-waits) when full
+''    - Producer calls put() / putFmtN() -- blocks (spin-waits) when full
 ''    - Consumer calls hasOutput() / getOutput()
 ''    - One slot is always kept empty to distinguish full from empty
 ''      (usable capacity = NUM_SLOTS - 1 = 15)

@@ -1719,7 +1719,7 @@ PRI do_flash_fsck() | status, used_before, free_before, files_before, used_after
       serial.fstr1(@"  Mount failed despite canMount pass (status=%d)\r\n", status)
     return
 
-  ' --- Phase 2: Issues detected — repair via remount ---
+  ' --- Phase 2: Issues detected -- repair via remount ---
   serial.fstr1(@"  Health check: ISSUES DETECTED (status=%d)\r\n", status)
   serial.fstr0(@"\r\n")
 

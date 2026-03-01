@@ -11,7 +11,7 @@
 ''   Migrated from RT_read_write_8cog_tests.spin2 (flash_fs) to dual_sd_fat32_flash_fs
 ''
 ''   ARCHITECTURE CHANGE: The unified driver serializes all operations through
-''   a single worker cog. Spawned cogs do NOT call mount — only the main cog
+''   a single worker cog. Spawned cogs do NOT call mount -- only the main cog
 ''   initializes and mounts. MAX_OPEN_FILES overridden to 8 to support all
 ''   8 cogs having concurrent file handles.
 ''
