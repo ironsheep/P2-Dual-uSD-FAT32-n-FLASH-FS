@@ -1,23 +1,20 @@
 {Spin2_v45}
-{{+------------------------------------------+
-  | Dual Filesystem Driver -- Release v0.2.0  |  Unified SD + Flash filesystem driver
-  | Based on: Chris Gadd SD V3, Chip Gracey  |  for the P2 Edge Module
-  | flash_fs, combined by S.M. Moraco        |
-  | Copyright (c) 2023-2026                  |  Both devices share SPI bus (P58-P61)
-  +------------------------------------------+  with P60/P61 role-swapping
-
-  ' Initialize driver (store pins, start worker cog)
-  fs.init(SD_CS, MOSI, MISO, SD_SCK)
-
-  ' Mount one or both devices
-  fs.mount(fs.DEV_SD)                                   ' mount SD card only
-  fs.mount(fs.DEV_FLASH)                                ' mount Flash chip only
-  fs.mount(fs.DEV_BOTH)                                 ' mount both devices
-
-  ' File operations use device parameter for path-based calls
-  handle := fs.openFileRead(fs.DEV_SD, @"DATA.TXT")    ' open SD file
-  fs.readHandle(handle, @buffer, count)                 ' handle-based (no dev needed)
-  fs.closeFileHandle(handle)
+'' =================================================================================================
+''
+''   File....... dual_sd_fat32_flash_fs.spin2
+''   Purpose.... Unified dual filesystem driver -- SD FAT32 + onboard Flash for P2 Edge Module
+''   Author..... Stephen M Moraco
+''               Based on: Chris Gadd SD V3, Chip Gracey flash_fs
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 2023
+''   Updated.... 1 MAR 2026
+''
+'' =================================================================================================
+{{
+  Unified SD + Flash filesystem driver for the P2 Edge Module.
+  Both devices share SPI bus (P58-P61) with P60/P61 role-swapping.
+  See DUAL-DRIVER-TUTORIAL.md for usage examples.
 }}
 
 '' ===============================================================================
@@ -9670,21 +9667,31 @@ CON {{     FAT32 file system
                        $08 - $0B  | 0000_000A | 0FFF_FFFF | 0000_000C | 0FFF_FFFF |  a fragmented file starts in cluster 8, and occupies clusters 10, 12, and ends in 14
                        $0C - $0F  | 0000_000E | 0000_0000 | 0FFF_FFFF | 0000_0000 |  clusters 13 and 15 are unused
 }}
-CON
+CON { license }
+
 {{
-+------------------------------------------------------------------------------------------------------------------------------+
-|                                                   TERMS OF USE: MIT License                                                  |
-+------------------------------------------------------------------------------------------------------------------------------+
-|Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation    |
-|files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy,    |
-|modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software|
-|is furnished to do so, subject to the following conditions:                                                                   |
-|                                                                                                                              |
-|The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.|
-|                                                                                                                              |
-|THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE          |
-|WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR         |
-|COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,   |
-|ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                         |
-+------------------------------------------------------------------------------------------------------------------------------+
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2023-2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
 }}

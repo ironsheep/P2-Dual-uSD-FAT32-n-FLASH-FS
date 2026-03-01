@@ -1,11 +1,15 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_card_characterize.spin2
+''   Purpose.... Comprehensive SD card characterization diagnostic
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 2026
+''   Updated.... 1 MAR 2026
+''
+'' =================================================================================================
 {{
-+------------------------------------------+
-| SD Card Characterization Diagnostic V3   |
-| Author: Stephen M Moraco                 |
-| Copyright (c) 2026 Iron Sheep Productions|
-| See end of file for terms of use.        |
-+------------------------------------------+
-
   Comprehensive diagnostic tool to characterize SD cards.
   Extracts and displays ALL fields from card registers:
     - CID (Card Identification Register) - 16 bytes
@@ -15,11 +19,8 @@
     - VBR/BPB (Volume Boot Record / BIOS Parameter Block)
 
   Output: Formatted debug report with ALL fields.
-  Fields marked with [USED] are actively used by V3 driver.
+  Fields marked with [USED] are actively used by the driver.
   Fields marked with [INFO] are informational only.
-
-  Usage: Run from tools/ with:
-    ./run_test.sh ../regression-tests/SD_card_characterize.spin2 -t 60
 }}
 
 CON
@@ -1199,20 +1200,31 @@ PRI displayDriverUsage()
   debug("    CCS=0: SDSC byte addressing (sector << 9)")
   debug("    CCS=1: SDHC/SDXC block addressing (sector)")
 
-CON {{
-+------------------------------------------------------------------------------------------------------------------------------+
-|                                                   TERMS OF USE: MIT License                                                  |
-+------------------------------------------------------------------------------------------------------------------------------+
-|Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation    |
-|files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy,    |
-|modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software|
-|is furnished to do so, subject to the following conditions:                                                                   |
-|                                                                                                                              |
-|The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.|
-|                                                                                                                              |
-|THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE          |
-|WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR         |
-|COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,   |
-|ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                         |
-+------------------------------------------------------------------------------------------------------------------------------+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
 }}
