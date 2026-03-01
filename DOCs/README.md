@@ -16,9 +16,8 @@ Technical documentation for the P2 Dual SD FAT32 + Flash Filesystem project.
 | Path | Description |
 |------|-------------|
 | [Analysis/](Analysis/) | Engineering analysis documents (SPI bus states, etc.) |
-| [Decisions/](Decisions/) | Architecture decision records |
-| [Plans/](Plans/) | Implementation plans and punch lists |
-| [Reference/](Reference/) | Technical reference materials and user guides |
+| [Plans/](Plans/) | Implementation plans, style guides, and punch lists |
+| [Reference/](Reference/) | Technical reference materials, datasheets, and user guides |
 | [Utils/](Utils/) | Theory of operations for each utility program |
 | [images/](images/) | Image assets used by documentation |
 

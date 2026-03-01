@@ -8,12 +8,18 @@ REF-FLASH-uSD/
 
 # Build artifacts
 *.lst
+*.list
 *.map
 *.p2asm
+src/*.txt
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Editor settings and history
+.vscode/
+.history/
 
 # Editor backups
 *~
@@ -31,6 +37,9 @@ src/phase3_flash_methods.spin2
 
 # Completed plans archive (kept locally, not in git)
 DOCs/Plans/archive/
+
+# Internal procedures (local-only, not for publication)
+DOCs/procedures/
 
 # Claude Code
 CLAUDE.md

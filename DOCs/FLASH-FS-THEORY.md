@@ -25,7 +25,7 @@ On this Page:
 
 Additional pages:
 
-- [SPI FLASH Datasheet](../REF-FLASH-uSD/FLASH/DOCs/W25Q128JV-210823.pdf) - our FLASH Chip Datasheet
+- [SPI FLASH Datasheet](Reference/W25Q128JV-210823.pdf) - W25Q128JV Flash chip datasheet (Winbond)
 - [Dual Driver Theory](./DUAL-DRIVER-THEORY.md) - overall dual-device architecture
 - [SPI Bus State Analysis](./Analysis/SPI-BUS-STATE-ANALYSIS.md) - bus sharing between SD and Flash
 

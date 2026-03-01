@@ -6,7 +6,7 @@
 
 This tutorial shows how to perform common filesystem operations using the unified dual-FS driver. The driver manages both a microSD card (FAT32) and the onboard 16MB Flash chip through a single API.
 
-> **Reference:** For architecture, command protocols, and internal details, see [DUAL-DRIVER-THEORY.md](DUAL-DRIVER-THEORY.md). For FAT32 background, see [FAT32-API-CONCEPTS-REFERENCE.md](Reference/FAT32-API-CONCEPTS-REFERENCE.md).
+> **Reference:** For architecture, command protocols, and internal details, see [DUAL-DRIVER-THEORY.md](DUAL-DRIVER-THEORY.md).
 
 ---
 
@@ -742,12 +742,100 @@ PUB readerTask() | handle, buf[128], bytes_read
     fs.closeFileHandle(handle)
 ```
 
+### Multi-Cog Lifecycle Patterns
+
+#### Startup Pattern
+
+The main cog owns the driver lifecycle. It initializes the worker cog and mounts the devices that the application needs, **before** spawning any worker cogs:
+
+```spin2
+PUB go() | workerCog
+    workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    fs.mount(fs.DEV_BOTH)       ' or DEV_SD / DEV_FLASH if only one is needed
+
+    cogspin(NEWCOG, dataLogger(), @loggerStack)
+    cogspin(NEWCOG, archiveTask(), @archiveStack)
+```
+
+Worker cogs arrive in a world where the filesystem is ready. They do **not** need to call `init()` — the worker cog is already running and the API lock handles multi-cog serialization automatically.
+
+#### Checking Mount Status: `mounted()`
+
+`mounted()` is a zero-cost check — it reads a shared DAT flag with no SPI bus activity and no command sent to the worker cog. Use it for:
+
+**Gating a code path based on device availability:**
+
+```spin2
+PRI archiveTask()
+    ' Only archive if SD was mounted at startup
+    if fs.mounted(fs.DEV_SD)
+        copyLogsToSD()
+    else
+        debug("SD not available, skipping archive")
+```
+
+**Verifying a prerequisite at worker startup:**
+
+```spin2
+PRI sensorLogger()
+    if not fs.mounted(fs.DEV_FLASH)
+        debug("FATAL: Flash not mounted")
+        return
+    ' proceed with logging...
+```
+
+#### Late-Discovered Need: Just Call `mount()`
+
+`mount()` is idempotent — if the device is already mounted, it returns SUCCESS immediately with negligible cost. A worker cog that discovers it needs a device the main cog didn't mount can mount it directly:
+
+```spin2
+PRI handleAlarm()
+    ' Alarm triggered — need to write report to SD
+    ' Main cog only mounted Flash at startup
+    if fs.mount(fs.DEV_SD) <> fs.SUCCESS
+        debug("SD unavailable, can't write alarm report")
+        return
+    ' SD is now mounted, write the report...
+```
+
+This is safe because:
+- `mount()` is idempotent (no harm if already mounted)
+- The hardware lock serializes the mount with any concurrent filesystem operations
+- In an embedded system, the SD card and Flash chip are physically present and don't change
+
+#### Shutdown Pattern
+
+`unmount()` is exclusively a main-cog operation. The main cog must coordinate worker shutdown **before** unmounting:
+
+```spin2
+PUB shutdown()
+    ' Signal workers to stop (application-specific mechanism)
+    shutdownFlag := TRUE
+    waitms(1000)                   ' allow workers to close files and exit
+
+    fs.unmount(fs.DEV_BOTH)
+    fs.stop()
+```
+
+A worker cog should **never** call `unmount()`. If it did, other cogs with open file handles would encounter errors.
+
 ### Rules for Multi-Cog Access
 
-1. **Init and mount from one cog only.** Call `init()` and `mount()` before starting other cogs that use the driver.
-2. **One writer per SD file.** Multiple read handles are fine; only one write handle per file.
-3. **Close handles when done.** Handles are a shared resource (default 6 total for both devices).
-4. **Don't call `stop()` or `unmount()` while other cogs are using the driver.**
+| Operation | Who calls it | When |
+|-----------|-------------|------|
+| `init()` | Main cog only | Once, at application start |
+| `mount()` | Main cog at startup; any cog if late need arises | Before first filesystem use |
+| `mounted()` | Any cog | To check availability (zero-cost) |
+| `unmount()` | Main cog only | After all workers have stopped |
+| `stop()` | Main cog only | Final cleanup, stops worker cog |
+
+Additional rules:
+- **One writer per SD file.** Multiple read handles are fine; only one write handle per file.
+- **Close handles when done.** Handles are a shared resource (default 6 total for both devices).
+- **`mount()` is cheap when already mounted.** Don't fear calling it as a precaution.
+- **`mounted()` is zero-cost.** It reads a shared variable — no SPI traffic, no worker command.
+- **The hardware lock handles everything.** Multiple cogs can call `open()`, `read()`, `write()`, etc. concurrently. The API lock serializes access to the worker cog automatically.
 
 ### Configuring Handle Count
 
@@ -1024,16 +1112,16 @@ The `src/` directory contains compilable, hardware-verified example programs:
 
 | Program | What It Teaches |
 |---------|-----------------|
-| [DFS_example_basic.spin2](../src/DFS_example_basic.spin2) | Init both devices, write/read on SD and Flash, device stats |
-| [DFS_example_cross_copy.spin2](../src/DFS_example_cross_copy.spin2) | Cross-device copy (SD → Flash → SD round-trip with verification) |
-| [DFS_example_data_logger.spin2](../src/DFS_example_data_logger.spin2) | Fast logging to Flash, periodic archival to SD |
-| [DFS_demo_shell.spin2](../src/DFS_demo_shell.spin2) | Interactive shell: `dev sd`/`dev flash`, `dir`, `type`, `copy sd:FILE flash:FILE` |
+| [DFS_example_basic.spin2](../src/EXAMPLES/DFS_example_basic.spin2) | Init both devices, write/read on SD and Flash, device stats |
+| [DFS_example_cross_copy.spin2](../src/EXAMPLES/DFS_example_cross_copy.spin2) | Cross-device copy (SD → Flash → SD round-trip with verification) |
+| [DFS_example_data_logger.spin2](../src/EXAMPLES/DFS_example_data_logger.spin2) | Fast logging to Flash, periodic archival to SD |
+| [DFS_demo_shell.spin2](../src/DEMO/DFS_demo_shell.spin2) | Interactive shell: `dev sd`/`dev flash`, `dir`, `type`, `copy sd:FILE flash:FILE` |
 
 Build any example with:
 
 ```bash
-cd src/
-pnut-ts -d DFS_example_basic.spin2
+cd src/EXAMPLES/
+pnut-ts -d -I .. DFS_example_basic.spin2
 pnut-term-ts -r DFS_example_basic.bin
 ```
 

@@ -10,7 +10,7 @@ Unified dual-filesystem driver and associated programs for the Parallax Propelle
 | [DEMO/](DEMO/) | Interactive dual-device filesystem shell |
 | [EXAMPLES/](EXAMPLES/) | Compilable example programs |
 | [UTILS/](UTILS/) | Standalone utilities (format, audit, fsck, characterize) |
-| [regression-tests/](regression-tests/) | Regression test suites (Phases 1-6) |
+| [regression-tests/](regression-tests/) | Regression test suites (35 suites, 912+ tests) |
 
 ## Building
 

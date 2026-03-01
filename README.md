@@ -1,29 +1,22 @@
 # P2 Dual uSD FAT32 n FLASH FS
 
----
-
-**This is NOT a released driver!!!** Much of the code is not yet here as I'm still certifying it. The driver you are looking for (which is released and announced in the forum post is the [P2 microSD FAT32 Filesystem](https://github.com/ironsheep/P2-uSD-FAT32-FS)
-
----
-
 A unified filesystem driver for the Parallax Propeller 2 (P2) that provides simultaneous access to both the onboard 16MB FLASH chip and a microSD card through a single cog and a single API.
 
 ![Project Status](https://img.shields.io/badge/status-active-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Propeller%202-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## Goal
+> **See also:** The standalone microSD FAT32 driver (SD-only, no Flash) is available separately at [P2 microSD FAT32 Filesystem](https://github.com/ironsheep/P2-uSD-FAT32-FS).
 
-Create a single Spin2 driver — patterned after the [microSD FAT32 driver](REF-FLASH-uSD/uSD-FAT32/) — that integrates the [Flash filesystem](REF-FLASH-uSD/FLASH/) within the same worker cog. Users interact with one object, one set of file handles, and one API to read, write, and copy files across both storage devices. The two storage systems become a unified filesystem.
+## Features
 
-## Why a Unified Driver?
-
-On the P2 Edge Module the Flash chip and the microSD card share the same SPI bus (MOSI=P59, MISO=P58, SCK=P60/P61) with separate chip-select lines. Today they require two independent driver objects, two cogs, and two APIs. A unified driver:
-
-- **Frees a cog** — one worker cog handles both devices instead of two
-- **Simplifies the API** — mount once, open/read/write/close on either device with the same calls
-- **Enables cross-device copy** — copy files between Flash and SD through one driver
-- **Coordinates SPI bus access** — the worker cog owns the bus and switches between devices safely, eliminating external bus arbitration
+- **One worker cog, two devices** — a dedicated cog owns all SPI I/O for both SD and Flash, eliminating bus contention
+- **Unified API** — mount, open, read, write, close, and copy files on either device with the same calls
+- **Cross-device copy** — copy files between Flash and SD through one driver with `copyFile()`
+- **Shared SPI bus management** — automatic bus switching between SD (Mode 0) and Flash (Mode 3) with proper smart pin reconfiguration
+- **Multi-cog safety** — hardware lock serializes access from up to 8 cogs
+- **Conditional compilation** — `SD_INCLUDE_RAW`, `SD_INCLUDE_REGISTERS`, `SD_INCLUDE_SPEED`, `SD_INCLUDE_DEBUG` for minimal or full builds
+- **1,200+ regression tests** across 35 test suites verified on real P2 hardware
 
 ## Architecture Overview
 
@@ -78,32 +71,7 @@ The [SPI Bus State Analysis](DOCs/Analysis/SPI-BUS-STATE-ANALYSIS.md) confirms t
 2. Settling the bus (SCK to expected idle state)
 3. Selecting the target device (CS LOW)
 
-### SPI Mode Challenge
-
-The SD card uses **SPI Mode 0** (CPOL=0, CPHA=0 — clock idles LOW) while the Flash chip uses **SPI Mode 3** (CPOL=1, CPHA=1 — clock idles HIGH). The worker cog must reconfigure the smart pin clock polarity when switching between devices.
-
-### Design Approach
-
-| Aspect | Reference SD Driver | Unified Driver |
-|--------|-------------------|----------------|
-| Worker cog | Single cog, command loop | Same — extended with Flash commands |
-| Command dispatch | ~46 SD command codes | SD commands + new Flash command codes |
-| SPI engine | Smart pin Mode 0 | Smart pin Mode 0 (SD) + Mode 3 (Flash), switched per device |
-| File handles | Up to 6 (SD only) | Shared pool across both devices, handle tracks which device |
-| Mount | `mount(cs, mosi, miso, sck)` | `mount(sd_cs, flash_cs, mosi, miso, sck)` — mounts both |
-| Lock | One hardware lock | Same — one lock serializes all access |
-| Bus safety | CS HIGH after every op | Same — plus mode switch on device transitions |
-
-## Reference Implementations
-
-The `REF-FLASH-uSD/` directory contains the two standalone drivers that serve as the basis for the unified driver:
-
-| Driver | Description | Tests |
-|--------|-------------|-------|
-| [**Flash FS**](REF-FLASH-uSD/FLASH/) | Wear-leveling filesystem for onboard 16MB FLASH. Circular files, read-modify-write, 4KB blocks, 127-char filenames. | 900+ |
-| [**microSD FAT32**](REF-FLASH-uSD/uSD-FAT32/) | Full FAT32 driver with smart pin SPI, streamer DMA, multi-sector transfers. 8.3 filenames, up to 2TB. | 345+ |
-
-Both test suites will be migrated to validate the unified driver.
+The SD card uses **SPI Mode 0** (CPOL=0, CPHA=0 — clock idles LOW) while the Flash chip ([W25Q128JV](DOCs/Reference/W25Q128JV-210823.pdf)) uses **SPI Mode 3** (CPOL=1, CPHA=1 — clock idles HIGH). The worker cog reconfigures the smart pin clock polarity when switching between devices.
 
 ## Hardware Requirements
 
@@ -121,39 +89,57 @@ Both test suites will be migrated to validate the unified driver.
 | SD SCK (CLK) / FLASH CS | P61 | SD Card clock / Flash select |
 | FLASH SCK | P60 | Flash clock (shared with SD CS) |
 
-*Note: Exact pin assignments for the unified driver will be finalized during implementation — the Flash chip on the P2 Edge Module shares physical pins with the SD header group.*
+The Flash chip on the P2 Edge Module shares physical pins with the SD header group. Pin assignments are configurable at `init()` time.
 
 ## Project Structure
 
 ```
-src/                            # Unified driver (target)
-REF-FLASH-uSD/
-├── FLASH/                      # Reference: Flash filesystem driver
-│   ├── flash_fs.spin2              # Core driver
-│   ├── THEOPSv2.md                # Theory of operations
-│   └── RegresssionTests/          # 900+ tests
-└── uSD-FAT32/                  # Reference: microSD FAT32 driver
-    ├── src/
-    │   ├── micro_sd_fat32_fs.spin2 # Core driver
-    │   ├── DEMO/                   # Interactive shell
-    │   ├── EXAMPLES/               # Example programs
-    │   └── UTILS/                  # Utilities (format, audit, fsck, bench)
-    ├── regression-tests/          # 345+ tests across 19 suites
-    └── tools/                     # Test runner and logs
+src/
+├── dual_sd_fat32_flash_fs.spin2   # Unified dual-FS driver
+├── DEMO/                          # Interactive dual-device shell
+│   └── DFS_demo_shell.spin2
+├── EXAMPLES/                      # Compilable example programs (3)
+├── UTILS/                         # Standalone utilities (format, audit, fsck, characterize)
+└── regression-tests/              # 35 test suites, 912+ tests
+
 DOCs/
-└── Analysis/
-    └── SPI-BUS-STATE-ANALYSIS.md  # SPI bus sharing feasibility study
+├── DUAL-DRIVER-THEORY.md          # Theory of operations
+├── DUAL-DRIVER-TUTORIAL.md        # Getting started tutorial
+├── DUAL-UTILITIES.md              # Utility program guide
+├── FLASH-FS-THEORY.md             # Flash filesystem internals
+├── Analysis/                      # SPI bus state analysis
+├── Plans/                         # Implementation plans and style guides
+├── Reference/                     # Technical reference, datasheets, user guides
+└── Utils/                         # Utility theory of operations
+
+tools/                             # Test runner scripts and logs
+
+REF-FLASH-uSD/                     # Read-only reference drivers (development baseline)
+├── FLASH/                         # Flash FS reference (Chip Gracey / Jon McPhalen)
+└── uSD-FAT32/                     # microSD FAT32 reference (Chris Gadd / Stephen Moraco)
 ```
 
-## Development Roadmap
+## Documentation
 
-1. **Study complete** — Both drivers analyzed, SPI bus sharing confirmed feasible
-2. **Plan the unified API** — Define command codes, handle allocation, mount sequence
-3. **Implement unified worker cog** — SD driver as base, integrate Flash SPI engine with mode switching
-4. **Migrate SD regression tests** — 345+ tests against unified driver
-5. **Migrate Flash regression tests** — 900+ tests against unified driver
-6. **Add cross-device tests** — Copy between Flash and SD, interleaved operations
-7. **Utilities and demos** — Update shell, format, audit, fsck for dual-device awareness
+| Document | Description |
+|----------|-------------|
+| [Theory of Operations](DOCs/DUAL-DRIVER-THEORY.md) | Architecture, command protocol, SPI bus management, handle pool |
+| [Tutorial](DOCs/DUAL-DRIVER-TUTORIAL.md) | Getting started guide with code examples for all API areas |
+| [Utilities Guide](DOCs/DUAL-UTILITIES.md) | Format, audit, fsck, and characterize utilities |
+| [Flash FS Theory](DOCs/FLASH-FS-THEORY.md) | Block format, wear leveling, mount process, circular files |
+| [Memory Sizing Guide](DOCs/Reference/MEMORY-SIZING-GUIDE.md) | Hub RAM sizing for the dual-FS driver |
+| [Flash Chip Datasheet](DOCs/Reference/W25Q128JV-210823.pdf) | W25Q128JV SPI Flash datasheet (Winbond) |
+
+## Reference Implementations
+
+The `REF-FLASH-uSD/` directory contains the two standalone drivers that served as the development baseline:
+
+| Driver | Description | Original Tests |
+|--------|-------------|----------------|
+| [**Flash FS**](REF-FLASH-uSD/FLASH/) | Wear-leveling filesystem for onboard 16MB FLASH. Circular files, read-modify-write, 4KB blocks, 127-char filenames. | 900+ |
+| [**microSD FAT32**](REF-FLASH-uSD/uSD-FAT32/) | Full FAT32 driver with smart pin SPI, streamer DMA, multi-sector transfers. 8.3 filenames, up to 2TB. | 345+ |
+
+Both test suites have been migrated and expanded in the unified driver's [regression test suite](src/regression-tests/).
 
 ## Toolchain
 
@@ -161,8 +147,14 @@ DOCs/
 - **Downloader**: pnut-term-ts (serial terminal for P2 hardware)
 
 ```bash
-pnut-ts -d -I ../src <filename>.spin2     # Compile
-pnut-term-ts -r <filename>.bin            # Download and run
+# From src/
+pnut-ts -d dual_sd_fat32_flash_fs.spin2
+
+# From a subdirectory
+pnut-ts -d -I .. <filename>.spin2
+
+# Download and run
+pnut-term-ts -r <filename>.bin
 ```
 
 ## Credits
