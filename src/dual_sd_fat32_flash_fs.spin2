@@ -689,7 +689,7 @@ CON ' ════════════════════════�
     ' MULTI-COG LIFECYCLE METHODS
     ' ═══════════════════════════════════════════════════════════════════════════
 
-PUB init(sd_cs, _mosi, _miso, sd_sck) : result
+PUB init(sd_cs, _mosi, _miso, sd_sck) : workerCog
 '' Initialize the unified filesystem driver (singleton).
 '' Stores pin assignments, derives Flash pins from the P60/P61 swap,
 '' allocates hardware lock, and starts the worker cog.
@@ -703,7 +703,7 @@ PUB init(sd_cs, _mosi, _miso, sd_sck) : result
 '' @param _mosi  - Shared MOSI pin (P59)
 '' @param _miso  - Shared MISO pin (P58)
 '' @param sd_sck - SD serial clock pin (P61 on Edge Module)
-'' @returns result - Cog ID (0-7) on success, -1 on failure
+'' @returns workerCog - Cog ID (0-7) on success, -1 on failure
 
   ' Check if already started (singleton pattern)
   if cog_id <> -1
@@ -747,7 +747,7 @@ PUB init(sd_cs, _mosi, _miso, sd_sck) : result
     return set_error(E_NO_LOCK)
 
   debug("  [init] Worker cog ", udec_(cog_id), " started, lock ", udec_(api_lock))
-  result := cog_id
+  workerCog := cog_id
 
 PUB stop()
 '' Stop worker cog - cleanly shut down the worker cog and release resources.
@@ -1395,11 +1395,11 @@ PRI freeHandle(handle)
   h_cluster[handle] := 0
   h_buf_sector[handle] := -1                  ' Mark buffer as invalid
 
-PRI validateHandle(handle) : result
+PRI validateHandle(handle) : is_valid
 ' Check if handle is valid and in use - fast guard function for handle operations.
 '
 ' @param handle - Handle index to validate
-' @returns result - TRUE if valid and in use, FALSE if invalid or free
+' @returns is_valid - TRUE if valid and in use, FALSE if invalid or free
 
   if handle < 0 or handle >= MAX_OPEN_FILES
     return FALSE
@@ -1407,16 +1407,16 @@ PRI validateHandle(handle) : result
     return FALSE
   return TRUE                                 ' Handle is valid and in use
 
-PRI isFileOpenForWrite(dir_sector, dir_offset) : result | handle
+PRI isFileOpenForWrite(dir_sector, dir_offset) : is_open | handle
 ' Check if file is already open for write - enforces single-writer policy.
 ' Multiple read handles allowed, only one write handle per file.
 '
 ' @param dir_sector - Directory sector containing the file entry
 ' @param dir_offset - Offset within sector of the file entry
-' @returns result - TRUE if file is open for write, FALSE otherwise
+' @returns is_open - TRUE if file is open for write, FALSE otherwise
 ' @local handle - Loop variable for handle search
 
-  result := FALSE
+  is_open := FALSE
   repeat handle from 0 to MAX_OPEN_FILES - 1
     if h_flags[handle] & HF_WRITE             ' Check if handle has write access
       if h_dir_sector[handle] == dir_sector and h_dir_offset[handle] == dir_offset
@@ -1619,10 +1619,10 @@ CON ' ════════════════════════�
     ' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
     ' ═══════════════════════════════════════════════════════════════════════════
 
-PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sector, sec_idx, next_cluster, found
+PRI do_mount() : status | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sector, sec_idx, next_cluster, found
 ' Internal mount operation - initializes card and reads filesystem structures.
 '
-' @returns result - SUCCESS on success, error code on failure
+' @returns status - SUCCESS on success, error code on failure
 ' @local reserved - Reserved sector count from VBR
 
   dir_sec_in_buf := -1
@@ -1749,15 +1749,15 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sect
   debug("  [do_mount] SUCCESS, mode=FILESYSTEM")
   return SUCCESS
 
-PRI do_unmount() : result
+PRI do_unmount() : status
 ' Internal unmount operation - syncs all handles and updates FSInfo.
 '
-' @returns result - SUCCESS on success
+' @returns status - SUCCESS on success
 
   ' V3: Sync all open handles before unmount
   do_sync_all()
   do_close()
-  result := updateFSInfo()
+  status := updateFSInfo()
   flags := flags & !F_MOUNTED
   sd_mounted := FALSE
   driver_mode := MODE_NONE
@@ -1765,11 +1765,11 @@ PRI do_unmount() : result
   return SUCCESS
 
 #IFDEF SD_INCLUDE_RAW
-PRI do_init_card_only() : result
+PRI do_init_card_only() : status
 ' Internal card-only init (raw mode) - initialize card for raw sector access.
 ' Sets driver_mode to MODE_RAW without filesystem parsing.
 '
-' @returns result - SUCCESS on success, E_INIT_FAILED on failure
+' @returns status - SUCCESS on success, E_INIT_FAILED on failure
 
   dir_sec_in_buf := -1
   fat_sec_in_buf := -1
@@ -1785,11 +1785,11 @@ PRI do_init_card_only() : result
     driver_mode := MODE_NONE
     return E_INIT_FAILED
 
-PRI do_get_card_size() : result | csd[4], c_size, read_bl_len, c_size_mult
+PRI do_get_card_size() : sector_count | csd[4], c_size, read_bl_len, c_size_mult
 ' Internal get card size operation - returns total number of 512-byte sectors.
 ' Runs on worker cog where smart pins are configured.
 '
-' @returns result - Total number of 512-byte sectors on the card
+' @returns sector_count - Total number of 512-byte sectors on the card
 ' @local csd - CSD register data (4 longs = 16 bytes)
 ' @local c_size - Capacity size field from CSD
 ' @local read_bl_len - Read block length from CSD
@@ -1809,15 +1809,15 @@ PRI do_get_card_size() : result | csd[4], c_size, read_bl_len, c_size_mult
     c_size |= csd.byte[8] >> 6
     c_size_mult := (csd.byte[9] & $03) << 1
     c_size_mult |= csd.byte[10] >> 7
-    result := (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9)
-    debug("  [do_get_card_size] CSD v1.0: ", udec(result), " sectors")
+    sector_count := (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9)
+    debug("  [do_get_card_size] CSD v1.0: ", udec(sector_count), " sectors")
   else
     ' CSD Version 2.0 (SDHC/SDXC)
     c_size := (csd.byte[7] & $3F) << 16
     c_size |= csd.byte[8] << 8
     c_size |= csd.byte[9]
-    result := (c_size + 1) << 10                                                ' * 1024 sectors (512KB units)
-    debug("  [do_get_card_size] CSD v2.0: ", udec(result), " sectors")
+    sector_count := (c_size + 1) << 10                                                ' * 1024 sectors (512KB units)
+    debug("  [do_get_card_size] CSD v2.0: ", udec(sector_count), " sectors")
 
 PRI do_test_cmd13() : r2_response | r1, status
 ' Internal CMD13 test — runs on worker cog where SPI pins are configured.
@@ -1825,7 +1825,7 @@ PRI do_test_cmd13() : r2_response | r1, status
 '
 ' @returns r2_response - R2 response word ($0000=OK, $FFFF=timeout, other=error)
 ' @local r1 - R1 response byte
-' @local status - Status byte from R2
+' @local r2_status - Status byte from R2
 
   ' Send dummy clocks with CS HIGH to ensure card is ready
   pinh(cs)
@@ -1862,12 +1862,12 @@ PRI do_test_cmd13() : r2_response | r1, status
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
-PRI do_read_scr(p_buf) : result
+PRI do_read_scr(p_buf) : status
 ' Internal read SCR operation - reads the 8-byte SCR register into buffer.
 ' Runs on worker cog where smart pins are configured.
 '
 ' @param p_buf - Pointer to 8-byte buffer to receive SCR data
-' @returns result - SUCCESS on success, E_IO_ERROR on failure
+' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
   if readSCR(p_buf)
     debug("  [do_read_scr] SCR read successfully")
@@ -1876,12 +1876,12 @@ PRI do_read_scr(p_buf) : result
     debug("  [do_read_scr] SCR read failed")
     return E_IO_ERROR
 
-PRI do_read_cid(p_buf) : result
+PRI do_read_cid(p_buf) : status
 ' Internal read CID operation - reads the 16-byte CID register into buffer.
 ' Runs on worker cog where smart pins are configured.
 '
 ' @param p_buf - Pointer to 16-byte buffer to receive CID data
-' @returns result - SUCCESS on success, E_IO_ERROR on failure
+' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
   if readCID(p_buf)
     debug("  [do_read_cid] CID read successfully")
@@ -1890,12 +1890,12 @@ PRI do_read_cid(p_buf) : result
     debug("  [do_read_cid] CID read failed")
     return E_IO_ERROR
 
-PRI do_read_csd(p_buf) : result
+PRI do_read_csd(p_buf) : status
 ' Internal read CSD operation - reads the 16-byte CSD register into buffer.
 ' Runs on worker cog where smart pins are configured.
 '
 ' @param p_buf - Pointer to 16-byte buffer to receive CSD data
-' @returns result - SUCCESS on success, E_IO_ERROR on failure
+' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
   if readCSD(p_buf)
     debug("  [do_read_csd] CSD read successfully")
@@ -1904,11 +1904,11 @@ PRI do_read_csd(p_buf) : result
     debug("  [do_read_csd] CSD read failed")
     return E_IO_ERROR
 
-PRI do_read_sd_status(p_buf) : result
+PRI do_read_sd_status(p_buf) : status
 ' Read SD Status register (ACMD13) - 64 bytes.
 '
 ' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
-' @returns result - SUCCESS on success, E_IO_ERROR on failure
+' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
   if readSDStatus(p_buf)
     debug("  [do_read_sd_status] SD Status read successfully")
@@ -1996,11 +1996,11 @@ PRI do_check_hs_capability() : capable | status[16]
   return (status.byte[13] & $02) <> 0
 #ENDIF
 
-PRI do_open(name_ptr) : result | search_result
+PRI do_open(name_ptr) : status | search_result
 ' Internal open file operation - opens an existing file for reading/writing.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
-' @returns result - SUCCESS on success, E_FILE_NOT_FOUND on failure
+' @returns status - SUCCESS on success, E_FILE_NOT_FOUND on failure
 ' @local search_result - Result from searchDirectory
 
   do_close()
@@ -2010,23 +2010,23 @@ PRI do_open(name_ptr) : result | search_result
       return SUCCESS
   return E_FILE_NOT_FOUND
 
-PRI do_close() : result
+PRI do_close() : status
 ' Internal close file operation - close the file and update directory entry on disk.
 '
-' @returns result - SUCCESS (0) on success, E_IO_ERROR on write failure
+' @returns status - SUCCESS (0) on success, E_IO_ERROR on write failure
 
-  result := SUCCESS
+  status := SUCCESS
 
   ' Update directory entry on disk
   if flags & F_NEWDIR
     if readSector(entry_address >> 9, BUF_DIR) < 0
       debug("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> 9))
-      result := E_IO_ERROR
+      status := E_IO_ERROR
     else
       bytemove(@dir_buf + (entry_address & 511), @entry_buffer, 32)
       if not writeSector(entry_address >> 9, BUF_DIR)
         debug("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> 9))
-        result := E_IO_ERROR
+        status := E_IO_ERROR
 
   bytefill(@entry_buffer, 0, 32)
   flags := flags & !F_NEWDIR
@@ -2229,12 +2229,12 @@ PRI do_create(p_path) : handle | temp, first_cluster
   debug("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
   return handle
 
-PRI do_close_h(handle) : result | p_buf
+PRI do_close_h(handle) : status | p_buf
 ' Close file handle (V3) - closes handle, flushing writes and updating directory.
 ' For write handles, the directory entry is updated with the final file size.
 '
 ' @param handle - Handle to close
-' @returns result - SUCCESS (0) on success, E_INVALID_HANDLE on failure
+' @returns status - SUCCESS (0) on success, E_INVALID_HANDLE on failure
 ' @local p_buf - Pointer to handle's buffer
 
   ' Validate handle
@@ -2244,7 +2244,7 @@ PRI do_close_h(handle) : result | p_buf
   if h_flags[handle] & HF_DIR
     return E_NOT_A_DIR_HANDLE
 
-  result := SUCCESS
+  status := SUCCESS
 
   ' If buffer is dirty, flush it to disk
   if h_flags[handle] & HF_DIRTY
@@ -2252,18 +2252,18 @@ PRI do_close_h(handle) : result | p_buf
     bytemove(@buf, p_buf, 512)                                                    ' Copy to shared buffer
     if not writeSector(h_buf_sector[handle], BUF_DATA)
       debug("  [do_close_h] Data write FAILED for sector ", udec_(h_buf_sector[handle]))
-      result := E_IO_ERROR
+      status := E_IO_ERROR
 
   ' If opened for write, update directory entry with final size
   if h_flags[handle] & HF_WRITE
     if readSector(h_dir_sector[handle], BUF_DIR) < 0
       debug("  [do_close_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
-      result := E_IO_ERROR
+      status := E_IO_ERROR
     else
       long[@dir_buf + h_dir_offset[handle] + 28] := h_size[handle]                ' Update size field
       if not writeSector(h_dir_sector[handle], BUF_DIR)
         debug("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
-        result := E_IO_ERROR
+        status := E_IO_ERROR
 
   ' Free the handle
   freeHandle(handle)
@@ -2486,13 +2486,13 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
   debug("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
   return bytes_written
 
-PRI do_seek_h(handle, position) : result | target_cluster_idx, cluster, i, fat_addr, sector_in_cluster
+PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, i, fat_addr, sector_in_cluster
 ' Handle-based seek (V3) - seeks to absolute position in file.
 ' Position must be <= file size (no seeking past EOF).
 '
 ' @param handle - Valid file handle
 ' @param position - Absolute byte position to seek to
-' @returns result - SUCCESS (0) on success, negative error code on failure
+' @returns status - SUCCESS (0) on success, negative error code on failure
 ' @local target_cluster_idx - Target cluster index from start
 ' @local cluster - Current cluster during walk
 ' @local i - Loop counter
@@ -2555,12 +2555,12 @@ PRI do_seek_h(handle, position) : result | target_cluster_idx, cluster, i, fat_a
   debug("  [do_seek_h] Seek complete: cluster=", udec_(cluster), " sector=", udec_(h_sector[handle]))
   return SUCCESS
 
-PRI do_sync_h(handle) : result | p_buf
+PRI do_sync_h(handle) : status | p_buf
 ' Sync handle buffer to disk (V3) - flushes pending writes and updates directory.
 ' Does NOT close handle - file remains open for further operations.
 '
 ' @param handle - Valid file handle
-' @returns result - SUCCESS (0) on success, E_INVALID_HANDLE on failure
+' @returns status - SUCCESS (0) on success, E_INVALID_HANDLE on failure
 ' @local p_buf - Pointer to handle's buffer
 
   ' Validate handle
@@ -2592,11 +2592,11 @@ PRI do_sync_h(handle) : result | p_buf
   debug("  [do_sync_h] Sync complete")
   return SUCCESS
 
-PRI do_sync_all() : result | i
+PRI do_sync_all() : status | i
 ' Sync all open write handles (V3) - flushes all write handles to disk.
 ' Called by unmount() to ensure all data is written before stopping.
 '
-' @returns result - SUCCESS (0) on success
+' @returns status - SUCCESS (0) on success
 ' @local i - Loop variable
 
   debug("  [do_sync_all] Syncing all handles")
@@ -2660,12 +2660,12 @@ PRI do_open_dir(p_path) : handle | start_cluster
   debug("  [do_open_dir] Success: handle=", udec_(handle), " cluster=", udec_(start_cluster))
   return handle
 
-PRI do_read_dir_h(handle) : result | p_hbuf, offset, char, attrib, cluster, fat_addr, next_cluster
+PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_addr, next_cluster
 ' Read next directory entry from handle (V3) - skips deleted and LFN entries.
 ' Copies valid entry into entry_buffer for caller to inspect via fileName()/attributes().
 '
 ' @param handle - Valid directory handle (must have HF_DIR flag)
-' @returns result - SUCCESS on valid entry, E_FILE_NOT_FOUND at end of directory
+' @returns status - SUCCESS on valid entry, E_FILE_NOT_FOUND at end of directory
 ' @local p_hbuf - Pointer to handle's buffer
 ' @local offset - Byte offset within current sector
 ' @local char - First byte of entry
@@ -2736,11 +2736,11 @@ PRI do_read_dir_h(handle) : result | p_hbuf, offset, char, attrib, cluster, fat_
     bytemove(@entry_buffer, p_hbuf + offset, 32)
     return SUCCESS
 
-PRI do_close_dir_h(handle) : result
+PRI do_close_dir_h(handle) : status
 ' Close directory handle (V3) - releases handle back to pool.
 '
 ' @param handle - Valid directory handle
-' @returns result - SUCCESS on success, E_INVALID_HANDLE if invalid
+' @returns status - SUCCESS on success, E_INVALID_HANDLE if invalid
 
   if not validateHandle(handle)
     return E_INVALID_HANDLE
@@ -2752,11 +2752,11 @@ PRI do_close_dir_h(handle) : result
   return SUCCESS
 
 
-PRI do_newfile(name_ptr) : result | temp
+PRI do_newfile(name_ptr) : status | temp
 ' Internal new file operation - creates a new file in current directory.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
-' @returns result - SUCCESS on success, E_FILE_EXISTS if file exists
+' @returns status - SUCCESS on success, E_FILE_EXISTS if file exists
 ' @local temp - Temporary calculation variable
 
   do_close()
@@ -2783,11 +2783,11 @@ PRI do_newfile(name_ptr) : result | temp
   flags |= F_NEWDIR
   return SUCCESS
 
-PRI do_newdir(name_ptr) : result | temp
+PRI do_newdir(name_ptr) : status | temp
 ' Internal new directory operation - creates a new directory in current directory.
 '
 ' @param name_ptr - Pointer to null-terminated directory name string
-' @returns result - SUCCESS on success, E_FILE_EXISTS if directory exists
+' @returns status - SUCCESS on success, E_FILE_EXISTS if directory exists
 ' @local temp - Temporary calculation variable for cluster allocation
 
   do_close()
@@ -2858,11 +2858,11 @@ PRI do_newdir(name_ptr) : result | temp
     debug("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
   return SUCCESS
 
-PRI do_delete(name_ptr) : result | cluster, p_cluster, fat_sector, loop_count
+PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count
 ' Internal delete operation - deletes a file and frees its clusters.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
-' @returns result - SUCCESS on success, E_FILE_NOT_FOUND if not found
+' @returns status - SUCCESS on success, E_FILE_NOT_FOUND if not found
 ' @local cluster - Current cluster being freed
 ' @local p_cluster - Previous cluster in chain
 ' @local fat_sector - FAT sector containing current cluster
@@ -2929,11 +2929,11 @@ PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cl
   unused_bytes := (cluster_count * sec_per_clus * 512) - fsize
   status := SUCCESS
 
-PRI do_chdir(name_ptr) : result
+PRI do_chdir(name_ptr) : status
 ' Internal change directory operation - changes current directory.
 '
 ' @param name_ptr - Pointer to null-terminated directory name string
-' @returns result - SUCCESS on success, E_NOT_A_DIR if not a directory
+' @returns status - SUCCESS on success, E_NOT_A_DIR if not a directory
 
   do_close()
   if searchDirectory(name_ptr)
@@ -2946,10 +2946,10 @@ PRI do_chdir(name_ptr) : result
     debug("  [do_chdir] searchDirectory FAILED for: ", zstr(name_ptr), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
   return E_NOT_A_DIR
 
-PRI do_freespace() : result | cluster
+PRI do_freespace() : free_sectors | cluster
 ' Internal free space calculation - returns free sectors on card.
 '
-' @returns result - Number of free sectors
+' @returns free_sectors - Number of free sectors
 ' @local cluster - Loop variable for FAT scan
 
   if not (flags & F_MOUNTED)
@@ -2958,11 +2958,11 @@ PRI do_freespace() : result | cluster
   repeat sec_per_fat
     if readSector(n_sec++, BUF_FAT) < 0
       debug("  [do_freespace] FAT read FAILED, returning partial count")
-      return result
+      return free_sectors
     repeat cluster from 0 to 127
       if long[@fat_buf + cluster << 2] == 0
-        result++
-  result := result * sec_per_clus
+        free_sectors++
+  free_sectors := free_sectors * sec_per_clus
 
 PRI do_sync()
 ' Internal sync operation - flushes directory entry without closing file.
@@ -2975,13 +2975,13 @@ PRI do_sync()
       writeSector(entry_address >> 9, BUF_DIR)
     flags := flags & !F_NEWDIR
 
-PRI do_rename(old_name, new_name) : result | bookmark, temp_sec, i, saved_entry[8], p_buf
+PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, i, saved_entry[8], p_buf
 ' Internal rename operation - renames file/directory by updating directory entry.
 ' Finds old file, saves entry, parses new_name into 8.3 format, writes back.
 '
 ' @param old_name - Pointer to current filename string
 ' @param new_name - Pointer to new filename string
-' @returns result - SUCCESS on success, E_FILE_NOT_FOUND on failure
+' @returns status - SUCCESS on success, E_FILE_NOT_FOUND on failure
 ' @local bookmark - Saved entry address
 ' @local temp_sec - Saved directory sector
 ' @local i - Loop counter
@@ -3036,11 +3036,11 @@ PRI do_rename(old_name, new_name) : result | bookmark, temp_sec, i, saved_entry[
     debug("  [do_rename] Old file NOT FOUND")
   return E_FILE_NOT_FOUND
 
-PRI do_set_vol_label(p_label) : result | i, ch, p_entry, label_83[3], pVBR
+PRI do_set_vol_label(p_label) : status | i, ch, p_entry, label_83[3], pVBR
 ' Internal set volume label - updates BPB and root directory volume label entry.
 '
 ' @param p_label - Pointer to new volume label string (max 11 chars)
-' @returns result - SUCCESS on success, E_IO_ERROR on failure
+' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
   ' Format label: uppercase, space-pad to 11 chars
   bytefill(@label_83, " ", 11)
@@ -3090,12 +3090,12 @@ PRI do_set_vol_label(p_label) : result | i, ch, p_entry, label_83[3], pVBR
   debug("  [do_set_vol_label] SUCCESS")
   return SUCCESS
 
-PRI do_movefile(name_ptr, dest_folder) : result | bookmark, p_temp, temp_sec
+PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
 ' Internal move file operation - moves file from current directory to destination.
 '
 ' @param name_ptr - Pointer to filename to move
 ' @param dest_folder - Pointer to destination folder name
-' @returns result - SUCCESS on success, E_FILE_NOT_FOUND on failure
+' @returns status - SUCCESS on success, E_FILE_NOT_FOUND on failure
 ' @local bookmark - Saved entry address
 ' @local p_temp - Pointer to temporary filename buffer
 ' @local temp_sec - Saved directory sector
@@ -3131,11 +3131,11 @@ PRI do_movefile(name_ptr, dest_folder) : result | bookmark, p_temp, temp_sec
     cog_dir_sec[pb_caller] := temp_sec
   return E_FILE_NOT_FOUND
 
-PRI do_readdir(entry_num) : result | idx, char, attrib
+PRI do_readdir(entry_num) : p_entry | idx, char, attrib
 ' Internal read directory operation - reads directory entry at specified index.
 '
 ' @param entry_num - Entry index to read (0-based)
-' @returns result - SUCCESS on success, E_FILE_NOT_FOUND if entry doesn't exist
+' @returns p_entry - SUCCESS on success, E_FILE_NOT_FOUND if entry doesn't exist
 ' @local idx - Current byte offset in directory
 ' @local char - First character of entry
 ' @local attrib - Entry attributes
@@ -5231,24 +5231,24 @@ PUB mount(dev) : status
 
   return SUCCESS
 
-PUB mounted(dev) : result
+PUB mounted(dev) : is_mounted
 '' Check if a device is currently mounted.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
-'' @returns result - TRUE if device is mounted, FALSE otherwise
+'' @returns is_mounted - TRUE if device is mounted, FALSE otherwise
 
   case dev
     DEV_SD:    return sd_mounted
     DEV_FLASH: return flash_mounted
     other:     return false
 
-PUB canMount(dev) : result
+PUB canMount(dev) : is_mountable
 '' Non-destructive check if a device can be mounted (requires init, not mount).
 '' For SD: checks card presence and FAT32 validity.
 '' For Flash: scans blocks non-destructively (Phase 2+).
 ''
 '' @param dev - DEV_SD or DEV_FLASH
-'' @returns result - TRUE if device appears mountable, FALSE otherwise
+'' @returns is_mountable - TRUE if device appears mountable, FALSE otherwise
 
   if cog_id == -1
     return false
@@ -5306,18 +5306,18 @@ PUB initCardOnly() : status
     debug("  [initCardOnly] Card initialization failed, error=", sdec_(status))
     set_error(status)
 
-PUB cardSizeSectors() : result
+PUB cardSizeSectors() : sector_count
 '' Get total sectors on card via worker cog.
 '' Must call initCardOnly() or mount() first.
 ''
-'' @returns result - Total number of 512-byte sectors on the card
+'' @returns sector_count - Total number of 512-byte sectors on the card
 
   if cog_id == -1
     debug("  [cardSizeSectors] ERROR: Worker not running")
     return 0
   send_command(CMD_GET_CARD_SIZE, 0, 0, 0, 0)
-  result := LONG[@saved_data0][COGID()]
-  debug("  [cardSizeSectors] ", udec(result), " sectors")
+  sector_count := LONG[@saved_data0][COGID()]
+  debug("  [cardSizeSectors] ", udec(sector_count), " sectors")
 #ENDIF
 
 #IFDEF SD_INCLUDE_RAW
@@ -5421,33 +5421,33 @@ PUB readSectorRaw(sector, p_buffer) : status
     set_error(status)
   debug("  [readSectorRaw] Read sector ", udec(sector))
 
-PUB readSectorsRaw(start_sector, count, p_buffer) : result
+PUB readSectorsRaw(start_sector, count, p_buffer) : status
 '' Read multiple consecutive sectors - multi-block read using CMD18.
 '' More efficient than calling readSectorRaw() in a loop.
 ''
 '' @param start_sector - First sector to read (absolute LBA)
 '' @param count - Number of sectors to read
 '' @param p_buffer - Pointer to buffer (must be count * 512 bytes)
-'' @returns result - Number of sectors successfully read
+'' @returns status - Number of sectors successfully read
 
   if send_command(CMD_READ_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
-    result := LONG[@saved_data0][COGID()]
+    status := LONG[@saved_data0][COGID()]
   else
-    result := 0
+    status := 0
 
-PUB writeSectorsRaw(start_sector, count, p_buffer) : result
+PUB writeSectorsRaw(start_sector, count, p_buffer) : status
 '' Write multiple consecutive sectors - multi-block write using CMD25.
 '' More efficient than calling writeSectorRaw() in a loop.
 ''
 '' @param start_sector - First sector to write (absolute LBA)
 '' @param count - Number of sectors to write
 '' @param p_buffer - Pointer to buffer with data (must be count * 512 bytes)
-'' @returns result - Number of sectors successfully written
+'' @returns status - Number of sectors successfully written
 
   if send_command(CMD_WRITE_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
-    result := LONG[@saved_data0][COGID()]
+    status := LONG[@saved_data0][COGID()]
   else
-    result := 0
+    status := 0
 
 PUB readVBRRaw(p_buf) : status
 '' Read Volume Boot Record (512 bytes) into buffer.
@@ -5551,12 +5551,12 @@ PUB getOCR() : ocr
   debug("  [getOCR] OCR = $", uhex_long(ocr))
 #ENDIF
 
-PRI readCSD(p_csd) : result | t, i
+PRI readCSD(p_csd) : ok | t, i
 ' Read CSD register using CMD9 - reads 16-byte CSD register into buffer.
 ' Uses smart pin operations for compatibility with smart pin SPI mode.
 '
 ' @param p_csd - Pointer to 16-byte buffer to receive CSD data
-' @returns result - TRUE on success, FALSE on failure
+' @returns ok - TRUE on success, FALSE on failure
 ' @local t - Timeout counter
 ' @local i - Loop counter
 
@@ -5570,22 +5570,22 @@ PRI readCSD(p_csd) : result | t, i
   ' Wait for response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       pinh(cs)
       return false
 
-  if result <> $00
+  if ok <> $00
     pinh(cs)
     return false
 
   ' Wait for data token ($FE)
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result == $FE
+    ok := sp_transfer_8($FF)
+    if ok == $FE
       quit
     if getct() - t > 0
       pinh(cs)
@@ -5602,12 +5602,12 @@ PRI readCSD(p_csd) : result | t, i
   pinh(cs)
   return true
 
-PRI readCID(p_cid) : result | t, i
+PRI readCID(p_cid) : ok | t, i
 ' Read CID register using CMD10 - reads 16-byte Card Identification register.
 ' Uses smart pin operations for compatibility with smart pin SPI mode.
 '
 ' @param p_cid - Pointer to 16-byte buffer to receive CID data
-' @returns result - TRUE on success, FALSE on failure
+' @returns ok - TRUE on success, FALSE on failure
 ' @local t - Timeout counter
 ' @local i - Loop counter
 
@@ -5621,22 +5621,22 @@ PRI readCID(p_cid) : result | t, i
   ' Wait for response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       pinh(cs)
       return false
 
-  if result <> $00
+  if ok <> $00
     pinh(cs)
     return false
 
   ' Wait for data token ($FE)
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result == $FE
+    ok := sp_transfer_8($FF)
+    if ok == $FE
       quit
     if getct() - t > 0
       pinh(cs)
@@ -5843,13 +5843,13 @@ PRI setOptimalSpeed()
 #IFDEF SD_INCLUDE_SPEED
 CON ' High-Speed Mode Support (50 MHz via CMD6)
 
-PRI sendCMD6(arg, p_status) : result | t, i
+PRI sendCMD6(arg, p_status) : ok | t, i
 ' Send CMD6 (SWITCH_FUNC) and receive 64-byte status structure.
 ' arg format: [31]=mode (0=check, 1=switch), [3:0]=function group 1 selection.
 '
 ' @param arg - CMD6 argument word
 ' @param p_status - Pointer to 64-byte buffer to receive status
-' @returns result - TRUE on success, FALSE on failure/timeout
+' @returns ok - TRUE on success, FALSE on failure/timeout
 ' @local t - Timeout counter
 ' @local i - Loop counter
 
@@ -5863,24 +5863,24 @@ PRI sendCMD6(arg, p_status) : result | t, i
   ' Wait for R1 response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       debug("  [sendCMD6] Timeout waiting for R1")
       pinh(cs)
       return false
 
-  if result <> $00
-    debug("  [sendCMD6] R1 error: $", uhex_byte_(result))
+  if ok <> $00
+    debug("  [sendCMD6] R1 error: $", uhex_byte_(ok))
     pinh(cs)
     return false
 
   ' Wait for data token ($FE)
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result == $FE
+    ok := sp_transfer_8($FF)
+    if ok == $FE
       quit
     if getct() - t > 0
       debug("  [sendCMD6] Timeout waiting for data token")
@@ -5898,10 +5898,10 @@ PRI sendCMD6(arg, p_status) : result | t, i
   pinh(cs)
   return true
 
-PRI queryHighSpeedSupport() : result | scr[2], status[16], sd_spec
+PRI queryHighSpeedSupport() : supported | scr[2], status[16], sd_spec
 ' Check if card supports high-speed mode - queries SCR and function group 1.
 '
-' @returns result - TRUE if high-speed (50 MHz) is supported
+' @returns supported - TRUE if high-speed (50 MHz) is supported
 ' @local scr - SCR register data (2 longs = 8 bytes)
 ' @local status - CMD6 status structure (16 longs = 64 bytes)
 ' @local sd_spec - SD spec version from SCR
@@ -5935,10 +5935,10 @@ PRI queryHighSpeedSupport() : result | scr[2], status[16], sd_spec
   debug("  [queryHighSpeedSupport] High-speed (50 MHz) IS SUPPORTED")
   return true
 
-PRI switchToHighSpeed() : result | status[16]
+PRI switchToHighSpeed() : ok | status[16]
 ' Switch card to high-speed mode - sends CMD6 to switch function group 1.
 '
-' @returns result - TRUE if switch succeeded
+' @returns ok - TRUE if switch succeeded
 ' @local status - CMD6 status structure (16 longs = 64 bytes)
 
   debug("  [switchToHighSpeed] Sending CMD6 switch command...")
@@ -6055,13 +6055,13 @@ PUB checkHighSpeedCapability() : capable
   capable := LONG[@saved_data0][COGID()]
 #ENDIF
 
-PRI readSCR(p_scr) : result | t, i
+PRI readSCR(p_scr) : ok | t, i
 ' Read SCR register using ACMD51 - reads 8-byte SD Configuration Register.
 ' Requires CMD55 prefix before ACMD51.
 ' Uses smart pin operations for compatibility.
 '
 ' @param p_scr - Pointer to 8-byte buffer to receive SCR data
-' @returns result - TRUE on success, FALSE on failure
+' @returns ok - TRUE on success, FALSE on failure
 ' @local t - Timeout counter
 ' @local i - Loop counter
 
@@ -6078,16 +6078,16 @@ PRI readSCR(p_scr) : result | t, i
   ' Wait for R1 response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       debug("  [readSCR] CMD55 timeout - no response")
       pinh(cs)
       return false
 
-  debug("  [readSCR] CMD55 response: $", uhex_byte_(result))
-  if result > $01                                                               '  Accept $00 or $01 (idle)
+  debug("  [readSCR] CMD55 response: $", uhex_byte_(ok))
+  if ok > $01                                                               '  Accept $00 or $01 (idle)
     debug("  [readSCR] CMD55 error response")
     pinh(cs)
     return false
@@ -6105,16 +6105,16 @@ PRI readSCR(p_scr) : result | t, i
   ' Wait for R1 response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       debug("  [readSCR] ACMD51 timeout - no response")
       pinh(cs)
       return false
 
-  debug("  [readSCR] ACMD51 response: $", uhex_byte_(result))
-  if result <> $00
+  debug("  [readSCR] ACMD51 response: $", uhex_byte_(ok))
+  if ok <> $00
     debug("  [readSCR] ACMD51 error - expected $00")
     pinh(cs)
     return false
@@ -6122,8 +6122,8 @@ PRI readSCR(p_scr) : result | t, i
   ' Wait for data token ($FE)
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result == $FE
+    ok := sp_transfer_8($FF)
+    if ok == $FE
       quit
     if getct() - t > 0
       debug("  [readSCR] Timeout waiting for data token $FE")
@@ -6144,13 +6144,13 @@ PRI readSCR(p_scr) : result | t, i
   debug("  [readSCR] Success")
   return true
 
-PRI readSDStatus(p_buf) : result | t, i
+PRI readSDStatus(p_buf) : ok | t, i
 ' Read SD Status register using ACMD13 - reads 64-byte SD Status.
 ' Requires CMD55 prefix before ACMD13.
 ' Uses byte-by-byte read (same pattern as readSCR).
 '
 ' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
-' @returns result - TRUE on success, FALSE on failure
+' @returns ok - TRUE on success, FALSE on failure
 ' @local t - Timeout counter
 ' @local i - Loop counter
 
@@ -6167,16 +6167,16 @@ PRI readSDStatus(p_buf) : result | t, i
   ' Wait for R1 response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       debug("  [readSDStatus] CMD55 timeout - no response")
       pinh(cs)
       return false
 
-  debug("  [readSDStatus] CMD55 response: $", uhex_byte_(result))
-  if result > $01                                                               '  Accept $00 or $01 (idle)
+  debug("  [readSDStatus] CMD55 response: $", uhex_byte_(ok))
+  if ok > $01                                                               '  Accept $00 or $01 (idle)
     debug("  [readSDStatus] CMD55 error response")
     pinh(cs)
     return false
@@ -6194,16 +6194,16 @@ PRI readSDStatus(p_buf) : result | t, i
   ' Wait for R1 response
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result <> $FF
+    ok := sp_transfer_8($FF)
+    if ok <> $FF
       quit
     if getct() - t > 0
       debug("  [readSDStatus] ACMD13 timeout - no response")
       pinh(cs)
       return false
 
-  debug("  [readSDStatus] ACMD13 response: $", uhex_byte_(result))
-  if result <> $00
+  debug("  [readSDStatus] ACMD13 response: $", uhex_byte_(ok))
+  if ok <> $00
     debug("  [readSDStatus] ACMD13 error - expected $00")
     pinh(cs)
     return false
@@ -6211,8 +6211,8 @@ PRI readSDStatus(p_buf) : result | t, i
   ' Wait for data token ($FE)
   t := getct() + clkfreq
   repeat
-    result := sp_transfer_8($FF)
-    if result == $FE
+    ok := sp_transfer_8($FF)
+    if ok == $FE
       quit
     if getct() - t > 0
       debug("  [readSDStatus] Timeout waiting for data token $FE")
@@ -6641,24 +6641,24 @@ PUB syncHandle(handle) : status
     set_error(status)
   return status
 
-PUB syncAllHandles() : result
+PUB syncAllHandles() : status
 '' Flush all handles to disk (V3 multi-file) - flushes all open write handles.
 '' Useful before risky operations or for periodic safety.
 ''
-'' @returns result - SUCCESS (0) on success
+'' @returns status - SUCCESS (0) on success
 
-  result := send_command(CMD_SYNC_ALL, 0, 0, 0, 0)
-  if result <> SUCCESS
-    debug("  [syncAllHandles] Failed: ", sdec_(result))
-    set_error(result)
-  return result
+  status := send_command(CMD_SYNC_ALL, 0, 0, 0, 0)
+  if status <> SUCCESS
+    debug("  [syncAllHandles] Failed: ", sdec_(status))
+    set_error(status)
+  return status
 
-PRI updateFSInfo() : result | pFSI
+PRI updateFSInfo() : ok | pFSI
 ' Update FSInfo sector with current free cluster count.
 ' Uses cached fsi_free_count (tracked incrementally during alloc/delete).
 ' Called by unmount() to ensure other OSes see correct free space.
 '
-' @returns result - TRUE on success, FALSE if no valid FSInfo
+' @returns ok - TRUE on success, FALSE if no valid FSInfo
 ' @local pFSI - Pointer overlaid on buf for fsinfo_t struct access
 
   if fsinfo_sec == 0 or fsi_free_count == $FFFF_FFFF
@@ -6813,11 +6813,11 @@ PUB setDate(year, month, day, hour, minute, second)
   date_stamp := (year - 1980) << 25 | month << 21 | day << 16 | hour << 11 | minute << 5 | second >> 1
 
 CON     '' read/write methods
-PUB readDirectory(entry) : result
+PUB readDirectory(entry) : p_entry
 '' Read directory entry (multi-cog safe) - iterates through directory entries.
 ''
 '' @param entry - Entry index to read (0-based)
-'' @returns result - Pointer to entry_buffer on success, 0 if entry doesn't exist
+'' @returns p_entry - Pointer to entry_buffer on success, 0 if entry doesn't exist
 
   if send_command(CMD_READDIR, entry, 0, 0, 0) == SUCCESS
     return @entry_buffer
@@ -7485,11 +7485,11 @@ DAT '' error strings for string_for_error()
   s_unknown_error     BYTE  "Unknown error", 0
 
 CON     '' directory methods
-PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
+PRI searchDirectory(name_ptr) : found | p_temp, p_entry, i, search_sec, j
 ' Search directory for a file/directory by name.
 '
 ' @param name_ptr - Pointer to null-terminated path string
-' @returns result - TRUE if found, FALSE otherwise
+' @returns found - TRUE if found, FALSE otherwise
 ' @local p_temp - Pointer to temporary filename buffer
 ' @local p_entry - Pointer to current directory entry
 ' @local i - Loop counter
@@ -7561,10 +7561,10 @@ PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
         readNextSector(BUF_DIR)
   return true
 
-PUB fileName() : result | p_temp, i
+PUB fileName() : p_filename | p_temp, i
 '' Return the 8.3 filename of the currently opened file.
 ''
-'' @returns result - Pointer to filename string
+'' @returns p_filename - Pointer to filename string
 '' @local p_temp - Pointer to temporary filename buffer
 '' @local i - Loop counter for parsing
 
@@ -7580,18 +7580,18 @@ PUB fileName() : result | p_temp, i
     byte[p_temp + i+3] := $00
   return p_temp
 
-PUB attributes() : result
+PUB attributes() : attr_byte
 '' Return the attribute byte of the currently opened file.
 ''
-'' @returns result - FAT attribute byte
+'' @returns attr_byte - FAT attribute byte
 
   return dirEntAttr(@entry_buffer)
 
-PUB volumeLabel(dev) : result
+PUB volumeLabel(dev) : p_label
 '' Return pointer to volume label string (SD only).
 ''
 '' @param dev - Device (DEV_SD only; Flash has no volume label)
-'' @returns result - Pointer to volume label (11 chars + null), 0 if not SD
+'' @returns p_label - Pointer to volume label (11 chars + null), 0 if not SD
 
   if dev <> DEV_SD
     return 0
@@ -7646,50 +7646,50 @@ PUB syncDirCache()
   dir_sec_in_buf := -1
 
 #IFDEF SD_INCLUDE_DEBUG
-PUB debugGetRootSec() : result
+PUB debugGetRootSec() : sector_num
 '' DEBUG: Return root_sec for diagnostic.
 ''
-'' @returns result - Root directory sector number
+'' @returns sector_num - Root directory sector number
 
   return root_sec
 
-PUB debugGetDirSec() : result
+PUB debugGetDirSec() : sector_num
 '' DEBUG: Return calling cog's current directory sector for diagnostic.
 ''
-'' @returns result - Current directory sector number for calling cog
+'' @returns sector_num - Current directory sector number for calling cog
 
   return cog_dir_sec[COGID()]
 
-PUB debugGetVbrSec() : result
+PUB debugGetVbrSec() : sector_num
 '' DEBUG: Return VBR sector for diagnostic.
 ''
-'' @returns result - Volume Boot Record sector number
+'' @returns sector_num - Volume Boot Record sector number
 
   return vbr_sec
 
-PUB debugGetFatSec() : result
+PUB debugGetFatSec() : sector_num
 '' DEBUG: Return FAT sector for diagnostic.
 ''
-'' @returns result - FAT start sector number
+'' @returns sector_num - FAT start sector number
 
   return fat_sec
 
-PUB debugGetSecPerFat() : result
+PUB debugGetSecPerFat() : count
 '' DEBUG: Return sectors per FAT for diagnostic.
 ''
-'' @returns result - Number of sectors per FAT
+'' @returns count - Number of sectors per FAT
 
   return sec_per_fat
 
-PUB debugClearRootDir() : result
+PUB debugClearRootDir() : status
 '' DEBUG: Clear root directory (fixes corruption).
 '' Clears the root directory by writing zeros to root_sec.
 '' Use this to fix a corrupted root directory.
 '' WARNING: This DELETES all files and folders!
 ''
-'' @returns result - 0 on success, -1 on error
+'' @returns status - 0 on success, -1 on error
 
-  result := send_command(CMD_DEBUG_CLEAR_ROOT, 0, 0, 0, 0)
+  status := send_command(CMD_DEBUG_CLEAR_ROOT, 0, 0, 0, 0)
 
 PUB debugGetReadSectorDiag(p_sector, p_buftype, p_token, p_b0, p_b1, p_b2, p_b3, p_pbuf)
 '' DEBUG: Get readSector diagnostic data - copies diagnostic data from last readSector call.
@@ -7728,7 +7728,7 @@ PUB debugGetReadSectorDiagExt(p_before0, p_before1, p_before2, p_before3, p_spi_
   long[p_before3] := diag_before_b3
   long[p_spi_period] := diag_spi_period
 
-PUB debugReadSectorSlow(sector, p_buffer) : result | data, i, timeout
+PUB debugReadSectorSlow(sector, p_buffer) : status | data, i, timeout
 '' DEBUG: Read sector byte-by-byte (no streamer) - for comparison with streamer.
 '' This is SLOW but useful for debugging streamer issues.
 '' Requires worker cog to be running (SPI pins configured).
@@ -7739,48 +7739,48 @@ PUB debugReadSectorSlow(sector, p_buffer) : result | data, i, timeout
 ''
 '' @param sector - Sector number to read
 '' @param p_buffer - Pointer to 512-byte destination buffer
-'' @returns result - 0 on success, -1 on timeout/error
+'' @returns status - 0 on success, -1 on timeout/error
 '' @local data - (unused in wrapper)
 '' @local i - (unused in wrapper)
 '' @local timeout - (unused in wrapper)
 
-  result := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
+  status := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
 #ENDIF
 
-PRI firstCluster() : result
+PRI firstCluster() : cluster_num
 ' Return the 1st cluster location of the currently opened file.
 '
-' @returns result - First cluster number (combined from entry bytes $14-$15 and $1A-$1B)
+' @returns cluster_num - First cluster number (combined from entry bytes $14-$15 and $1A-$1B)
 
   return dirEntStartClus(@entry_buffer)
 
-PUB fileSize() : result
+PUB fileSize() : size_in_bytes
 '' Return the size of the currently opened file in bytes.
 ''
-'' @returns result - File size from directory entry
+'' @returns size_in_bytes - File size from directory entry
 
   return dirEntFileSize(@entry_buffer)
 
 CON     '' FAT and sector methods
-PRI readFat(cluster) : result | contents, p_contents
+PRI readFat(cluster) : p_fat_entry | contents, p_contents
 ' Read a FAT location and return a pointer to the location of that entry.
 '
 ' @param cluster - Cluster number to look up
-' @returns result - Pointer to FAT entry in fat_buf
+' @returns p_fat_entry - Pointer to FAT entry in fat_buf
 ' @local contents - (unused)
 ' @local p_contents - (unused)
 
   if readSector((cluster >> 7 + fat_sec), BUF_FAT) < 0                          '  128 entries in each FAT sector
     debug("  [readFat] FAT read FAILED for cluster ", udec_(cluster))
     return @fat_buf                                                              '  Return valid pointer but caller gets stale data
-  result := @fat_buf + ((cluster << 2) & 511)
+  p_fat_entry := @fat_buf + ((cluster << 2) & 511)
 
-PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
+PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits
 ' Search FAT for an empty cluster, allocate it, and return cluster number.
 ' If cluster parameter is non-zero, links the new cluster to that chain.
 '
 ' @param cluster - Previous cluster to link (0 for new chain)
-' @returns result - Newly allocated cluster number
+' @returns cluster_num - Newly allocated cluster number
 ' @local fat_idx - Current FAT byte index
 ' @local buf_idx - Index within FAT buffer
 ' @local high_bits - Preserved high 4 bits of FAT entry
@@ -7796,20 +7796,20 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
         debug("  [allocateCluster] FAT scan read FAILED")
         return -1
     buf_idx := fat_idx & 511
-    result := long[@fat_buf + buf_idx]                                          '  read a cluster cell
-    if (result & $0FFF_FFFF) == $0000_0000                                      '  if cluster cell is empty (check only low 28 bits)
-      high_bits := result & $F000_0000                                          '  preserve high 4 bits
+    cluster_num := long[@fat_buf + buf_idx]                                          '  read a cluster cell
+    if (cluster_num & $0FFF_FFFF) == $0000_0000                                      '  if cluster cell is empty (check only low 28 bits)
+      high_bits := cluster_num & $F000_0000                                          '  preserve high 4 bits
       long[@fat_buf + buf_idx] := high_bits | $0FFF_FFFF                        '  mark as end-of-chain, preserve high bits
-      result := fat_idx >> 2                                                    '  store cluster number in result
-      writeSector(fat_sec + result >> 7, BUF_FAT)                               '  write FAT1 sector
-      writeSector(fat2_sec + result >> 7, BUF_FAT)                              '  write FAT2 sector (MIRROR)
+      cluster_num := fat_idx >> 2                                                    '  store cluster number in cluster_num
+      writeSector(fat_sec + cluster_num >> 7, BUF_FAT)                               '  write FAT1 sector
+      writeSector(fat2_sec + cluster_num >> 7, BUF_FAT)                              '  write FAT2 sector (MIRROR)
       if cluster <> 0                                                           '  if allocateCluster was called with a non-zero cluster parameter
         if readSector(fat_sec + cluster >> 7, BUF_FAT) < 0                     '   read FAT sector containing cluster cell
           debug("  [allocateCluster] FAT chain-link read FAILED - cluster orphaned")
           return -1
         buf_idx := (cluster << 2) & 511
         high_bits := long[@fat_buf + buf_idx] & $F000_0000                      '  preserve high 4 bits
-        long[@fat_buf + buf_idx] := high_bits | (result & $0FFF_FFFF)           '  link to new cluster, preserve high bits
+        long[@fat_buf + buf_idx] := high_bits | (cluster_num & $0FFF_FFFF)           '  link to new cluster, preserve high bits
         writeSector(fat_sec + cluster >> 7, BUF_FAT)                            '  write FAT1 sector
         writeSector(fat2_sec + cluster >> 7, BUF_FAT)                           '  write FAT2 sector (MIRROR)
       if fsi_free_count <> $FFFF_FFFF                                          '  track free count incrementally
@@ -7880,35 +7880,35 @@ PRI followFatChain() | cluster, address, contents
   ' else: end-of-chain - n_sec stays invalid (caller should check position against fileSize)
 
 CON     '' helper methods
-PRI byte2clus(byte_address) : result
+PRI byte2clus(byte_address) : cluster_num
 ' Convert byte address to cluster number.
 '
 ' @param byte_address - Byte address to convert
-' @returns result - Cluster number containing that byte
+' @returns cluster_num - Cluster number containing that byte
 
   return (sec2clus(byte_address >> 9))
 
-PRI sec2clus(sector) : result
+PRI sec2clus(sector) : cluster_num
 ' Convert sector number to cluster number.
 '
 ' @param sector - Sector number to convert
-' @returns result - Cluster number containing that sector
+' @returns cluster_num - Cluster number containing that sector
 
   return (sector - root_sec) / sec_per_clus + 2
 
-PRI clus2byte(cluster) : result
+PRI clus2byte(cluster) : byte_addr
 ' Convert cluster number to byte address.
 '
 ' @param cluster - Cluster number to convert
-' @returns result - Byte address of first byte in that cluster
+' @returns byte_addr - Byte address of first byte in that cluster
 
   return clus2sec(cluster) << 9
 
-PRI clus2sec(cluster) : result
+PRI clus2sec(cluster) : sector_num
 ' Convert cluster number to sector number.
 '
 ' @param cluster - Cluster number to convert
-' @returns result - Sector number of first sector in that cluster
+' @returns sector_num - Sector number of first sector in that cluster
 
   return (cluster - 2) * sec_per_clus + root_sec
 
@@ -8067,35 +8067,35 @@ PRI calcDataCRC(pData, len) : crc | raw
   raw := GETCRC(pData, CRC_POLY_REFLECTED, len)
   crc := ((raw ^ CRC_BASE_512) REV 31) >> 16
 
-PRI sp_transfer(data, bits) : result
+PRI sp_transfer(data, bits) : rx_data
 ' Smart pin SPI transfer (variable bits) - dispatches to 8-bit or 32-bit transfer.
 ' For now, only support 8-bit and 32-bit transfers.
 '
 ' @param data - Data to transmit
 ' @param bits - Number of bits to transfer (8 or 32)
-' @returns result - Received data
+' @returns rx_data - Received data
 
   if bits == 8
-    result := sp_transfer_8(data)
+    rx_data := sp_transfer_8(data)
   elseif bits == 32
-    result := sp_transfer_32(data)
+    rx_data := sp_transfer_32(data)
   else
     ' Fallback to bit-bang for unsupported sizes
-    result := transfer(data, bits)
+    rx_data := transfer(data, bits)
 
-PRI sp_transfer_8(data) : result | _sck, _mosi, _miso, tx_data, raw_result
+PRI sp_transfer_8(data) : rx_byte | _sck, _mosi, _miso, tx_data, raw_result
 ' 8-bit smart pin SPI transfer - full-duplex 8-bit SPI transfer using smart pins.
 ' Reference: ManAtWork SpiFlash.spin2 (OBEX 2872)
 ' TX: shl #24, rev, wypin data, 16 transitions
 ' RX: wait on MISO IN flag, rdpin, rev, zerox #7
 '
 ' @param data - Byte to transmit
-' @returns result - Byte received
+' @returns rx_byte - Byte received
 ' @local _sck - Local copy of SCK pin number
 ' @local _mosi - Local copy of MOSI pin number
 ' @local _miso - Local copy of MISO pin number
 ' @local tx_data - Prepared transmit data
-' @local raw_result - Raw rdpin result before processing
+' @local raw_result - Raw rdpin rx_byte before processing
 
   _sck := sck
   _mosi := mosi
@@ -8127,20 +8127,20 @@ PRI sp_transfer_8(data) : result | _sck, _mosi, _miso, tx_data, raw_result
 
         ' Read received data - keep raw value for debug
         rdpin   raw_result, _miso
-        mov     result, raw_result
-        rev     result                          ' Reverse for MSB-first
-        zerox   result, #7                      ' Limit to 8 bits
+        mov     rx_byte, raw_result
+        rev     rx_byte                          ' Reverse for MSB-first
+        zerox   rx_byte, #7                      ' Limit to 8 bits
   end
   ' Debug: show raw rdpin value and pin info occasionally
   if sp_debug_ctr < 5
-    debug("    [sp_transfer_8] pins: miso=", udec_(_miso), " sck=", udec_(_sck), " raw=", uhex_long_(raw_result), " final=", uhex_byte_(result))
+    debug("    [sp_transfer_8] pins: miso=", udec_(_miso), " sck=", udec_(_sck), " raw=", uhex_long_(raw_result), " final=", uhex_byte_(rx_byte))
     sp_debug_ctr++
 
-PRI sp_transfer_32(data) : result | _sck, _mosi, _miso, tx_data
+PRI sp_transfer_32(data) : rx_data | _sck, _mosi, _miso, tx_data
 ' 32-bit smart pin SPI transfer - full-duplex 32-bit SPI transfer using smart pins.
 '
 ' @param data - 32-bit data to transmit
-' @returns result - 32-bit data received
+' @returns rx_data - 32-bit data received
 ' @local _sck - Local copy of SCK pin number
 ' @local _mosi - Local copy of MOSI pin number
 ' @local _miso - Local copy of MISO pin number
@@ -8172,15 +8172,15 @@ PRI sp_transfer_32(data) : result | _sck, _mosi, _miso, tx_data
   if_nz jmp     #.waitRx
 
         ' Read received data
-        rdpin   result, _miso
-        rev     result                          ' Reverse for MSB-first
+        rdpin   rx_data, _miso
+        rev     rx_data                          ' Reverse for MSB-first
   end
 
-PRI initCard() : result | t, resp, card_version, acmd41_arg
+PRI initCard() : ok | t, resp, card_version, acmd41_arg
 ' Initialize SD card - performs complete card initialization sequence per SD spec.
 ' Steps: power-on delay, SPI setup, CMD0, CMD8, ACMD41 loop, CMD58.
 '
-' @returns result - TRUE on successful init, FALSE on failure
+' @returns ok - TRUE on successful init, FALSE on failure
 ' @local t - Timeout counter
 ' @local resp - Command response byte
 ' @local card_version - Detected SD version (1 or 2)
@@ -8360,13 +8360,13 @@ PRI initCard() : result | t, resp, card_version, acmd41_arg
   return true
 
 
-PRI cmd(op,parm) : result | t
+PRI cmd(op,parm) : response | t
 ' Send a SPI command using smart pins - sends command byte, argument, and CRC.
 ' Handles R1, R3, and R7 response formats based on command type.
 '
 ' @param op - Command number (0-63)
 ' @param parm - 32-bit command argument
-' @returns result - R1 response, or R3/R7 32-bit value for CMD8/CMD58
+' @returns response - R1 response, or R3/R7 32-bit value for CMD8/CMD58
 ' @local t - Timeout counter
 
   if op == 0
@@ -8385,18 +8385,18 @@ PRI cmd(op,parm) : result | t
     sp_transfer($87,8)                                                          '  send CRC for cmd(8,$1AA)
   t := getct() + clkfreq
   repeat
-    result := sp_transfer(-1,8)                                                 '  read 1st byte of reply
-    if result <> $FF
+    response := sp_transfer(-1,8)                                                 '  read 1st byte of reply
+    if response <> $FF
       quit
     if getct() - t > 0                                                          '  check timeout
       pinh(cs)                                                                  '  CS HIGH = deselected (standard active-LOW)
       return false
   if op == 8 or op == 58                                                        '  read 32-bit reply for cmd8 and cmd58
-    result := sp_transfer(-1,32)                                                '  (memory card interface condition and operation conditions register
+    response := sp_transfer(-1,32)                                                '  (memory card interface condition and operation conditions register
   if op <> 17 and op <> 24 and op <> CMD18 and op <> CMD25 and op <> 55         '  keep cs asserted for sector read/write and application commands
     pinh(cs)                                                                    '  CS HIGH = deselected (standard active-LOW)
 
-PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout, stream_mode, clk_count, xfrq, init_phase, p_buf, align_delay, p_cache, attempt
+PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout, stream_mode, clk_count, xfrq, init_phase, p_buf, align_delay, p_cache, attempt
 ' Read a sector into buffer using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI reads
 '
@@ -8409,7 +8409,7 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
 '
 ' @param sector - Sector number to read
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
-' @returns result - 0 on success, -1 on timeout/error
+' @returns status - 0 on success, -1 on timeout/error
 ' @local _sck - Local copy of SCK pin
 ' @local _miso - Local copy of MISO pin
 ' @local data - Received data/token
@@ -8562,16 +8562,16 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
     long[p_cache] := -1                                                           ' Invalidate cache on card error
     return -1
 
-  result := 0
+  status := 0
 
 #IFDEF SD_INCLUDE_DEBUG
-PRI readSectorSlow(sector, p_buffer) : result | data, i, timeout
+PRI readSectorSlow(sector, p_buffer) : status | data, i, timeout
 ' DEBUG: Read sector byte-by-byte (no streamer) - for streamer debugging.
 ' This is SLOW (~50x slower than streamer) but helps isolate timing issues.
 '
 ' @param sector - Sector number to read
 ' @param p_buffer - Pointer to 512-byte destination buffer
-' @returns result - 0 on success, -1 on timeout/error
+' @returns status - 0 on success, -1 on timeout/error
 ' @local data - Received byte/token
 ' @local i - Loop counter
 ' @local timeout - Timeout deadline
@@ -8717,7 +8717,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
     sectors_read := 0                                                             ' Card reports error - data can't be trusted
     return
 
-PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, t, resp, p_cache, align_delay
+PRI writeSector(sector, buf_type) : ok | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, t, resp, p_cache, align_delay
 ' Write buffer into a sector using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI writes
 '
@@ -8732,7 +8732,7 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
 '
 ' @param sector - Sector number to write
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
-' @returns result - TRUE on success, FALSE on failure
+' @returns ok - TRUE on success, FALSE on failure
 ' @local _sck - Local copy of SCK pin
 ' @local _mosi - Local copy of MOSI pin
 ' @local p_buf - Pointer to source buffer
@@ -9023,11 +9023,11 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 ' These factor out common patterns used by readSectors() and writeSectors()
 ' ════════════════════════════════════════════════════════════════════════════════
 
-PRI waitR1Response() : result | t, resp
+PRI waitR1Response() : response | t, resp
 ' Wait for R1 response (non-$FF byte) - polls for R1 response after sending a command.
 ' Timeout: 100ms (per SD spec NCR = 0-8 bytes, but we allow more for slow cards)
 '
-' @returns result - R1 response byte on success, -1 on timeout
+' @returns response - R1 response byte on success, -1 on timeout
 ' @local t - Timeout deadline
 ' @local resp - Received response byte
 
@@ -9040,12 +9040,12 @@ PRI waitR1Response() : result | t, resp
       debug("  [waitR1Response] TIMEOUT")
       return -1
 
-PRI waitDataToken() : result | t, resp
+PRI waitDataToken() : status | t, resp
 ' Wait for data start token ($FE) - polls for data token before sector data.
 ' Error tokens: $01-$0F indicate read errors.
 ' Timeout: Uses card_read_timeout_ms from CSD (minimum 100ms, with 10x safety factor)
 '
-' @returns result - 0 on success (got $FE), -1 on timeout or error token
+' @returns status - 0 on success (got $FE), -1 on timeout or error token
 ' @local t - Timeout deadline
 ' @local resp - Received byte
 
@@ -9061,12 +9061,12 @@ PRI waitDataToken() : result | t, resp
       debug("  [waitDataToken] TIMEOUT")
       return -1
 
-PRI waitDataResponse() : result | t, resp
+PRI waitDataResponse() : response | t, resp
 ' Wait for data response token after write - polls for data response after sending a block.
 ' Response format: xxx0sss1 where sss = 010 (accepted), 101 (CRC err), 110 (write err)
 ' Timeout: 100ms
 '
-' @returns result - Response status on success, -1 on timeout
+' @returns response - Response status on success, -1 on timeout
 ' @local t - Timeout deadline
 ' @local resp - Received byte
 
@@ -9082,12 +9082,12 @@ PRI waitDataResponse() : result | t, resp
       debug("  [waitDataResponse] TIMEOUT")
       return -1
 
-PRI waitBusyComplete() : result | t, resp
+PRI waitBusyComplete() : status | t, resp
 ' Wait for card to finish programming - polls until MISO returns $FF (not busy).
 ' Timeout: Uses card_write_timeout_ms from CSD (default 250ms for SDHC, calculated for SDSC)
 ' CRITICAL: Must keep clocking and CS LOW during busy period!
 '
-' @returns result - 0 on success, -1 on timeout
+' @returns status - 0 on success, -1 on timeout
 ' @local t - Timeout deadline
 ' @local resp - Received byte
 
@@ -9100,11 +9100,11 @@ PRI waitBusyComplete() : result | t, resp
       debug("  [waitBusyComplete] TIMEOUT - card still busy")
       return -1
 
-PRI sendStopTransmission() : result | resp
+PRI sendStopTransmission() : status | resp
 ' Send CMD12 to stop multi-block operation - terminates multi-block read/write.
 ' Note: CMD12 has a "stuff byte" before the response - we handle this by polling.
 '
-' @returns result - 0 on success, -1 on error
+' @returns status - 0 on success, -1 on error
 ' @local resp - Response byte
 
   sp_transfer_8($40 | CMD12)                                                    ' Command byte: 0x40 | 12 = 0x4C
@@ -9124,15 +9124,15 @@ PRI sendStopTransmission() : result | resp
     return -1
 
   ' Wait for busy to complete (card may still be finishing last block)
-  result := waitBusyComplete()
+  status := waitBusyComplete()
 
-PRI recoverToIdle() : result
+PRI recoverToIdle() : status
 ' Force the card's SPI state machine back to idle by deasserting CS and clocking.
 ' In SPI mode, CS deassert aborts any pending operation (multi-block read/write, busy).
 ' Dummy clocks with CS high allow the card to release MISO and transition to standby.
 ' VERIFIES that the card actually released the bus (MISO goes high).
 '
-' @returns result - 0 if card released bus, -1 if card still holding MISO low
+' @returns status - 0 if card released bus, -1 if card still holding MISO low
 
   pinh(cs)                                                                        ' CS HIGH - abort any pending operation
   repeat 10
@@ -9150,13 +9150,13 @@ PRI recoverToIdle() : result
 
   return 0                                                                        ' Card released bus - back to idle
 
-PRI checkCardStatus(caller) : result | r1, status
+PRI checkCardStatus(caller) : status | r1, r2_status
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.
 ' R2 response format: R1 byte + status byte.
 ' Call this after every write operation and after CMD12.
 '
 ' @param caller - String identifying the calling function (for debug)
-' @returns result - 0 on success (card OK), -1 on error
+' @returns status - 0 on success (card OK), -1 on error
 ' @local r1 - R1 response byte
 ' @local status - Status byte (second byte of R2)
 
@@ -9185,7 +9185,7 @@ PRI checkCardStatus(caller) : result | r1, status
     return -1
 
   ' Get status byte (second byte of R2)
-  status := sp_transfer_8($FF)
+  r2_status := sp_transfer_8($FF)
 
   pinh(cs)                                                                      ' Deselect card
 
@@ -9194,8 +9194,8 @@ PRI checkCardStatus(caller) : result | r1, status
   ' ═══════════════════════════════════════════════════════════════════════
   last_cmd13_r1 := r1
   last_cmd13_status := status
-  if r1 <> 0 or status <> 0
-    last_cmd13_error := (r1 << 8) | status                                      ' Preserve last error
+  if r1 <> 0 or r2_status <> 0
+    last_cmd13_error := (r1 << 8) | r2_status                                      ' Preserve last error
 
   ' Check for errors
   if r1 <> $00
@@ -9224,12 +9224,12 @@ PRI checkCardStatus(caller) : result | r1, status
 
   return 0                                                                      ' Card status OK
 
-PRI transfer(data,bits) : result | _cs, _mosi, _miso, _sck, delay
+PRI transfer(data,bits) : rx_data | _cs, _mosi, _miso, _sck, delay
 ' Transfer data to/from SD card - bit-bang fallback for unsupported sizes.
 '
 ' @param data - Data to transmit
 ' @param bits - Number of bits to transfer
-' @returns result - Received data
+' @returns rx_data - Received data
 ' @local _cs - Local copy of CS pin
 ' @local _mosi - Local copy of MOSI pin
 ' @local _miso - Local copy of MISO pin
@@ -9238,10 +9238,10 @@ PRI transfer(data,bits) : result | _cs, _mosi, _miso, _sck, delay
 
   longmove(@_cs,@cs,4)
   delay := bit_delay
-  result := data << (32-bits)                                                   '  move data to MSB
+  rx_data := data << (32-bits)                                                   '  move data to MSB
   org
                 rep       @.end_rep,bits
-                 rcl      result,#1                     wc                      '  send from msb of result, receive into lsb of result
+                 rcl      rx_data,#1                     wc                      '  send from msb of rx_data, receive into lsb of rx_data
                  drvl     _sck
                  drvc     _mosi
                  waitx    delay
@@ -9250,10 +9250,10 @@ PRI transfer(data,bits) : result | _cs, _mosi, _miso, _sck, delay
                  testp    _miso                         wc
 .end_rep
                 drvh      _mosi
-                rcl       result,#1
+                rcl       rx_data,#1
   end
   if bits < 32                                                                   '  mask to requested bit count
-    result &= (1 << bits) - 1                                                   '  (skip for 32 bits - mask would wrap)
+    rx_data &= (1 << bits) - 1                                                   '  (skip for 32 bits - mask would wrap)
 
 #IFDEF SD_INCLUDE_DEBUG
 CON     '' debug methods
