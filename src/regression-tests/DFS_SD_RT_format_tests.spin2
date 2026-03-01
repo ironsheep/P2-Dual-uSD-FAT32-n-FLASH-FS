@@ -105,7 +105,7 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
 
     ' Initialize card for raw access (no filesystem mount)
     result := dfs.initCardOnly()
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Cannot initialize card for verification!")
         dfs.stop()
         debug("END_SESSION")

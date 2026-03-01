@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# run_phase4_regression.sh - Run all Phase 4 migrated SD regression tests
+# run_sd_regression.sh - Run all SD regression tests
 #
-# Usage: ./run_phase4_regression.sh [--include-format] [--include-testcard] [--compile-only]
+# Usage: ./run_sd_regression.sh [--include-format] [--include-testcard] [--compile-only]
 #
-# Runs all DFS_SD_RT_* test suites through the unified dual_fs driver.
+# Runs all DFS_SD_RT_* test suites through the unified driver.
 # Format tests and testcard validation are excluded by default (destructive/special card).
 #
 # Options:
@@ -81,6 +81,7 @@ STANDARD_TESTS=(
     "DFS_SD_RT_raw_sector_tests.spin2:60"
     "DFS_SD_RT_multiblock_tests.spin2:90"
     "DFS_SD_RT_multicog_tests.spin2:120"
+    "DFS_SD_RT_parity_tests.spin2:90"
 )
 
 FORMAT_TEST="DFS_SD_RT_format_tests.spin2:300"
@@ -98,7 +99,7 @@ fi
 # --- Banner ---
 echo ""
 echo -e "${BOLD}============================================================${NC}"
-echo -e "${BOLD}  Phase 4: SD Regression Tests via Unified Driver${NC}"
+echo -e "${BOLD}  SD Regression Tests via Unified Driver${NC}"
 echo -e "${BOLD}============================================================${NC}"
 echo ""
 echo "  Test suites: ${#ALL_TESTS[@]}"
@@ -202,7 +203,7 @@ done
 # --- Summary ---
 echo ""
 echo -e "${BOLD}============================================================${NC}"
-echo -e "${BOLD}  Phase 4 Regression Results${NC}"
+echo -e "${BOLD}  SD Regression Results${NC}"
 echo -e "${BOLD}============================================================${NC}"
 echo ""
 echo "  Suites run:    ${#ALL_TESTS[@]}"
@@ -220,5 +221,5 @@ if [[ $RUN_FAIL -gt 0 ]]; then
     exit 1
 fi
 
-echo -e "${GREEN}All Phase 4 tests passed!${NC}"
+echo -e "${GREEN}All SD regression tests passed!${NC}"
 exit 0

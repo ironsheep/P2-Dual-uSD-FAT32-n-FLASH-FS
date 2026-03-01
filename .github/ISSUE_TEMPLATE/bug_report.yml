@@ -1,0 +1,150 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I updated to the latest version available
+          required: true
+        - label: My code conforms to calling sequences shown in demo/example code
+          required: true
+
+  - type: dropdown
+    id: board
+    attributes:
+      label: P2 Board
+      options:
+        - P2 Edge Module (P2-EC)
+        - P2 Edge Module (P2-EC32MB)
+        - Custom board
+    validations:
+      required: true
+
+  - type: dropdown
+    id: device
+    attributes:
+      label: Which device is affected?
+      options:
+        - SD card only
+        - Flash only
+        - Both SD and Flash
+        - Cross-device operations (copyFile, etc.)
+        - Not device-specific
+    validations:
+      required: true
+
+  - type: input
+    id: sd-card
+    attributes:
+      label: SD Card (if applicable)
+      description: Brand, capacity, and type
+      placeholder: "e.g., SanDisk 32GB SDHC"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: card-format
+    attributes:
+      label: How was the SD card formatted? (if applicable)
+      options:
+        - P2 format utility
+        - Windows
+        - macOS
+        - Linux
+        - Factory default (never reformatted)
+        - N/A (Flash-only issue)
+        - Unknown
+    validations:
+      required: false
+
+  - type: input
+    id: compiler
+    attributes:
+      label: Compiler
+      placeholder: "e.g., pnut-ts 1.52.2"
+    validations:
+      required: true
+
+  - type: input
+    id: driver-version
+    attributes:
+      label: Driver Version
+      placeholder: "e.g., v1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      options:
+        - "No or unsure"
+        - "Yes (worked in a previous version)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the bug.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: debug-output
+    attributes:
+      label: Debug Output
+      description: If applicable, paste relevant debug or serial terminal output here.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: code-example
+    attributes:
+      label: Minimal Code Example
+      description: If possible, provide a minimal code example that reproduces the issue.
+      render: spin2
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Screenshots, logic analyzer captures, or any other relevant information.
+    validations:
+      required: false

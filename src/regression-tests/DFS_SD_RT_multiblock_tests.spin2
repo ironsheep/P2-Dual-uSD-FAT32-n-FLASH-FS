@@ -243,7 +243,7 @@ PRI testSingleWriteMultiRead() | sector, i, j, readCt, errors, expected, actual,
             write_buf[bufOffset + j] := ((i * 31) + j + $B0) & $FF
 
         ' Write this sector
-        if not dfs.writeSectorRaw(sector + i, @write_buf + bufOffset)
+        if dfs.writeSectorRaw(sector + i, @write_buf + bufOffset) <> dfs.SUCCESS
             debug("  FAIL: writeSectorRaw failed for sector ", udec_(i))
             recordFail()
             return

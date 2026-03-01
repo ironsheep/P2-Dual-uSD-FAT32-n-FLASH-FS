@@ -39,50 +39,21 @@ Standalone utility programs for SD card and Flash filesystem formatting, charact
 ### Prerequisites
 
 - **pnut-ts** and **pnut-term-ts** - See detailed installation instructions for **[macOS](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-macOS.md#installing-pnut-term-ts-on-macos)**, **[Windows](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-win.md#installing-pnut-term-ts-on-windows)**, and **[Linux/RPi](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-RPi.md#installing-pnut-term-ts-on-rpilinux)**
-- Parallax Propeller 2 (P2 Edge or P2 board with microSD add-on) connected via USB
+- Parallax P2 Edge Module (P2-EC or P2-EC32MB) connected via USB
 
-### Using the Test Runner
-
-All utilities are run from the `tools/` directory using the test runner:
-
-```bash
-cd tools/
-./run_test.sh ../src/UTILS/<utility>.spin2 [-t timeout]
-```
-
-The test runner compiles with `pnut-ts`, downloads to P2 hardware, captures debug output in headless mode, and saves logs to `tools/logs/`.
-
-### Manual Compile and Run
+### Compile and Run
 
 From this `UTILS/` directory:
 
 ```bash
 # Compile a utility
-pnut-ts -d -I ../. <utility>.spin2
+pnut-ts -d -I .. <utility>.spin2
 
 # Download and run on P2 (connects at 2 Mbit serial)
 pnut-term-ts -r <utility>.bin
 ```
 
-The `-I ../.` flag tells the compiler to find the `dual_sd_fat32_flash_fs` driver in the parent `src/` directory.
-
----
-
-## Hardware Configuration
-
-All utilities use the P2 Edge default pin configuration:
-
-```spin2
-CON
-    SD_CS   = 60    ' Chip Select
-    SD_MOSI = 59    ' Master Out Slave In
-    SD_MISO = 58    ' Master In Slave Out
-    SD_SCK  = 61    ' Serial Clock
-```
-
-The Flash chip shares MOSI, MISO, and SCK with the SD card but has a separate chip select. Both devices are managed by the unified `dual_sd_fat32_flash_fs` driver which handles SPI bus arbitration automatically.
-
-Modify the `CON` section in each utility if using different pins.
+The `-I ..` flag tells the compiler to find the `dual_sd_fat32_flash_fs` driver in the parent `src/` directory.
 
 ---
 

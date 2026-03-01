@@ -1,52 +1,40 @@
 # Example Programs
 
-Compilable, self-contained examples demonstrating common SD card driver operations. Each example can be compiled and run directly on P2 hardware.
+Compilable, self-contained examples demonstrating dual filesystem (SD + Flash) operations. Each example can be compiled and run directly on P2 hardware.
 
 ## Building
 
 From this `EXAMPLES/` directory:
 
 ```bash
-pnut-ts -I .. SD_example_read_write.spin2
-pnut-term-ts -r SD_example_read_write.bin
+pnut-ts -d -I .. DFS_example_basic.spin2
+pnut-term-ts -r DFS_example_basic.bin
 ```
 
-The `-I ..` flag tells the compiler to find `micro_sd_fat32_fs.spin2` in the parent directory.
-
-Or use the test runner from the `tools/` directory:
-
-```bash
-cd ../../tools
-./run_test.sh ../src/EXAMPLES/SD_example_read_write.spin2
-```
+The `-I ..` flag tells the compiler to find `dual_sd_fat32_flash_fs.spin2` in the parent directory. The `-d` flag enables debug output.
 
 ## Examples
 
 | Program | Description |
 |---------|-------------|
-| [SD_example_read_write.spin2](SD_example_read_write.spin2) | Basic file create, write, read-back, and delete — the "hello world" |
-| [SD_example_data_logger.spin2](SD_example_data_logger.spin2) | Append-mode logging with periodic sync for power-fail safety |
-| [SD_example_directory_walk.spin2](SD_example_directory_walk.spin2) | Directory listing, subdirectory creation, file delete and rename |
-| [SD_example_multicog.spin2](SD_example_multicog.spin2) | Two cogs accessing different files concurrently |
-
-## Pin Configuration
-
-All examples default to the P2 Edge Module SD card slot (base pin 56). To use a different 8-pin header group, change `SD_BASE` in the `CON` section. See the [Driver Tutorial](../../DOCs/SD-CARD-DRIVER-TUTORIAL.md#using-a-different-8-pin-header-group) for the complete header group reference table.
+| [DFS_example_basic.spin2](DFS_example_basic.spin2) | Mount both devices, write/read files on each, show stats — the "hello world" |
+| [DFS_example_cross_copy.spin2](DFS_example_cross_copy.spin2) | Copy a file from SD to Flash and back, verify round-trip data integrity |
+| [DFS_example_data_logger.spin2](DFS_example_data_logger.spin2) | Log sensor data to Flash, then archive (copy) the log to SD |
 
 ## What Each Example Teaches
 
-### Read/Write (Start Here)
-Mount, create a file, write text, close, re-open for reading, read back, unmount. Demonstrates the complete file lifecycle and error checking on every API call.
+### Basic (Start Here)
+
+Initialize the driver, mount both SD and Flash, write a text file to each device using its native API (SD uses `createFileNew`/`writeHandle`, Flash uses `open`/`wr_str`), read both files back, display filesystem stats, clean up and unmount. Demonstrates the complete dual-device lifecycle and error checking on every API call.
+
+### Cross-Device Copy
+
+Creates a file on SD, copies it to Flash using `copyFile()`, then copies it back to SD under a new name. Performs byte-by-byte comparison of the original and round-trip copy to verify data integrity across devices. Demonstrates the `copyFile()` API for moving data between SD and Flash.
 
 ### Data Logger
-The most common real-world pattern. Opens an existing file for append (or creates a new one), writes CSV entries, and uses `syncHandle()` to checkpoint data periodically. If power is lost, all synced entries survive.
 
-### Directory Walk
-Shows both index-based (`readDirectory`) and handle-based (`openDirectory` / `readDirectoryHandle`) directory enumeration. Also demonstrates `deleteFile()`, `rename()`, `newDirectory()`, and `changeDirectory()`.
-
-### Multi-Cog
-The P2-specific killer feature. Starts a second cog that reads a file while the main cog writes a different file. Demonstrates the singleton driver pattern, per-cog isolation, and the hardware lock serialization that makes concurrent access safe.
+The most common real-world dual-FS pattern. Opens a log file on Flash for fast writes, records timestamped sensor readings (simulated), then archives the completed log from Flash to SD using `copyFile()`. Verifies the archive by reading it back from SD. This pattern is useful for embedded data acquisition where Flash provides fast write buffering and SD provides large removable archival storage.
 
 ---
 
-*Part of the [P2 microSD FAT32 Filesystem](../../README.md) project — Iron Sheep Productions*
+*Part of the [P2 Dual SD FAT32 + Flash Filesystem](../../README.md) project — Iron Sheep Productions*

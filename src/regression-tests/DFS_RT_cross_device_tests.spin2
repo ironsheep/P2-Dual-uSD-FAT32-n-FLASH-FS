@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
-''   File....... DFS_RT_phase6_cross_device.spin2
-''   Purpose.... Phase 6 verification: cross-device operations and copyFile()
+''   File....... DFS_RT_cross_device_tests.spin2
+''   Purpose.... Cross-device operations: interleaved I/O, copyFile(), device alternation
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -18,6 +18,8 @@
 ''   - copyFile() with various file sizes (small, sector boundary, multi-block)
 ''   - copyFile() error cases (source not found, bad device)
 ''   - Post-copy data integrity verification
+''
+'' 21 tests total
 ''
 '' =================================================================================================
 
@@ -74,11 +76,11 @@ readBuffer2     BYTE    0[BUFFER_SIZE]
 readBuf2_guard  BYTE    0[16]
 
 PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWritten, bMatch, sdFree, flBlocks, flFree, flFiles, fileSize
-'' Main entry point for Phase 6 cross-device regression tests
+'' Main entry point for cross-device regression tests
 
     debug(" ")
     debug("==============================================")
-    debug("  Dual FS Phase 6 - Cross-Device Tests")
+    debug("  Dual FS Cross-Device Tests")
     debug("==============================================")
 
     ' ======================================================================
@@ -421,6 +423,72 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
     utils.evaluateSubBool(dfs.mounted(dfs.DEV_SD), @"SD mounted", true)
     utils.evaluateSubBool(dfs.mounted(dfs.DEV_FLASH), @"Flash mounted", true)
     utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Cross-Device Edge Cases
+    ' ======================================================================
+    utils.startTestGroup(@"Cross-Device Edge Cases")
+
+    ' Test: copyFile when destination already exists on Flash (should overwrite)
+    utils.startTest(@"copyFile to existing Flash file overwrites")
+    ' flFileCopy was created earlier — write new content to SD source
+    dfs.deleteFile(dfs.DEV_SD, @sdFile1)
+    handle := dfs.createFileNew(dfs.DEV_SD, @sdFile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @"OVERWRITE-TEST!", 15)
+        dfs.closeFileHandle(handle)
+    ' Copy over existing Flash file
+    status := dfs.copyFile(dfs.DEV_SD, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
+    utils.evaluateSubValue(status, @"copyFile overwrites Flash", dfs.SUCCESS)
+    ' Verify content is the new data
+    handle := dfs.open(dfs.DEV_FLASH, @flFileCopy, dfs.FILEMODE_READ)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+    utils.evaluateSubValue(bytesRead, @"new content size", 15)
+
+    ' Test: copyFile when destination already exists on SD (should fail with E_FILE_EXISTS)
+    utils.startTest(@"copyFile to existing SD file returns E_FILE_EXISTS")
+    ' sdFile1 exists. Copy Flash file to same SD filename.
+    status := dfs.copyFile(dfs.DEV_FLASH, @flFile1, dfs.DEV_SD, @sdFile1)
+    debug("  copyFile to existing SD: ", sdec_(status))
+    ' SD uses createFileNew which fails if file exists
+    utils.evaluateBool(status < 0, @"copy to existing SD fails", true)
+
+    ' Test: seekHandle on SD write-mode handle + write at position
+    utils.startTest(@"seekHandle + write at position on SD")
+    dfs.deleteFile(dfs.DEV_SD, @sdFile2)
+    handle := dfs.createFileNew(dfs.DEV_SD, @sdFile2)
+    if handle >= 0
+        ' Write initial content: 16 bytes
+        dfs.writeHandle(handle, @mediumContent, 16)
+        ' Seek back to position 4 and overwrite
+        dfs.seekHandle(handle, 4)
+        dfs.writeHandle(handle, @"XXXX", 4)
+        dfs.closeFileHandle(handle)
+    ' Read back and verify the overwrite
+    handle := dfs.openFileRead(dfs.DEV_SD, @sdFile2)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        dfs.closeFileHandle(handle)
+    ' Bytes 4-7 should be "XXXX"
+    bMatch := (readBuffer[4] == "X" and readBuffer[5] == "X" and readBuffer[6] == "X" and readBuffer[7] == "X")
+    utils.evaluateBool(bMatch, @"SD seek+write overwrote", true)
+
+    ' Test: seekHandle on Flash read handle + read at position
+    utils.startTest(@"seekHandle + read at position on Flash")
+    ' flFile2 contains "FL-AFL-B" (8 bytes written interleaved earlier)
+    handle := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_READ)
+    if handle >= 0
+        ' Seek to position 4 to read "FL-B"
+        dfs.seekHandle(handle, 4)
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 4)
+        dfs.closeFileHandle(handle)
+    bMatch := (readBuffer[0] == "F" and readBuffer[1] == "L" and readBuffer[2] == "-" and readBuffer[3] == "B")
+    utils.evaluateBool(bMatch, @"Flash seek+read correct", true)
 
     ' ======================================================================
     ' Cleanup and Summary

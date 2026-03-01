@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# run_phase5_regression.sh - Run all Phase 5 migrated Flash regression tests
+# run_flash_regression.sh - Run all Flash regression tests
 #
-# Usage: ./run_phase5_regression.sh [--include-8cog] [--compile-only]
+# Usage: ./run_flash_regression.sh [--include-8cog] [--compile-only]
 #
-# Runs all DFS_FL_RT_* test suites through the unified dual_fs driver.
+# Runs all DFS_FL_RT_* test suites through the unified driver.
 # The 8cog test is excluded by default (high resource usage, long runtime).
 #
 # IMPORTANT: circular_compat_tests depends on data written by circular_tests.
@@ -73,6 +73,7 @@ STANDARD_TESTS=(
     "DFS_FL_RT_seek_tests.spin2:90"
     "DFS_FL_RT_circular_tests.spin2:120"
     "DFS_FL_RT_circular_compat_tests.spin2:120"
+    "DFS_FL_RT_cwd_tests.spin2:90"
 )
 
 EIGHT_COG_TEST="DFS_FL_RT_8cog_tests.spin2:180"
@@ -86,7 +87,7 @@ fi
 # --- Banner ---
 echo ""
 echo -e "${BOLD}============================================================${NC}"
-echo -e "${BOLD}  Phase 5: Flash Regression Tests via Unified Driver${NC}"
+echo -e "${BOLD}  Flash Regression Tests via Unified Driver${NC}"
 echo -e "${BOLD}============================================================${NC}"
 echo ""
 echo "  Test suites: ${#ALL_TESTS[@]}"
@@ -185,7 +186,7 @@ done
 # --- Summary ---
 echo ""
 echo -e "${BOLD}============================================================${NC}"
-echo -e "${BOLD}  Phase 5 Regression Results${NC}"
+echo -e "${BOLD}  Flash Regression Results${NC}"
 echo -e "${BOLD}============================================================${NC}"
 echo ""
 echo "  Suites run:    ${#ALL_TESTS[@]}"
@@ -203,5 +204,5 @@ if [[ $RUN_FAIL -gt 0 ]]; then
     exit 1
 fi
 
-echo -e "${GREEN}All Phase 5 tests passed!${NC}"
+echo -e "${GREEN}All Flash regression tests passed!${NC}"
 exit 0

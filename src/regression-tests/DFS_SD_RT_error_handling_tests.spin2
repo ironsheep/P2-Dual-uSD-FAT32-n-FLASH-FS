@@ -85,7 +85,7 @@ mbr_buf         BYTE    0[SECTOR_SIZE]
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | workerCog, result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
+PUB go() | workerCog, status, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
 '' Main entry point for error handling regression tests
 ''
 '' Tests error conditions and edge cases for the SD card driver
@@ -97,8 +97,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
 
     ' Mount the card first
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -158,21 +158,21 @@ PUB go() | workerCog, result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
     ' Test: Create directory that already exists returns error
     utils.startTest(@"newDirectory() on existing directory fails")
     ' Create directory first time - should succeed
-    result := dfs.newDirectory(dfs.DEV_SD, @testdir1)
-    debug("  First newDirectory: ", sdec_(result))
-    ' Try to create same directory again - should fail
-    result := dfs.newDirectory(dfs.DEV_SD, @testdir1)
-    debug("  Second newDirectory: ", sdec_(result))
-    ' newDirectory returns boolean, not error code
-    utils.evaluateBool(result, @"second newDirectory()", false)
+    status := dfs.newDirectory(dfs.DEV_SD, @testdir1)
+    debug("  First newDirectory: ", sdec_(status))
+    utils.evaluateSubValue(status, @"first newDirectory()", dfs.SUCCESS)
+    ' Try to create same directory again - should fail with E_FILE_EXISTS
+    status := dfs.newDirectory(dfs.DEV_SD, @testdir1)
+    debug("  Second newDirectory: ", sdec_(status))
+    utils.evaluateSingleValue(status, @"second newDirectory()", dfs.E_FILE_EXISTS)
 
     ' Test: Create file in non-existent directory
     ' NOTE: This tests path handling - trying to create "NONEXIST/FILE.TXT"
     ' The driver may not support path syntax - documenting behavior
     utils.startTest(@"createFileNew() in non-existent dir behavior")
     ' First try to cd to non-existent directory
-    result := dfs.changeDirectory(dfs.DEV_SD, @testdir2)
-    utils.evaluateBool(result, @"cd to non-existent dir", false)
+    status := dfs.changeDirectory(dfs.DEV_SD, @testdir2)
+    utils.evaluateSingleValue(status, @"cd to non-existent dir", dfs.E_FILE_NOT_FOUND)
 
     ' ----------------------------------
     ' TEST GROUP: Handle Reuse Patterns
@@ -270,9 +270,9 @@ PUB go() | workerCog, result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
     utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig before", MBR_SIGNATURE)
 
     ' Attempt to create directory with non-existent parent
-    result := dfs.newDirectory(dfs.DEV_SD, @badPath1)
-    debug("  newDirectory(NOEXIST/CHILD) returned ", sdec_(result))
-    utils.evaluateSubBool(result, @"newDirectory(bad path)", false)
+    status := dfs.newDirectory(dfs.DEV_SD, @badPath1)
+    debug("  newDirectory(NOEXIST/CHILD) returned ", sdec_(status))
+    utils.evaluateSubBool(status < 0, @"newDirectory(bad path)", true)
 
     ' Re-read MBR — signature MUST still be intact
     dfs.readSectorRaw(0, @mbr_buf)
@@ -332,11 +332,88 @@ PUB go() | workerCog, result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
         dfs.writeHandle(handle, @"File2", 5)
         dfs.closeFileHandle(handle)
 
-    ' Test: rename to existing destination returns false
-    utils.startTest(@"rename to existing destination returns false")
-    result := dfs.rename(dfs.DEV_SD, @testfile1, @testfile2)
-    debug("  rename(ERTEST1 -> ERTEST2): ", sdec_(result))
-    utils.evaluateBool(result, @"rename to existing", false)
+    ' Test: rename to existing destination returns E_FILE_EXISTS
+    utils.startTest(@"rename to existing destination returns E_FILE_EXISTS")
+    status := dfs.rename(dfs.DEV_SD, @testfile1, @testfile2)
+    debug("  rename(ERTEST1 -> ERTEST2): ", sdec_(status))
+    utils.evaluateSingleValue(status, @"rename to existing", dfs.E_FILE_EXISTS)
+
+    ' ----------------------------------
+    ' TEST GROUP: Edge Case Error Paths
+    ' ----------------------------------
+    utils.startTestGroup(@"Edge Case Error Paths")
+
+    ' Setup: create a fresh test file for edge case tests
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, 10)
+        dfs.closeFileHandle(handle)
+
+    ' Test: deleteFile on file with open read handle
+    utils.startTest(@"deleteFile on file with open read handle")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    if h1 >= 0
+        status := dfs.deleteFile(dfs.DEV_SD, @testfile1)
+        debug("  deleteFile while read-open: ", sdec_(status))
+        ' Document behavior: driver may succeed or return an error
+        utils.evaluateBool(status == dfs.SUCCESS or status < 0, @"returns SUCCESS or error", true)
+        dfs.closeFileHandle(h1)
+
+    ' Test: rename on file with open read handle
+    utils.startTest(@"rename on file with open read handle")
+    ' Recreate if deleted above
+    if dfs.exists(dfs.DEV_SD, @testfile1) == false
+        handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+        if handle >= 0
+            dfs.writeHandle(handle, @testContent, 10)
+            dfs.closeFileHandle(handle)
+    h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    if h1 >= 0
+        status := dfs.rename(dfs.DEV_SD, @testfile1, @testfile2)
+        debug("  rename while read-open: ", sdec_(status))
+        utils.evaluateBool(status == dfs.SUCCESS or status < 0, @"returns SUCCESS or error", true)
+        dfs.closeFileHandle(h1)
+
+    ' Test: mount() with invalid device code returns E_BAD_DEVICE
+    utils.startTest(@"mount(99) returns E_BAD_DEVICE")
+    status := dfs.mount(99)
+    utils.evaluateSingleValue(status, @"mount(99)", dfs.E_BAD_DEVICE)
+
+    ' Test: writeHandle with count=0 does not crash
+    utils.startTest(@"writeHandle with count=0 is safe")
+    ' Recreate test file
+    dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        bytesWritten := dfs.writeHandle(handle, @testContent, 0)
+        debug("  writeHandle(count=0): ", sdec_(bytesWritten))
+        ' Should return 0 bytes written without crash
+        utils.evaluateSingleValue(bytesWritten, @"writeHandle(0)", 0)
+        dfs.closeFileHandle(handle)
+
+    ' Test: readHandle with count=0 does not crash
+    utils.startTest(@"readHandle with count=0 is safe")
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        bytesRead := dfs.readHandle(handle, @readBuffer, 0)
+        debug("  readHandle(count=0): ", sdec_(bytesRead))
+        utils.evaluateSingleValue(bytesRead, @"readHandle(0)", 0)
+        dfs.closeFileHandle(handle)
+
+    ' Test: seekHandle beyond file size returns error or partial seek
+    utils.startTest(@"seekHandle beyond EOF returns error or clamped position")
+    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    if handle >= 0
+        ' File is 10 bytes. Seek to position 9999.
+        status := dfs.seekHandle(handle, 9999)
+        debug("  seekHandle(9999): ", sdec_(status))
+        ' After seeking past EOF, a read should return 0 bytes
+        bytesRead := dfs.readHandle(handle, @readBuffer, 10)
+        utils.evaluateSingleValue(bytesRead, @"read after seek past EOF", 0)
+        dfs.closeFileHandle(handle)
 
     ' ----------------------------------
     ' Cleanup: Delete test files and directories

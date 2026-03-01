@@ -256,7 +256,7 @@ Delete after porting (old names):
 
 ## Verification
 
-- Compile all ported utilities with `pnut-ts -d -I ../. <file>.spin2`
+- Compile all ported utilities with `pnut-ts -d -I .. <file>.spin2`
 - Run existing Phase 1-6 regression tests to verify no regressions
 - Test exists(), file_size(), serial_number(), stats() for SD via new test or shell commands
 - Test byte/word/long/string I/O for SD handles

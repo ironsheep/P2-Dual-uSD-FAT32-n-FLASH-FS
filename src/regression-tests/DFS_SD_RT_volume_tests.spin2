@@ -87,7 +87,7 @@ readBuffer_guard BYTE   0[16]
 ' Saved original label
 origLabel       BYTE    0[12]
 
-PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, fileSize, vbrSector, found
+PUB go() | workerCog, result, status, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, fileSize, vbrSector, found
 '' Main entry point for volume operation regression tests
 
     debug(" ")
@@ -128,8 +128,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
 
     ' Test: Set a new volume label
     utils.startTest(@"setVolumeLabel() changes label")
-    result := dfs.setVolumeLabel(dfs.DEV_SD, @newLabel)
-    utils.evaluateBool(result, @"setVolumeLabel()", true)
+    status := dfs.setVolumeLabel(dfs.DEV_SD, @newLabel)
+    utils.evaluateSingleValue(status, @"setVolumeLabel()", dfs.SUCCESS)
 
     ' Test: volumeLabel() returns the new label
     utils.startTest(@"volumeLabel() returns new label after set")
@@ -140,8 +140,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
 
     ' Test: Max length label (11 chars)
     utils.startTest(@"setVolumeLabel() accepts 11-char label")
-    result := dfs.setVolumeLabel(dfs.DEV_SD, @maxLabel)
-    utils.evaluateBool(result, @"setVolumeLabel(11 chars)", true)
+    status := dfs.setVolumeLabel(dfs.DEV_SD, @maxLabel)
+    utils.evaluateSingleValue(status, @"setVolumeLabel(11 chars)", dfs.SUCCESS)
 
     ' Test: Label persists through unmount/remount
     utils.startTest(@"Label persists through unmount/remount")
@@ -155,8 +155,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
 
     ' Test: Restore original label
     utils.startTest(@"Restore original volume label")
-    result := dfs.setVolumeLabel(dfs.DEV_SD, @origLabel)
-    utils.evaluateBool(result, @"restore label", true)
+    status := dfs.setVolumeLabel(dfs.DEV_SD, @origLabel)
+    utils.evaluateSingleValue(status, @"restore label", dfs.SUCCESS)
     pLabel := dfs.volumeLabel(dfs.DEV_SD)
     debug("   Restored label: [", zstr_(pLabel), "]")
 
@@ -232,8 +232,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
 
     ' Test: sync with no file open
     utils.startTest(@"sync() with no file open")
-    result := dfs.sync()
-    utils.evaluateBool(result, @"sync() no file", true)
+    status := dfs.sync()
+    utils.evaluateSingleValue(status, @"sync() no file", dfs.SUCCESS)
 
     ' ======================================================================
     ' TEST GROUP: setDate
@@ -397,9 +397,9 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
     utils.startTest(@"Read MBR to find VBR sector")
     bytefill(@vbrBuf, 0, 512)
     utils.initGuard(@vbrBuf_guard)
-    result := dfs.readSectorRaw(0, @vbrBuf)
+    status := dfs.readSectorRaw(0, @vbrBuf)
     utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
-    utils.evaluateBool(result, @"readSectorRaw(0)", true)
+    utils.evaluateSingleValue(status, @"readSectorRaw(0)", dfs.SUCCESS)
 
     ' Get VBR sector from partition table (offset $1C6 = 454, 4-byte LE)
     utils.startTest(@"MBR partition table has valid VBR sector")
@@ -412,9 +412,9 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
     utils.startTest(@"VBR has boot signature $AA55")
     bytefill(@vbrBuf, 0, 512)
     utils.initGuard(@vbrBuf_guard)
-    result := dfs.readSectorRaw(vbrSector, @vbrBuf)
+    status := dfs.readSectorRaw(vbrSector, @vbrBuf)
     utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
-    if result
+    if status == dfs.SUCCESS
         result := WORD[@vbrBuf + $1FE]
         utils.evaluateSingleValueHex(result, @"boot signature", MBR_SIGNATURE)
     else
@@ -440,9 +440,9 @@ PUB go() | workerCog, result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabe
     utils.startTest(@"readVBRRaw() returns VBR data")
     bytefill(@vbrBuf2, 0, 512)
     utils.initGuard(@vbrBuf2_guard)
-    result := dfs.readVBRRaw(@vbrBuf2)
+    status := dfs.readVBRRaw(@vbrBuf2)
     utils.checkGuard(@vbrBuf2_guard, @"vbrBuf2 guard")
-    utils.evaluateBool(result, @"readVBRRaw()", true)
+    utils.evaluateSingleValue(status, @"readVBRRaw()", dfs.SUCCESS)
 
     ' Test: readVBRRaw() matches readSectorRaw(vbrSector) data
     utils.startTest(@"readVBRRaw() matches readSectorRaw(VBR)")

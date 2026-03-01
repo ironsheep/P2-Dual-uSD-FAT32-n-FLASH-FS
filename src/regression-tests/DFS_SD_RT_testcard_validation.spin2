@@ -371,12 +371,12 @@ PRI test_deep_path() | result, fileSize, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_directory_navigation() | result, count, idx, pEntry
+PRI test_directory_navigation() | result, status, count, idx, pEntry
     utils.startTestGroup(@"Test 12: Directory Navigation (MULTI)")
 
     utils.startTest(@"Change to MULTI directory")
-    result := dfs.changeDirectory(dfs.DEV_SD, @dirMulti)
-    utils.evaluateBool(result, @"changeDirectory()", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @dirMulti)
+    utils.evaluateSingleValue(status, @"changeDirectory()", dfs.SUCCESS)
 
     utils.startTest(@"Enumerate files in MULTI - expect 5")
     count := 0
@@ -392,8 +392,8 @@ PRI test_directory_navigation() | result, count, idx, pEntry
     utils.evaluateSingleValue(count, @"file count", 5)
 
     utils.startTest(@"Navigate back to root")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
 
 
 PRI test_benchmark_sequential() | start, elapsed, bytesRead, i, bytesPerSec, handle

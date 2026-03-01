@@ -63,7 +63,19 @@ DAT
 csdBuf          BYTE    0[16]
 csdBuf_guard    BYTE    0[16]
 
-PUB go() | workerCog, result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed
+' CID register buffer (16 bytes)
+cidBuf          BYTE    0[16]
+cidBuf_guard    BYTE    0[16]
+
+' SCR register buffer (8 bytes)
+scrBuf          BYTE    0[8]
+scrBuf_guard    BYTE    0[16]
+
+' SD Status buffer (64 bytes)
+sdsBuf          BYTE    0[64]
+sdsBuf_guard    BYTE    0[16]
+
+PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, ocr, mid, r2, sdSpec
 '' Main entry point for register access regression tests
 
     debug(" ")
@@ -97,9 +109,9 @@ PUB go() | workerCog, result, csdVer, tranSpeed, capacity, cardSectors, readTime
     utils.startTest(@"readCSDRaw() returns data successfully")
     bytefill(@csdBuf, 0, 16)
     utils.initGuard(@csdBuf_guard)
-    result := dfs.readCSDRaw(@csdBuf)
+    status := dfs.readCSDRaw(@csdBuf)
     utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
-    utils.evaluateBool(result, @"readCSDRaw()", true)
+    utils.evaluateSingleValue(status, @"readCSDRaw()", dfs.SUCCESS)
 
     ' Test: CSD version is valid (0 for SDSC, 1 for SDHC/SDXC)
     utils.startTest(@"CSD version is valid (0 or 1)")
@@ -137,13 +149,13 @@ PUB go() | workerCog, result, csdVer, tranSpeed, capacity, cardSectors, readTime
     ' Test: readCSDRaw works via initCardOnly path (unmounted)
     utils.startTest(@"readCSDRaw() works after initCardOnly")
     dfs.unmount(dfs.DEV_SD)
-    result := dfs.initCardOnly()
-    utils.evaluateSubBool(result, @"initCardOnly()", true)
+    status := dfs.initCardOnly()
+    utils.evaluateSubValue(status, @"initCardOnly()", dfs.SUCCESS)
     bytefill(@csdBuf, 0, 16)
     utils.initGuard(@csdBuf_guard)
-    result := dfs.readCSDRaw(@csdBuf)
+    status := dfs.readCSDRaw(@csdBuf)
     utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
-    utils.evaluateSubBool(result, @"readCSDRaw() unmounted", true)
+    utils.evaluateSubValue(status, @"readCSDRaw() unmounted", dfs.SUCCESS)
     ' Verify same version
     result := (csdBuf[0] >> 6) & $03
     utils.evaluateSubValue(result, @"CSD version matches", csdVer)
@@ -192,6 +204,71 @@ PUB go() | workerCog, result, csdVer, tranSpeed, capacity, cardSectors, readTime
     else
         ' Other TRAN_SPEED values - just check range
         utils.evaluateRange(maxSpeed, @"max speed Hz", 25_000_000, 50_000_000)
+
+    ' ======================================================================
+    ' TEST GROUP: CID Register
+    ' ======================================================================
+    utils.startTestGroup(@"CID Register")
+
+    utils.startTest(@"readCIDRaw() returns SUCCESS")
+    bytefill(@cidBuf, 0, 16)
+    utils.initGuard(@cidBuf_guard)
+    status := dfs.readCIDRaw(@cidBuf)
+    utils.checkGuard(@cidBuf_guard, @"cidBuf guard")
+    utils.evaluateSingleValue(status, @"readCIDRaw()", dfs.SUCCESS)
+
+    utils.startTest(@"CID manufacturer ID > 0")
+    mid := cidBuf[0]
+    debug("   CID Manufacturer ID: $", uhex_byte_(mid))
+    utils.evaluateSubBool(mid > 0, @"MID > 0", true)
+
+    utils.startTest(@"CID MID matches getManufacturerID()")
+    result := dfs.getManufacturerID()
+    utils.evaluateSingleValue(result, @"getManufacturerID()", mid)
+
+    ' ======================================================================
+    ' TEST GROUP: SCR Register
+    ' ======================================================================
+    utils.startTestGroup(@"SCR Register")
+
+    utils.startTest(@"readSCRRaw() returns SUCCESS")
+    bytefill(@scrBuf, 0, 8)
+    utils.initGuard(@scrBuf_guard)
+    status := dfs.readSCRRaw(@scrBuf)
+    utils.checkGuard(@scrBuf_guard, @"scrBuf guard")
+    utils.evaluateSingleValue(status, @"readSCRRaw()", dfs.SUCCESS)
+
+    utils.startTest(@"SCR SD_SPEC version in valid range")
+    sdSpec := (scrBuf[0] >> 4) & $0F
+    debug("   SCR SD_SPEC: ", udec_(sdSpec))
+    ' SD_SPEC: 0=v1.0, 1=v1.10, 2=v2.00+, 3=v3.0x, 4=v4.xx
+    utils.evaluateRange(sdSpec, @"SD_SPEC version", 0, 4)
+
+    ' ======================================================================
+    ' TEST GROUP: OCR Register
+    ' ======================================================================
+    utils.startTestGroup(@"OCR Register")
+
+    utils.startTest(@"getOCR() returns non-zero")
+    ocr := dfs.getOCR()
+    debug("   OCR: $", uhex_long_(ocr))
+    utils.evaluateSubBool(ocr <> 0, @"OCR non-zero", true)
+
+    utils.startTest(@"OCR voltage range bits set")
+    ' Bits 20-23 should have voltage range bits set (3.2-3.6V typical)
+    utils.evaluateSubBool((ocr >> 20) & $0F <> 0, @"voltage bits set", true)
+
+    ' ======================================================================
+    ' TEST GROUP: SD Status Register
+    ' ======================================================================
+    utils.startTestGroup(@"SD Status Register")
+
+    utils.startTest(@"readSDStatusRaw() returns SUCCESS")
+    bytefill(@sdsBuf, 0, 64)
+    utils.initGuard(@sdsBuf_guard)
+    status := dfs.readSDStatusRaw(@sdsBuf)
+    utils.checkGuard(@sdsBuf_guard, @"sdsBuf guard")
+    utils.evaluateSingleValue(status, @"readSDStatusRaw()", dfs.SUCCESS)
 
     ' ======================================================================
     ' Cleanup and Summary

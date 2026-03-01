@@ -93,7 +93,7 @@ PUB go() | workerCog, result, i, sector
     ' Initialize card only (no filesystem mount - we're doing raw sector access)
     debug("Initializing SD card (V2 driver with streamer)...")
     result := dfs.initCardOnly()
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Card init failed!")
         debug("END_SESSION")
         return
@@ -317,7 +317,7 @@ PRI writeAndVerify(sector, expectedPattern) : success
 ' @param expectedPattern - expected pattern ID for verification
 ' @returns success - true if write succeeded and readback matches
 
-    if not dfs.writeSectorRaw(sector, @write_buf)
+    if dfs.writeSectorRaw(sector, @write_buf) <> dfs.SUCCESS
         debug("  WRITE FAILED!")
         return false
 

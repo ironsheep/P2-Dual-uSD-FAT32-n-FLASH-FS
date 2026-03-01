@@ -5056,36 +5056,35 @@ PUB version(dev) : ver
     other:     return DFS_VERSION
 
 #IFDEF SD_INCLUDE_RAW
-PUB initCardOnly() : result
+PUB initCardOnly() : status
 '' Initialize SD card without mounting filesystem - for raw sector access.
 '' Use this for low-level operations like formatting. Does NOT read filesystem.
 '' Requires init() to have been called first.
 ''
-'' @returns result - TRUE if card initialized successfully, FALSE otherwise
+'' @returns status - SUCCESS or negative error code (E_NOT_MOUNTED, E_INIT_FAILED)
 
   ' Require init() to have been called
   if cog_id == -1
     debug("  [initCardOnly] FAIL: init() not called, worker not running")
-    return false
+    return set_error(E_NOT_MOUNTED)
 
   ' Check if already in filesystem mode - reject (must unmount first)
   if driver_mode == MODE_FILESYSTEM
     debug("  [initCardOnly] REJECTED: Already mounted as filesystem, unmount first")
-    return false
+    return set_error(E_NOT_MOUNTED)
 
   ' Check if already in raw mode - already initialized
   if driver_mode == MODE_RAW
     debug("  [initCardOnly] Already initialized in raw mode")
-    return true
+    return SUCCESS
 
   ' Send init command to worker
-  result := send_command(CMD_INIT_CARD_ONLY, 0, 0, 0, 0)
-  if result == SUCCESS
+  status := send_command(CMD_INIT_CARD_ONLY, 0, 0, 0, 0)
+  if status == SUCCESS
     debug("  [initCardOnly] Card initialized successfully via worker")
-    return true
   else
-    debug("  [initCardOnly] Card initialization failed, error=", sdec_(result))
-    return false
+    debug("  [initCardOnly] Card initialization failed, error=", sdec_(status))
+    set_error(status)
 
 PUB cardSizeSectors() : result
 '' Get total sectors on card via worker cog.
@@ -5181,45 +5180,48 @@ PUB testCMD13() : r2_response | r1, status
 #ENDIF
 
 #IFDEF SD_INCLUDE_RAW
-PUB writeSectorRaw(sector, p_buffer) : result
+PUB writeSectorRaw(sector, p_buffer) : status
 '' Write a sector at absolute LBA address - low-level for formatting/partitioning.
 '' Bypasses filesystem. Requires initCardOnly() or mount() first.
 ''
 '' @param sector - Absolute LBA sector number
 '' @param p_buffer - Pointer to 512 bytes of data to write
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns status - SUCCESS or negative error code (E_NOT_MOUNTED)
 
   ' Require worker cog to be running (no direct access allowed)
   if cog_id == -1
     debug("  [writeSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
-    return false
+    return set_error(E_NOT_MOUNTED)
   ' Require SD card to be initialized (mount or initCardOnly)
   if driver_mode == MODE_NONE
     debug("  [writeSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
-    return false
-  result := send_command(CMD_WRITE_SECTOR_RAW, sector, p_buffer, 0, 0) == SUCCESS
-  if result
+    return set_error(E_NOT_MOUNTED)
+  status := send_command(CMD_WRITE_SECTOR_RAW, sector, p_buffer, 0, 0)
+  if status == SUCCESS
     debug("  [writeSectorRaw] Wrote sector ", udec(sector))
   else
     debug("  [writeSectorRaw] FAILED to write sector ", udec(sector))
+    set_error(status)
 
-PUB readSectorRaw(sector, p_buffer) : result
+PUB readSectorRaw(sector, p_buffer) : status
 '' Read a sector at absolute LBA address - low-level for verification.
 '' Bypasses filesystem. Requires initCardOnly() or mount() first.
 ''
 '' @param sector - Absolute LBA sector number
 '' @param p_buffer - Pointer to 512-byte buffer to receive data
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns status - SUCCESS or negative error code (E_NOT_MOUNTED)
 
   ' Require worker cog to be running (no direct access allowed)
   if cog_id == -1
     debug("  [readSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
-    return false
+    return set_error(E_NOT_MOUNTED)
   ' Require SD card to be initialized (mount or initCardOnly)
   if driver_mode == MODE_NONE
     debug("  [readSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
-    return false
-  result := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0) == SUCCESS
+    return set_error(E_NOT_MOUNTED)
+  status := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0)
+  if status <> SUCCESS
+    set_error(status)
   debug("  [readSectorRaw] Read sector ", udec(sector))
 
 PUB readSectorsRaw(start_sector, count, p_buffer) : result
@@ -5269,72 +5271,64 @@ CON ' ════════════════════════�
     '   types here and export them for consumer objects.
     ' ═══════════════════════════════════════════════════════════════════════════
 
-PUB readCIDRaw(p_buf) : result | status
+PUB readCIDRaw(p_buf) : status
 '' Read CID register (16 bytes) into buffer.
 '' Contains manufacturer ID, product name, serial number, and manufacturing date.
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param p_buf - Pointer to cid_t buffer to receive CID data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns status - SUCCESS or negative error code
 
   status := send_command(CMD_READ_CID, p_buf, 0, 0, 0)
   if status == SUCCESS
     debug("  [readCIDRaw] CID read successfully")
-    result := true
   else
     debug("  [readCIDRaw] CID read FAILED")
-    result := false
+    set_error(status)
 
-PUB readCSDRaw(p_buf) : result | status
+PUB readCSDRaw(p_buf) : status
 '' Read CSD register (16 bytes) into buffer.
 '' Contains card capacity, speed, and features.
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param p_buf - Pointer to csd_t buffer to receive CSD data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns status - SUCCESS or negative error code
 
   status := send_command(CMD_READ_CSD, p_buf, 0, 0, 0)
   if status == SUCCESS
     debug("  [readCSDRaw] CSD read successfully")
-    result := true
   else
     debug("  [readCSDRaw] CSD read FAILED")
-    result := false
+    set_error(status)
 
-PUB readSCRRaw(p_buf) : result | status
+PUB readSCRRaw(p_buf) : status
 '' Read SCR register (8 bytes) into buffer.
 '' Contains SD spec version and bus widths.
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param p_buf - Pointer to scr_t buffer to receive SCR data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns status - SUCCESS or negative error code
 
   status := send_command(CMD_READ_SCR, p_buf, 0, 0, 0)
   if status == SUCCESS
     debug("  [readSCRRaw] SCR read successfully")
-    result := true
   else
     debug("  [readSCRRaw] SCR read FAILED")
-    result := false
+    set_error(status)
 
-PUB readSDStatusRaw(p_buf) : result | status
+PUB readSDStatusRaw(p_buf) : status
 '' Read SD Status register (ACMD13) - returns 64 bytes of card status.
 '' Contains Speed Class, UHS Speed Grade, Video Speed Class, and more.
 ''
 '' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns status - SUCCESS or negative error code
 
   status := send_command(CMD_READ_SD_STATUS, p_buf, 0, 0, 0)
   if status == SUCCESS
     debug("  [readSDStatusRaw] SD Status read successfully")
-    result := true
   else
     debug("  [readSDStatusRaw] SD Status read FAILED")
-    result := false
+    set_error(status)
 
 PUB getOCR() : ocr
 '' Get cached OCR register value - Operating Conditions Register from card init.
@@ -5345,17 +5339,19 @@ PUB getOCR() : ocr
   ocr := ocr_value
   debug("  [getOCR] OCR = $", uhex_long(ocr))
 
-PUB readVBRRaw(p_buf) : result
+PUB readVBRRaw(p_buf) : status
 '' Read Volume Boot Record (512 bytes) into buffer.
 '' Card must be mounted for this method to work (VBR location determined at mount).
 ''
 '' @param p_buf - Pointer to 512-byte buffer to receive VBR data
-'' @returns result - TRUE on success, FALSE if not mounted
+'' @returns status - SUCCESS or negative error code (E_NOT_MOUNTED)
 
   if not (flags & F_MOUNTED)
     debug("  [readVBRRaw] FAILED: Card not mounted")
-    return false
-  result := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0) == SUCCESS
+    return set_error(E_NOT_MOUNTED)
+  status := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0)
+  if status <> SUCCESS
+    set_error(status)
 #ENDIF
 
 PRI readCSD(p_csd) : result | t, i
@@ -6080,60 +6076,50 @@ PRI readSDStatus(p_buf) : result | t, i
   debug("  [readSDStatus] Success")
   return true
 
-PUB newDirectory(dev, name_ptr) : ok
+PUB newDirectory(dev, name_ptr) : status
 '' Create a new directory (multi-cog safe) in current directory.
 '' SD: creates a FAT32 directory entry.
 '' Flash: no-op success (directories are implicit from path-segmented filenames).
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated directory name string
-'' @returns ok - TRUE on success, FALSE if directory exists or error
+'' @returns status - SUCCESS or negative error code (E_FILE_EXISTS, E_NOT_MOUNTED, E_BAD_DEVICE)
 
   case dev
     DEV_SD:
-      ok := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
-      if ok == SUCCESS
-        return true
-      else
-        set_error(ok)
-        return false
+      status := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
+      if status <> SUCCESS
+        set_error(status)
     DEV_FLASH:
       ' Flash directories are implicit — they exist when files with matching path prefixes exist.
       ' mkdir just validates the request and succeeds. Empty directories vanish naturally.
       ifnot flash_mounted
-        set_error(E_NOT_MOUNTED)
-        return false
-      return true
+        return set_error(E_NOT_MOUNTED)
+      status := SUCCESS
     other:
-      set_error(E_BAD_DEVICE)
-      return false
+      return set_error(E_BAD_DEVICE)
 
-PUB changeDirectory(dev, name_ptr) : ok
+PUB changeDirectory(dev, name_ptr) : status
 '' Change directory (multi-cog safe) - changes current directory.
 '' SD: navigates FAT32 directory tree via worker cog.
 '' Flash: updates per-cog CWD prefix string (caller-side, no worker command).
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated directory name string
-'' @returns ok - TRUE on success, FALSE if not found
+'' @returns status - SUCCESS or negative error code (E_FILE_NOT_FOUND, E_NOT_MOUNTED, E_BAD_DEVICE)
 
   case dev
     DEV_SD:
-      ok := send_command(CMD_CHDIR, name_ptr, 0, 0, 0)
-      if ok == SUCCESS
-        return true
-      else
-        set_error(ok)
-        return false
+      status := send_command(CMD_CHDIR, name_ptr, 0, 0, 0)
+      if status <> SUCCESS
+        set_error(status)
     DEV_FLASH:
       ifnot flash_mounted
-        set_error(E_NOT_MOUNTED)
-        return false
+        return set_error(E_NOT_MOUNTED)
       fl_change_cwd(name_ptr)
-      return true
+      status := SUCCESS
     other:
-      set_error(E_BAD_DEVICE)
-      return false
+      return set_error(E_BAD_DEVICE)
 
 PUB unmount(dev) : status | did_unmount
 '' Unmount one or both filesystems (multi-cog safe).
@@ -6169,15 +6155,16 @@ PUB unmount(dev) : status | did_unmount
 
   return SUCCESS
 
-PUB sync() : result
+PUB sync() : status
 '' Flush buffers (multi-cog safe) - flushes pending writes without closing file.
 '' Use to checkpoint data during long operations.
 ''
-'' @returns result - TRUE on success
+'' @returns status - SUCCESS or negative error code
 
-  result := send_command(CMD_SYNC, 0, 0, 0, 0)
+  status := send_command(CMD_SYNC, 0, 0, 0, 0)
   debug("  [sync] Buffers flushed")
-  return result == SUCCESS
+  if status <> SUCCESS
+    set_error(status)
 
 ' ═══════════════════════════════════════════════════════════════════════════
 ' V3 HANDLE-BASED PUBLIC API
@@ -6564,13 +6551,13 @@ PRI countFreeClusters() : count | fat_idx, entry
     fat_idx += 4
   fat_sec_in_buf := -1                                                          '  invalidate FAT buffer
 
-PUB deleteFile(dev, name_ptr) : deleted | status, fl_path[32]
+PUB deleteFile(dev, name_ptr) : status | fl_path[32]
 '' Delete file (multi-cog safe) - deletes file from current directory.
 '' Flash: CWD prefix is automatically prepended to the filename.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to null-terminated filename string
-'' @returns deleted - TRUE on success, FALSE if not found or protected
+'' @returns status - SUCCESS or negative error code (E_FILE_NOT_FOUND, E_NOT_MOUNTED, E_BAD_DEVICE)
 
   case dev
     DEV_SD:
@@ -6581,22 +6568,18 @@ PUB deleteFile(dev, name_ptr) : deleted | status, fl_path[32]
       fl_prepend_cwd(@fl_path, name_ptr)
       status := send_command(CMD_FLASH_DELETE, @fl_path, 0, 0, 0)
     other:
-      set_error(E_BAD_DEVICE)
-      return false
-  if status == SUCCESS
-    return true
-  else
+      return set_error(E_BAD_DEVICE)
+  if status <> SUCCESS
     set_error(status)
-    return false
 
-PUB rename(dev, old_name, new_name) : renamed | status, fl_old[32], fl_new[32]
+PUB rename(dev, old_name, new_name) : status | fl_old[32], fl_new[32]
 '' Rename file or directory (multi-cog safe).
 '' Flash: CWD prefix is automatically prepended to both names.
 ''
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param old_name - Pointer to current name string
 '' @param new_name - Pointer to new name string
-'' @returns renamed - TRUE on success, FALSE if source not found or dest exists
+'' @returns status - SUCCESS or negative error code (E_FILE_NOT_FOUND, E_FILE_EXISTS, E_NOT_MOUNTED)
 
   case dev
     DEV_SD:
@@ -6608,15 +6591,11 @@ PUB rename(dev, old_name, new_name) : renamed | status, fl_old[32], fl_new[32]
       fl_prepend_cwd(@fl_new, new_name)
       status := send_command(CMD_FLASH_RENAME, @fl_old, @fl_new, 0, 0)
     other:
-      set_error(E_BAD_DEVICE)
-      return false
-  if status == SUCCESS
-    return true
-  else
+      return set_error(E_BAD_DEVICE)
+  if status <> SUCCESS
     set_error(status)
-    return false
 
-PUB moveFile(dev, name_ptr, dest_folder) : ok | status
+PUB moveFile(dev, name_ptr, dest_folder) : status
 '' Move file to another directory (multi-cog safe).
 '' SD: moves file via FAT32 directory manipulation.
 '' Flash: not supported (use rename with full path instead).
@@ -6624,22 +6603,17 @@ PUB moveFile(dev, name_ptr, dest_folder) : ok | status
 '' @param dev - DEV_SD or DEV_FLASH
 '' @param name_ptr - Pointer to filename to move
 '' @param dest_folder - Pointer to destination folder name
-'' @returns ok - TRUE on success, FALSE on error
+'' @returns status - SUCCESS or negative error code (E_FILE_NOT_FOUND, E_NOT_SUPPORTED, E_BAD_DEVICE)
 
   case dev
     DEV_SD:
       status := send_command(CMD_MOVEFILE, name_ptr, dest_folder, 0, 0)
-      if status == SUCCESS
-        return true
-      else
+      if status <> SUCCESS
         set_error(status)
-        return false
     DEV_FLASH:
-      set_error(E_NOT_SUPPORTED)
-      return false
+      return set_error(E_NOT_SUPPORTED)
     other:
-      set_error(E_BAD_DEVICE)
-      return false
+      return set_error(E_BAD_DEVICE)
 
 PUB freeSpace(dev) : free_count
 '' Get free space (multi-cog safe).
@@ -7461,19 +7435,16 @@ PUB volumeLabel(dev) : result
     return 0
   return @vol_label
 
-PUB setVolumeLabel(dev, p_label) : result
+PUB setVolumeLabel(dev, p_label) : status
 '' Set the volume label on the mounted SD card.
 '' Updates both the BPB and root directory volume label entry.
 ''
 '' @param p_label - Pointer to new volume label string (max 11 chars)
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns status - SUCCESS or negative error code
 
-  result := send_command(CMD_SET_VOL_LABEL, p_label, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
+  status := send_command(CMD_SET_VOL_LABEL, p_label, 0, 0, 0)
+  if status <> SUCCESS
+    set_error(status)
 
 #IFDEF SD_INCLUDE_DEBUG
 PUB debugDumpRootDir() | sec, i, p_entry

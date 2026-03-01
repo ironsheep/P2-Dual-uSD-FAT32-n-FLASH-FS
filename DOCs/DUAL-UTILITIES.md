@@ -4,7 +4,7 @@ This document describes the standalone utility programs included with the P2 Dua
 
 ## Overview
 
-The utilities are located in `src/UTILS/` and can be run independently using the test runner from the `tools/` directory.
+The utilities are located in `src/UTILS/`.
 
 ### SD Utilities
 
@@ -29,24 +29,17 @@ The utilities are located in `src/UTILS/` and can be run independently using the
 
 ## Running Utilities
 
-All utilities are run from the `tools/` directory using the test runner:
-
-```bash
-cd tools/
-./run_test.sh ../src/UTILS/<utility>.spin2 [-t timeout]
-```
-
-Alternatively, from the `src/UTILS/` directory:
+From the `src/UTILS/` directory:
 
 ```bash
 # Compile a utility
-pnut-ts -d -I ../. <utility>.spin2
+pnut-ts -d -I .. <utility>.spin2
 
 # Download and run on P2 (connects at 2 Mbit serial)
 pnut-term-ts -r <utility>.bin
 ```
 
-The `-I ../.` flag tells the compiler to find the `dual_sd_fat32_flash_fs` driver in the parent `src/` directory.
+The `-I ..` flag tells the compiler to find the `dual_sd_fat32_flash_fs` driver in the parent `src/` directory.
 
 ---
 
@@ -579,24 +572,6 @@ If the audit reports issues, run FSCK to trigger auto-repair:
 ```bash
 ./run_test.sh ../src/UTILS/DFS_FL_fsck.spin2 -t 120
 ```
-
----
-
-## Hardware Configuration
-
-All utilities use the P2 Edge default pin configuration:
-
-```spin2
-CON
-    SD_CS   = 60    ' Chip Select
-    SD_MOSI = 59    ' Master Out Slave In
-    SD_MISO = 58    ' Master In Slave Out
-    SD_SCK  = 61    ' Serial Clock
-```
-
-The Flash chip shares MOSI, MISO, and SCK with the SD card but has a separate chip select. Both devices are managed by the unified `dual_sd_fat32_flash_fs` driver which handles SPI bus arbitration automatically.
-
-Modify the `CON` section in each utility if using different pins.
 
 ---
 

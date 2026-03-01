@@ -75,7 +75,7 @@ dotPath        BYTE    ".", 0
 dotdotPath     BYTE    "..", 0
 testContent1   BYTE    "Hello from subdir", 0
 
-PUB go() | workerCog, result, handle, dh, count, pEntry, i
+PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
 '' Main entry point for subdirectory operations regression tests
 
     debug(" ")
@@ -130,8 +130,8 @@ PUB go() | workerCog, result, handle, dh, count, pEntry, i
 
     ' Test #3: Delete empty file succeeds
     utils.startTest(@"deleteFile() on empty file succeeds")
-    result := dfs.deleteFile(dfs.DEV_SD, @emptyFile)
-    utils.evaluateBool(result, @"deleteFile() empty", true)
+    status := dfs.deleteFile(dfs.DEV_SD, @emptyFile)
+    utils.evaluateSingleValue(status, @"deleteFile() empty", dfs.SUCCESS)
 
     ' Test #4: Verify empty file is deleted
     utils.startTest(@"Verify empty file deleted (openFileRead fails)")
@@ -210,10 +210,10 @@ PUB go() | workerCog, result, handle, dh, count, pEntry, i
     ' Test #7: mkdir and cd into subdirectory
     utils.startTest(@"mkdir and cd into subdirectory")
     utils.setCheckCountPerTest(2)
-    result := dfs.newDirectory(dfs.DEV_SD, @testdir)
-    utils.evaluateSubBool(result, @"newDirectory()", true)
-    result := dfs.changeDirectory(dfs.DEV_SD, @testdir)
-    utils.evaluateSubBool(result, @"changeDirectory()", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @testdir)
+    utils.evaluateSubValue(status, @"newDirectory()", dfs.SUCCESS)
+    status := dfs.changeDirectory(dfs.DEV_SD, @testdir)
+    utils.evaluateSubValue(status, @"changeDirectory()", dfs.SUCCESS)
     utils.showSubTestResults()
 
     ' Test #8: Create file in subdirectory
@@ -308,8 +308,8 @@ PUB go() | workerCog, result, handle, dh, count, pEntry, i
 
     ' Test #12: Delete empty file in subdirectory
     utils.startTest(@"Delete empty file in subdirectory")
-    result := dfs.deleteFile(dfs.DEV_SD, @testfile1)
-    utils.evaluateBool(result, @"deleteFile() empty in subdir", true)
+    status := dfs.deleteFile(dfs.DEV_SD, @testfile1)
+    utils.evaluateSingleValue(status, @"deleteFile() empty in subdir", dfs.SUCCESS)
 
     ' Test #13: Verify deleted file not found
     utils.startTest(@"Deleted file not found in subdirectory")
@@ -318,8 +318,8 @@ PUB go() | workerCog, result, handle, dh, count, pEntry, i
 
     ' Test #14: Delete file with data in subdirectory
     utils.startTest(@"Delete file with data in subdirectory")
-    result := dfs.deleteFile(dfs.DEV_SD, @testfile2)
-    utils.evaluateBool(result, @"deleteFile() data in subdir", true)
+    status := dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    utils.evaluateSingleValue(status, @"deleteFile() data in subdir", dfs.SUCCESS)
 
     ' Test #15: Dir after delete shows fewer entries
     utils.startTest(@"Dir after delete shows correct count")
@@ -349,8 +349,8 @@ PUB go() | workerCog, result, handle, dh, count, pEntry, i
     utils.evaluateSubBool(handle >= 0, @"createFileNew() empty", true)
     if handle >= 0
         dfs.closeFileHandle(handle)
-    result := dfs.rename(dfs.DEV_SD, @emptyFile, @renamedEmpty)
-    utils.evaluateSubBool(result, @"rename() empty file", true)
+    status := dfs.rename(dfs.DEV_SD, @emptyFile, @renamedEmpty)
+    utils.evaluateSubValue(status, @"rename() empty file", dfs.SUCCESS)
     utils.showSubTestResults()
 
     ' Test #17: Original name gone, new name accessible
@@ -372,10 +372,10 @@ PUB go() | workerCog, result, handle, dh, count, pEntry, i
     ' Test #18: cd .. then cd back, files still visible
     utils.startTest(@"cd .. then cd back preserves dir contents")
     utils.setCheckCountPerTest(3)
-    result := dfs.changeDirectory(dfs.DEV_SD, @dotdotPath)
-    utils.evaluateSubBool(result, @"cd ..", true)
-    result := dfs.changeDirectory(dfs.DEV_SD, @testdir)
-    utils.evaluateSubBool(result, @"cd back", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @dotdotPath)
+    utils.evaluateSubValue(status, @"cd ..", dfs.SUCCESS)
+    status := dfs.changeDirectory(dfs.DEV_SD, @testdir)
+    utils.evaluateSubValue(status, @"cd back", dfs.SUCCESS)
     ' Dir should still show files
     dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
     count := 0

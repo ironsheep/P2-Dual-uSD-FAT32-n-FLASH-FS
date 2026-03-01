@@ -56,7 +56,7 @@ testfile2       BYTE    "TEST2.BIN", 0
 sectorBuffer    BYTE    0[512]
 sectorBuffer_guard BYTE 0[16]
 
-PUB go() | workerCog, result, pLabel, freeSpace, handle
+PUB go() | workerCog, result, status, pLabel, freeSpace, handle
 '' Main entry point for mount/unmount regression tests
 ''
 '' Tests SD card mount, unmount, and basic card operations
@@ -100,15 +100,15 @@ PUB go() | workerCog, result, pLabel, freeSpace, handle
     handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
     utils.evaluateSingleValue(handle, @"createFileNew()", E_NOT_MOUNTED)
 
-    utils.startTest(@"readSectorRaw() before mount returns false")
+    utils.startTest(@"readSectorRaw() before mount returns error")
     utils.initGuard(@sectorBuffer_guard)
-    result := dfs.readSectorRaw(0, @sectorBuffer)
+    status := dfs.readSectorRaw(0, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
-    utils.evaluateSingleValue(result, @"readSectorRaw()", 0)
+    utils.evaluateSingleValue(status, @"readSectorRaw()", E_NOT_MOUNTED)
 
-    utils.startTest(@"changeDirectory() before mount returns false")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"TESTDIR")
-    utils.evaluateBool(result, @"changeDirectory()", false)
+    utils.startTest(@"changeDirectory() before mount returns error")
+    status := dfs.changeDirectory(dfs.DEV_SD, @"TESTDIR")
+    utils.evaluateSingleValue(status, @"changeDirectory()", E_NOT_MOUNTED)
 
     ' ----------------------------------
     ' TEST GROUP: Mount card
@@ -127,7 +127,7 @@ PUB go() | workerCog, result, pLabel, freeSpace, handle
     debug("  DIAG: recvCRC=$", uhex_(dfs.getLastReceivedCRC()), " calcCRC=$", uhex_(dfs.getLastCalculatedCRC()))
     ' Read sector 0 raw to inspect MBR partition table bytes
     utils.initGuard(@sectorBuffer_guard)
-    if dfs.readSectorRaw(0, @sectorBuffer)
+    if dfs.readSectorRaw(0, @sectorBuffer) == dfs.SUCCESS
       utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
       debug("  DIAG MBR: sig=$", uhex_byte_(sectorBuffer[$1FE]), " $", uhex_byte_(sectorBuffer[$1FF]))
       debug("  DIAG MBR: part1 type=$", uhex_byte_(sectorBuffer[$1C2]), " lba=$", uhex_byte_(sectorBuffer[$1C9]), uhex_byte_(sectorBuffer[$1C8]), uhex_byte_(sectorBuffer[$1C7]), uhex_byte_(sectorBuffer[$1C6]))

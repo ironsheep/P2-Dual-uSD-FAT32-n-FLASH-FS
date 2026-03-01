@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 📖 Documentation
-    url: https://github.com/ironsheep/P2-DUAL-FS-FLASH-N-SD
-    about: Supporting Documentation is all at the repository README
+  - name: Parallax Forums
+    url: https://forums.parallax.com/
+    about: Ask questions and discuss P2 development on the Parallax Forums
+  - name: P2 Documentation
+    url: https://www.parallax.com/propeller-2/documentation/
+    about: Official Propeller 2 documentation and resources

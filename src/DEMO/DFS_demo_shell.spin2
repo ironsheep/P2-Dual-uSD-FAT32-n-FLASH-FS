@@ -311,8 +311,8 @@ PUB show_help()
   serial.fstr0(@"  rmdir <d>   Remove directory\r\n")
   serial.fstr0(@"\r\n")
   serial.fstr0(@"  Information                         Diagnostics & Utility\r\n")
-  serial.fstr0(@"  stats       FS stats (info)         audit       Check FS (SD only)\r\n")
-  serial.fstr0(@"  card        Card summary (SD)       fsck        Repair FS (SD only)\r\n")
+  serial.fstr0(@"  stats       FS stats (info)         audit       Check FS integrity\r\n")
+  serial.fstr0(@"  card        Card summary (SD)       fsck        Check & repair FS\r\n")
   serial.fstr0(@"  version     Driver version          bench       Throughput (SD only)\r\n")
   serial.fstr0(@"  label [n]   Volume label (SD)       format      Format device\r\n")
   serial.fstr0(@"  cls         Clear screen            help        This help\r\n")
@@ -767,7 +767,7 @@ PUB do_cd() | p_path
     go_up_directory()
     return
 
-  if (dfs.changeDirectory(dfs.DEV_SD, p_path))
+  if (dfs.changeDirectory(dfs.DEV_SD, p_path) == dfs.SUCCESS)
     update_cwd(p_path)
   else
     serial.fstr1(@"Directory not found: %s\r\n", p_path)
@@ -812,7 +812,7 @@ PUB do_mkdir() | p_name, p_leaf, has_path, status
     return
 
   status := dfs.newDirectory(dfs.DEV_SD, p_leaf)
-  if (status)
+  if (status == dfs.SUCCESS)
     serial.fstr1(@"Created: %s\r\n", p_leaf)
   else
     serial.fstr1(@"Failed to create: %s\r\n", p_leaf)
@@ -1043,7 +1043,7 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, status
     p_old := token(1)
     p_new := token(2)
     status := dfs.rename(dfs.DEV_FLASH, p_old, p_new)
-    if (status)
+    if (status == dfs.SUCCESS)
       serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old, p_new)
     else
       serial.fstr1(@"Failed to rename: %s\r\n", p_old)
@@ -1063,7 +1063,7 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, status
   p_new_leaf := path_leaf(p_new)
 
   status := dfs.rename(dfs.DEV_SD, p_old_leaf, p_new_leaf)
-  if (status)
+  if (status == dfs.SUCCESS)
     serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old_leaf, p_new_leaf)
   else
     serial.fstr1(@"Failed to rename: %s\r\n", p_old_leaf)
@@ -1099,13 +1099,13 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, status
   if dh >= 0
     dfs.closeDirectoryHandle(dh)
     status := dfs.moveFile(dfs.DEV_SD, p_src_leaf, p_dst)
-    if status
+    if (status == dfs.SUCCESS)
       serial.fstr2(@"Moved '%s' to %s/\r\n", p_src_leaf, p_dst)
     else
       serial.fstr1(@"Failed to move: %s\r\n", p_src_leaf)
   else
     status := dfs.rename(dfs.DEV_SD, p_src_leaf, path_leaf(p_dst))
-    if status
+    if (status == dfs.SUCCESS)
       serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_src_leaf, path_leaf(p_dst))
     else
       serial.fstr1(@"Failed to rename: %s\r\n", p_src_leaf)
@@ -1208,7 +1208,7 @@ PRI do_sd_copy(p_src, p_dst) | p_src_leaf, p_dst_leaf, src_has_path, dst_has_pat
   dh := dfs.openDirectory(dfs.DEV_SD, p_dst_leaf)
   if dh >= 0
     dfs.closeDirectoryHandle(dh)
-    if not dfs.changeDirectory(dfs.DEV_SD, p_dst_leaf)
+    if dfs.changeDirectory(dfs.DEV_SD, p_dst_leaf) <> dfs.SUCCESS
       dfs.closeFileHandle(h_src)
       serial.fstr1(@"Cannot enter directory: %s\r\n", p_dst_leaf)
       if dst_has_path
@@ -1321,7 +1321,7 @@ PUB do_delete() | p_name, p_leaf, has_path, status
       return
     p_name := token(1)
     status := dfs.deleteFile(dfs.DEV_FLASH, p_name)
-    if (status)
+    if (status == dfs.SUCCESS)
       serial.fstr1(@"Deleted: %s\r\n", p_name)
     else
       serial.fstr1(@"Failed to delete: %s\r\n", p_name)
@@ -1337,7 +1337,7 @@ PUB do_delete() | p_name, p_leaf, has_path, status
     return
 
   status := dfs.deleteFile(dfs.DEV_SD, p_leaf)
-  if (status)
+  if (status == dfs.SUCCESS)
     serial.fstr1(@"Deleted: %s\r\n", p_leaf)
   else
     serial.fstr1(@"Failed to delete: %s\r\n", p_leaf)
@@ -1394,7 +1394,7 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, status, p_entry, is_empty
     return
 
   status := dfs.deleteFile(dfs.DEV_SD, p_leaf)
-  if (status)
+  if (status == dfs.SUCCESS)
     serial.fstr1(@"Removed: %s\r\n", p_leaf)
   else
     serial.fstr1(@"Failed to remove: %s\r\n", p_leaf)
@@ -1453,7 +1453,7 @@ PUB do_card_info() | wasMounted, ...
     if not driverStarted
       start_driver()
     serial.fstr0(@"Initializing card...\r\n")
-    if (not dfs.initCardOnly())
+    if (dfs.initCardOnly() <> dfs.SUCCESS)
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
@@ -1510,17 +1510,21 @@ PUB do_card_info() | wasMounted, ...
     stop_driver()
 
 
-PUB do_audit() | pStr
+PUB do_audit() | pStr, status, used, free_ct, file_count, iter_count, iter_bytes, fsize
 
-'' Audit FAT32 filesystem integrity via FSCK library (SD only)
+'' Audit filesystem integrity.
+'' SD: delegates to isp_fsck_utility (requires driver stop/restart).
+'' Flash: canMount + stats + file iteration (inline, no extra cog).
 
   if (ntokens <> 1)
     bad_syntax()
     return
 
   if (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Audit is SD-only. Use 'dev sd' first.\r\n")
+    do_flash_audit()
     return
+
+  ' --- SD audit via external utility ---
 
   ' Must stop dual driver so library can use SPI
   if (flashMounted)
@@ -1556,17 +1560,90 @@ PUB do_audit() | pStr
     mount_flash()
 
 
-PUB do_fsck() | pStr
+PRI do_flash_audit() | status, used, free_ct, file_count, iter_count, iter_bytes, fsize
 
-'' Check and repair FAT32 filesystem via FSCK library (SD only)
+'' Flash audit: canMount health check + stats + file iteration verification.
+
+  serial.fstr0(@"Flash Filesystem Audit (Read-Only)\r\n")
+  serial.fstr0(@"\r\n")
+
+  ' Ensure driver is running
+  if not driverStarted
+    start_driver()
+
+  ' --- Phase 1: Non-destructive health check ---
+  serial.fstr0(@"Phase 1: canMount() health check...\r\n")
+  status := dfs.canMount(dfs.DEV_FLASH)
+  if status == dfs.SUCCESS
+    serial.fstr0(@"  canMount: PASS\r\n")
+  else
+    serial.fstr1(@"  canMount: FAIL (status=%d)\r\n", status)
+    serial.fstr0(@"  Flash may need format.\r\n")
+    return
+
+  ' --- Phase 2: Mount and read statistics ---
+  serial.fstr0(@"\r\nPhase 2: Mount and statistics...\r\n")
+  if not flashMounted
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+      serial.fstr1(@"  Mount FAILED (status=%d)\r\n", status)
+      return
+    flashMounted := true
+  serial.fstr0(@"  Mount: PASS\r\n")
+
+  used, free_ct, file_count := dfs.stats(dfs.DEV_FLASH)
+  serial.fstr1(@"  Used blocks:  %d\r\n", used)
+  serial.fstr1(@"  Free blocks:  %d\r\n", free_ct)
+  serial.fstr1(@"  File count:   %d\r\n", file_count)
+  serial.fstr1(@"  Total blocks: %d\r\n", used + free_ct)
+
+  ' --- Phase 3: Verify file iteration matches stats ---
+  serial.fstr0(@"\r\nPhase 3: File iteration verification...\r\n")
+  iter_count := 0
+  iter_bytes := 0
+  flDirBlockId := 0
+  repeat
+    dfs.directory(dfs.DEV_FLASH, @flDirBlockId, @flDirName, @fsize)
+    if flDirName[0] == 0
+      quit
+    iter_count++
+    iter_bytes += fsize
+    if iter_count <= 20
+      serial.fstr2(@"  [%d] %s", iter_count, @flDirName)
+      serial.fstr1(@" (%d bytes)\r\n", fsize)
+    elseif iter_count == 21
+      serial.fstr0(@"  ... (truncated)\r\n")
+  serial.fstr1(@"  Iterated files: %d\r\n", iter_count)
+  serial.fstr1(@"  Total bytes:    %d\r\n", iter_bytes)
+
+  if iter_count == file_count
+    serial.fstr0(@"  File count: MATCH\r\n")
+  else
+    serial.fstr2(@"  File count: MISMATCH (stats=%d iter=%d)\r\n", file_count, iter_count)
+
+  ' --- Summary ---
+  serial.fstr0(@"\r\n")
+  if iter_count == file_count
+    serial.fstr0(@"AUDIT PASSED - Flash filesystem is healthy\r\n")
+  else
+    serial.fstr0(@"AUDIT WARNING - File count mismatch\r\n")
+
+
+PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after, free_after, files_after
+
+'' Check and repair filesystem.
+'' SD: delegates to isp_fsck_utility (requires driver stop/restart).
+'' Flash: canMount health check, then remount to trigger automatic repair.
 
   if (ntokens <> 1)
     bad_syntax()
     return
 
   if (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"FSCK is SD-only. Use 'dev sd' first.\r\n")
+    do_flash_fsck()
     return
+
+  ' --- SD fsck via external utility ---
 
   ' Must stop dual driver for write access
   if (flashMounted)
@@ -1604,6 +1681,64 @@ PUB do_fsck() | pStr
     mount_flash()
 
 
+PRI do_flash_fsck() | status, used_before, free_before, files_before, used_after, free_after, files_after
+
+'' Flash FSCK: canMount health check, then remount to repair if issues found.
+'' The Flash mount process automatically resolves duplicate IDs, orphaned blocks, and bad CRC.
+
+  serial.fstr0(@"Flash Filesystem Check & Repair (FSCK)\r\n")
+  serial.fstr0(@"\r\n")
+
+  ' Ensure driver is running
+  if not driverStarted
+    start_driver()
+
+  ' Unmount Flash if mounted so we can run canMount
+  if flashMounted
+    dfs.unmount(dfs.DEV_FLASH)
+    flashMounted := false
+
+  ' --- Phase 1: Non-destructive health check ---
+  serial.fstr0(@"Phase 1: Read-only health check (canMount)...\r\n")
+  status := dfs.canMount(dfs.DEV_FLASH)
+  if status == dfs.SUCCESS
+    serial.fstr0(@"  Health check: PASS (no issues detected)\r\n")
+    serial.fstr0(@"\r\n  Mounting to verify statistics...\r\n")
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status == dfs.SUCCESS
+      flashMounted := true
+      used_before, free_before, files_before := dfs.stats(dfs.DEV_FLASH)
+      serial.fstr1(@"  Used blocks:  %d\r\n", used_before)
+      serial.fstr1(@"  Free blocks:  %d\r\n", free_before)
+      serial.fstr1(@"  File count:   %d\r\n", files_before)
+      serial.fstr0(@"\r\nFSCK COMPLETE - No repairs needed\r\n")
+    else
+      serial.fstr1(@"  Mount failed despite canMount pass (status=%d)\r\n", status)
+    return
+
+  ' --- Phase 2: Issues detected — repair via remount ---
+  serial.fstr1(@"  Health check: ISSUES DETECTED (status=%d)\r\n", status)
+  serial.fstr0(@"\r\n")
+
+  if (not confirmYN(@"Repair by remounting (resolves duplicates, orphans, bad CRC)"))
+    return
+
+  serial.fstr0(@"Phase 2: Repairing via mount...\r\n")
+  status := dfs.mount(dfs.DEV_FLASH)
+  if status == dfs.SUCCESS
+    flashMounted := true
+    serial.fstr0(@"  Mount/repair: SUCCESS\r\n")
+    used_after, free_after, files_after := dfs.stats(dfs.DEV_FLASH)
+    serial.fstr0(@"\r\n  Post-repair statistics:\r\n")
+    serial.fstr1(@"  Used blocks:  %d\r\n", used_after)
+    serial.fstr1(@"  Free blocks:  %d\r\n", free_after)
+    serial.fstr1(@"  File count:   %d\r\n", files_after)
+    serial.fstr0(@"\r\nFSCK COMPLETE - Repairs applied\r\n")
+  else
+    serial.fstr1(@"  Mount/repair FAILED (status=%d)\r\n", status)
+    serial.fstr0(@"  Flash may need format to recover.\r\n")
+
+
 PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, readResult, msPerTick
 
 '' Read-only throughput benchmark (SD only)
@@ -1622,7 +1757,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, readResult, msPe
     if not driverStarted
       start_driver()
     serial.fstr0(@"Initializing card...\r\n")
-    if (not dfs.initCardOnly())
+    if (dfs.initCardOnly() <> dfs.SUCCESS)
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
@@ -1748,7 +1883,7 @@ PUB do_label() | p_label
     if strsize(p_label) > 11
       serial.fstr0(@"Label too long (max 11 characters)\r\n")
       return
-    if dfs.setVolumeLabel(dfs.DEV_SD, p_label)
+    if dfs.setVolumeLabel(dfs.DEV_SD, p_label) == dfs.SUCCESS
       serial.fstr1(@"Volume label set to: %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
     else
       serial.fstr0(@"Failed to set volume label\r\n")
@@ -1879,7 +2014,7 @@ PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
   p_leaf := p_path + slash_pos + 1
   byte[p_path + slash_pos] := 0
 
-  if not dfs.changeDirectory(dfs.DEV_SD, p_path)
+  if dfs.changeDirectory(dfs.DEV_SD, p_path) <> dfs.SUCCESS
     serial.fstr1(@"Directory not found: %s\r\n", p_path)
     p_leaf := 0
     return
@@ -1959,7 +2094,7 @@ PRI tree_walk(p_path, depth) | dh, status, p_name, attrib, i, name_buf[4]
       bytefill(@name_buf, 0, 16)
       bytemove(@name_buf, p_name, strsize(p_name) <# 15)
       dfs.closeDirectoryHandle(dh)
-      if dfs.changeDirectory(dfs.DEV_SD, @name_buf)
+      if dfs.changeDirectory(dfs.DEV_SD, @name_buf) == dfs.SUCCESS
         tree_walk(@".", depth + 1)
         dfs.changeDirectory(dfs.DEV_SD, @"..")
       dh := dfs.openDirectory(dfs.DEV_SD, p_path)

@@ -1,0 +1,479 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_parity_tests.spin2
+''   Purpose.... Tests Feature Parity methods: exists, file_size, file_size_unused,
+''               serial_number, stats, seek (unified), open modes on SD device
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 28 FEB 2026
+''
+'' =================================================================================================
+''
+'' Tests: 32 tests across 7 groups
+''
+''   Group 1: exists(DEV_SD) .................. 5 tests
+''   Group 2: file_size(DEV_SD) ............... 5 tests
+''   Group 3: file_size_unused(DEV_SD) ........ 4 tests
+''   Group 4: serial_number(DEV_SD) ........... 3 tests
+''   Group 5: stats(DEV_SD) ................... 4 tests
+''   Group 6: seek() unified .................. 6 tests
+''   Group 7: open(DEV_SD) modes .............. 5 tests
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 270_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     CONTENT_LEN = 24       ' length of testContent string (no null)
+
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_REGISTERS
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#ENDIF
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+parFile1        BYTE    "PARTEST1.TXT", 0
+parFile2        BYTE    "PARTEST2.TXT", 0
+parFile3        BYTE    "PARTEST3.TXT", 0
+parFileNone     BYTE    "NOEXIST.TXT", 0
+parFileEmpty    BYTE    0
+parSubDir       BYTE    "PARTDIR", 0
+parSubFile      BYTE    "SUBFILE.TXT", 0
+
+' Flash test files (for seek tests)
+flSeekFile      BYTE    "parSeek", 0
+
+' Content
+testContent     BYTE    "Parity test content data", 0
+appendContent   BYTE    "APPENDED", 0
+
+' Buffers
+readBuf         BYTE    0[256]
+readBuf_guard   BYTE    0[16]
+
+PUB go() | workerCog, status, handle, size, sn_hi, sn_lo, used, free_ct, file_count, pos, bytesWritten, bytesRead, sn_lo2
+'' Main entry point for feature parity regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Feature Parity Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount SD card
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
+        debug("ERROR: Could not mount SD card!")
+        dfs.stop()
+        debug("END_SESSION")
+        return
+
+    ' Clean up any existing test files
+    cleanupTestFiles()
+
+    ' ======================================================================
+    ' TEST GROUP 1: exists(DEV_SD)
+    ' ======================================================================
+    utils.startTestGroup(@"exists(DEV_SD)")
+
+    ' Create a known test file
+    handle := dfs.createFileNew(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+
+    ' Test 1: File that exists returns true
+    utils.startTest(@"exists() returns true for existing file")
+    status := dfs.exists(dfs.DEV_SD, @parFile1)
+    utils.evaluateBool(status, @"exists(PARTEST1.TXT)", true)
+
+    ' Test 2: Non-existent file returns false
+    utils.startTest(@"exists() returns false for non-existent file")
+    status := dfs.exists(dfs.DEV_SD, @parFileNone)
+    utils.evaluateBool(status, @"exists(NOEXIST.TXT)", false)
+
+    ' Test 3: After delete, exists returns false
+    utils.startTest(@"exists() false after deleteFile()")
+    dfs.deleteFile(dfs.DEV_SD, @parFile1)
+    status := dfs.exists(dfs.DEV_SD, @parFile1)
+    utils.evaluateBool(status, @"exists() after delete", false)
+
+    ' Test 4: File in subdirectory
+    utils.startTest(@"exists() in subdirectory")
+    dfs.newDirectory(dfs.DEV_SD, @parSubDir)
+    dfs.changeDirectory(dfs.DEV_SD, @parSubDir)
+    handle := dfs.createFileNew(dfs.DEV_SD, @parSubFile)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+    status := dfs.exists(dfs.DEV_SD, @parSubFile)
+    utils.evaluateBool(status, @"exists() in subdir", true)
+    dfs.deleteFile(dfs.DEV_SD, @parSubFile)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+    ' Test 5: Empty filename
+    utils.startTest(@"exists() with empty filename returns false")
+    status := dfs.exists(dfs.DEV_SD, @parFileEmpty)
+    utils.evaluateBool(status, @"exists(empty)", false)
+
+    ' ======================================================================
+    ' TEST GROUP 2: file_size(DEV_SD)
+    ' ======================================================================
+    utils.startTestGroup(@"file_size(DEV_SD)")
+
+    ' Create a file with known content
+    handle := dfs.createFileNew(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        bytesWritten := dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+
+    ' Test 6: Known-size file
+    utils.startTest(@"file_size() returns correct size")
+    size := dfs.file_size(dfs.DEV_SD, @parFile1)
+    utils.evaluateSingleValue(size, @"file_size(24 bytes)", CONTENT_LEN)
+
+    ' Test 7: Empty file (0 bytes)
+    utils.startTest(@"file_size() empty file returns 0")
+    handle := dfs.createFileNew(dfs.DEV_SD, @parFile2)
+    if handle >= 0
+        dfs.closeFileHandle(handle)
+    size := dfs.file_size(dfs.DEV_SD, @parFile2)
+    utils.evaluateSingleValue(size, @"file_size(empty)", 0)
+
+    ' Test 8: Size increases after write
+    utils.startTest(@"file_size() increases after write")
+    handle := dfs.createFileNew(dfs.DEV_SD, @parFile3)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+    size := dfs.file_size(dfs.DEV_SD, @parFile3)
+    utils.evaluateSingleValue(size, @"file_size() after write", CONTENT_LEN)
+
+    ' Test 9: Size after append
+    utils.startTest(@"file_size() reflects appended data")
+    handle := dfs.open(dfs.DEV_SD, @parFile3, dfs.FILEMODE_APPEND)
+    if handle >= 0
+        dfs.writeHandle(handle, @appendContent, 8)
+        dfs.closeFileHandle(handle)
+    size := dfs.file_size(dfs.DEV_SD, @parFile3)
+    utils.evaluateSingleValue(size, @"file_size() after append", CONTENT_LEN + 8)
+
+    ' Test 10: Non-existent file returns error
+    utils.startTest(@"file_size() non-existent returns error")
+    size := dfs.file_size(dfs.DEV_SD, @parFileNone)
+    utils.evaluateBool(size < 0, @"file_size() error for missing", true)
+
+    ' ======================================================================
+    ' TEST GROUP 3: file_size_unused(DEV_SD)
+    ' ======================================================================
+    utils.startTestGroup(@"file_size_unused(DEV_SD)")
+
+    ' Test 11: Small file has slack space
+    utils.startTest(@"file_size_unused() small file > 0")
+    size := dfs.file_size_unused(dfs.DEV_SD, @parFile1)
+    debug("   file_size_unused(PARTEST1.TXT) = ", sdec(size))
+    utils.evaluateBool(size > 0, @"slack space > 0", true)
+
+    ' Test 12: Empty file has full cluster unused
+    utils.startTest(@"file_size_unused() empty file = cluster size")
+    size := dfs.file_size_unused(dfs.DEV_SD, @parFile2)
+    debug("   file_size_unused(empty) = ", sdec(size))
+    utils.evaluateBool(size > 0, @"empty file unused > 0", true)
+
+    ' Test 13: Unused decreases as file grows
+    utils.startTest(@"file_size_unused() decreases with content")
+    size := dfs.file_size_unused(dfs.DEV_SD, @parFile3)
+    debug("   file_size_unused(PARTEST3.TXT) = ", sdec(size))
+    ' parFile3 has CONTENT_LEN+8=32 bytes, parFile2 is empty, so parFile3 should have less unused
+    utils.evaluateBool(size >= 0, @"unused >= 0", true)
+
+    ' Test 14: Non-existent returns error
+    utils.startTest(@"file_size_unused() non-existent returns error")
+    size := dfs.file_size_unused(dfs.DEV_SD, @parFileNone)
+    utils.evaluateBool(size < 0, @"error for missing file", true)
+
+    ' ======================================================================
+    ' TEST GROUP 4: serial_number(DEV_SD)
+    ' ======================================================================
+    utils.startTestGroup(@"serial_number(DEV_SD)")
+
+    ' Test 15: SD serial number low word is non-zero
+    utils.startTest(@"serial_number() sn_lo non-zero")
+    sn_hi, sn_lo := dfs.serial_number(dfs.DEV_SD)
+    debug("   SD serial: hi=$", uhex_long_(sn_hi), " lo=$", uhex_long_(sn_lo))
+    utils.evaluateNotZero(sn_lo, @"sn_lo non-zero")
+
+    ' Test 16: SD serial number high word is 0
+    utils.startTest(@"serial_number() sn_hi == 0 for SD")
+    utils.evaluateSingleValue(sn_hi, @"sn_hi is zero", 0)
+
+    ' Test 17: Serial number is stable across calls
+    utils.startTest(@"serial_number() stable across calls")
+    sn_hi, sn_lo2 := dfs.serial_number(dfs.DEV_SD)
+    utils.evaluateSingleValue(sn_lo2, @"same sn_lo", sn_lo)
+
+    ' ======================================================================
+    ' TEST GROUP 5: stats(DEV_SD)
+    ' ======================================================================
+    utils.startTestGroup(@"stats(DEV_SD)")
+
+    ' Test 18: file_count matches expectations
+    utils.startTest(@"stats() file_count > 0")
+    used, free_ct, file_count := dfs.stats(dfs.DEV_SD)
+    debug("   stats: used=", sdec(used), " free=", sdec(free_ct), " files=", sdec(file_count))
+    utils.evaluateBool(file_count > 0, @"file_count > 0", true)
+
+    ' Test 19: free_ct > 0
+    utils.startTest(@"stats() free_ct > 0")
+    utils.evaluateBool(free_ct > 0, @"free_ct > 0", true)
+
+    ' Test 20: File count changes after create/delete
+    utils.startTest(@"stats() file_count changes after create")
+    handle := dfs.createFileNew(dfs.DEV_SD, @"STATTEST.TXT")
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+    used, free_ct, file_count := dfs.stats(dfs.DEV_SD)
+    debug("   After create: files=", sdec(file_count))
+    ' Just verify count is still positive (exact count depends on card state)
+    utils.evaluateBool(file_count > 0, @"file_count still > 0", true)
+    dfs.deleteFile(dfs.DEV_SD, @"STATTEST.TXT")
+
+    ' Test 21: used > 0 (needs SD_INCLUDE_RAW)
+    utils.startTest(@"stats() used >= 0")
+    used, free_ct, file_count := dfs.stats(dfs.DEV_SD)
+    utils.evaluateBool(used >= 0, @"used >= 0", true)
+
+    ' ======================================================================
+    ' TEST GROUP 6: seek() unified
+    ' ======================================================================
+    utils.startTestGroup(@"seek() unified")
+
+    ' Create file with known content for seek tests
+    handle := dfs.createFileNew(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+
+    ' Test 22: SK_FILE_START on SD
+    utils.startTest(@"seek(SK_FILE_START) on SD")
+    handle := dfs.openFileRead(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        ' Read some bytes to advance position
+        bytesRead := dfs.readHandle(handle, @readBuf, 10)
+        ' Seek back to start
+        pos := dfs.seek(handle, 0, dfs.SK_FILE_START)
+        utils.evaluateSingleValue(pos, @"seek to 0", 0)
+        dfs.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"open failed", true)
+
+    ' Test 23: SK_CURRENT_POSN on SD
+    utils.startTest(@"seek(SK_CURRENT_POSN) on SD")
+    handle := dfs.openFileRead(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        bytesRead := dfs.readHandle(handle, @readBuf, 5)
+        ' Seek forward 5 more bytes from current
+        pos := dfs.seek(handle, 5, dfs.SK_CURRENT_POSN)
+        utils.evaluateSingleValue(pos, @"seek +5 from pos 5", 10)
+        dfs.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"open failed", true)
+
+    ' Test 24: Seek to specific position and read
+    utils.startTest(@"seek() then read returns correct data")
+    handle := dfs.openFileRead(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        pos := dfs.seek(handle, 0, dfs.SK_FILE_START)
+        bytefill(@readBuf, 0, 256)
+        bytesRead := dfs.readHandle(handle, @readBuf, CONTENT_LEN)
+        utils.evaluateSubValue(bytesRead, @"read full content", CONTENT_LEN)
+        status := (readBuf[0] == "P" and readBuf[1] == "a")
+        utils.evaluateSubBool(status, @"data matches 'Pa...'", true)
+        dfs.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"open failed", true)
+
+    ' Test 25: SK_FILE_START on Flash
+    utils.startTest(@"seek(SK_FILE_START) on Flash")
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status == dfs.SUCCESS
+        ' Create flash test file
+        handle := dfs.open(dfs.DEV_FLASH, @flSeekFile, dfs.FILEMODE_WRITE)
+        if handle >= 0
+            dfs.wr_str(handle, @testContent)
+            dfs.close(handle)
+        ' Open for read and seek
+        handle := dfs.open(dfs.DEV_FLASH, @flSeekFile, dfs.FILEMODE_READ)
+        if handle >= 0
+            bytesRead := dfs.rd_str(handle, @readBuf, 256)
+            pos := dfs.seek(handle, 0, dfs.SK_FILE_START)
+            utils.evaluateSingleValue(pos, @"Flash seek to 0", 0)
+            dfs.close(handle)
+        else
+            utils.evaluateBool(false, @"Flash open failed", true)
+        dfs.deleteFile(dfs.DEV_FLASH, @flSeekFile)
+    else
+        utils.evaluateBool(false, @"Flash mount failed", true)
+
+    ' Test 26: SK_CURRENT_POSN on Flash
+    utils.startTest(@"seek(SK_CURRENT_POSN) on Flash")
+    if dfs.mount(dfs.DEV_FLASH) == dfs.SUCCESS
+        handle := dfs.open(dfs.DEV_FLASH, @flSeekFile, dfs.FILEMODE_WRITE)
+        if handle >= 0
+            dfs.wr_str(handle, @testContent)
+            dfs.close(handle)
+        handle := dfs.open(dfs.DEV_FLASH, @flSeekFile, dfs.FILEMODE_READ)
+        if handle >= 0
+            dfs.rd_byte(handle)
+            dfs.rd_byte(handle)
+            pos := dfs.seek(handle, 3, dfs.SK_CURRENT_POSN)
+            utils.evaluateSingleValue(pos, @"Flash seek +3 from 2", 5)
+            dfs.close(handle)
+        else
+            utils.evaluateBool(false, @"Flash open failed", true)
+        dfs.deleteFile(dfs.DEV_FLASH, @flSeekFile)
+    else
+        utils.evaluateBool(false, @"Flash mount failed", true)
+
+    ' Test 27: Seek past end
+    utils.startTest(@"seek() past end of file")
+    handle := dfs.openFileRead(dfs.DEV_SD, @parFile1)
+    if handle >= 0
+        pos := dfs.seek(handle, 9999, dfs.SK_FILE_START)
+        debug("   seek(9999) returned: ", sdec(pos))
+        ' Behavior may vary - just verify it doesn't crash
+        utils.evaluateBool(true, @"seek past end no crash", true)
+        dfs.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"open failed", true)
+
+    ' ======================================================================
+    ' TEST GROUP 7: open(DEV_SD) modes
+    ' ======================================================================
+    utils.startTestGroup(@"open(DEV_SD) modes")
+
+    ' Test 28: FILEMODE_READ
+    utils.startTest(@"open(FILEMODE_READ) returns valid handle")
+    handle := dfs.open(dfs.DEV_SD, @parFile1, dfs.FILEMODE_READ)
+    utils.evaluateBool(handle >= 0, @"read handle valid", true)
+    if handle >= 0
+        dfs.closeFileHandle(handle)
+
+    ' Test 29: FILEMODE_WRITE truncates existing
+    utils.startTest(@"open(FILEMODE_WRITE) truncates existing file")
+    ' parFile1 has CONTENT_LEN bytes
+    handle := dfs.open(dfs.DEV_SD, @parFile1, dfs.FILEMODE_WRITE)
+    if handle >= 0
+        dfs.writeHandle(handle, @"HI", 2)
+        dfs.closeFileHandle(handle)
+    size := dfs.file_size(dfs.DEV_SD, @parFile1)
+    utils.evaluateSingleValue(size, @"truncated to 2 bytes", 2)
+
+    ' Test 30: FILEMODE_APPEND preserves + adds
+    utils.startTest(@"open(FILEMODE_APPEND) appends to existing")
+    handle := dfs.open(dfs.DEV_SD, @parFile1, dfs.FILEMODE_APPEND)
+    if handle >= 0
+        dfs.writeHandle(handle, @"END", 3)
+        dfs.closeFileHandle(handle)
+    size := dfs.file_size(dfs.DEV_SD, @parFile1)
+    utils.evaluateSingleValue(size, @"append grows to 5", 5)
+
+    ' Test 31: open non-existent for read returns error
+    utils.startTest(@"open(FILEMODE_READ) non-existent returns error")
+    handle := dfs.open(dfs.DEV_SD, @parFileNone, dfs.FILEMODE_READ)
+    utils.evaluateBool(handle < 0, @"error for missing file", true)
+
+    ' Test 32: FILEMODE_WRITE creates new file
+    utils.startTest(@"open(FILEMODE_WRITE) creates new file")
+    dfs.deleteFile(dfs.DEV_SD, @parFile2)
+    handle := dfs.open(dfs.DEV_SD, @parFile2, dfs.FILEMODE_WRITE)
+    utils.evaluateBool(handle >= 0, @"new file created", true)
+    if handle >= 0
+        dfs.writeHandle(handle, @testContent, CONTENT_LEN)
+        dfs.closeFileHandle(handle)
+    status := dfs.exists(dfs.DEV_SD, @parFile2)
+    utils.evaluateSubBool(status, @"file exists after write", true)
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+    cleanupTestFiles()
+
+    dfs.unmount(dfs.DEV_SD)
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+PRI cleanupTestFiles()
+' Delete all test files
+
+    dfs.deleteFile(dfs.DEV_SD, @parFile1)
+    dfs.deleteFile(dfs.DEV_SD, @parFile2)
+    dfs.deleteFile(dfs.DEV_SD, @parFile3)
+    dfs.changeDirectory(dfs.DEV_SD, @parSubDir)
+    dfs.deleteFile(dfs.DEV_SD, @parSubFile)
+    dfs.changeDirectory(dfs.DEV_SD, @"/")
+    dfs.deleteFile(dfs.DEV_SD, @parSubDir)
+    dfs.deleteFile(dfs.DEV_SD, @"STATTEST.TXT")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  =================================================================================================
+}}

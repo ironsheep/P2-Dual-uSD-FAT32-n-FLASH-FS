@@ -86,8 +86,8 @@ The SD card uses SPI Mode 0 (CPOL=0, CPHA=0) driven by P2 smart pins. The Flash 
 
 | Pin | Smart Pin Mode | Purpose |
 |-----|---------------|---------|
-| SCK (P61) | `P_TRANSITION \| P_OE` | Clock generation, idle LOW |
-| MOSI (P59) | `P_SYNC_TX \| P_OE` | Synchronized transmit, clocked by SCK |
+| SCK (P61) | `P_TRANSITION | P_OE` | Clock generation, idle LOW |
+| MOSI (P59) | `P_SYNC_TX | P_OE` | Synchronized transmit, clocked by SCK |
 | MISO (P58) | `P_SYNC_RX` | Synchronized receive, clocked by SCK |
 
 The streamer engine provides DMA-accelerated 512-byte sector transfers at the full SPI clock rate without per-byte cog intervention.

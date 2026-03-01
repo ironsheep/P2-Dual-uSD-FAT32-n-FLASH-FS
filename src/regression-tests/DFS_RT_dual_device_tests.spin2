@@ -1,12 +1,25 @@
 '' =================================================================================================
 ''
-''   File....... DFS_RT_phase2_verify.spin2
-''   Purpose.... Phase 2 verification: exercise dual_sd_fat32_flash_fs.spin2 Flash mount + bus switching
+''   File....... DFS_RT_dual_device_tests.spin2
+''   Purpose.... Dual-device verification: Flash mount, bus switching, SD integrity after Flash ops
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... FEB 2026
-''   Updated.... 26 FEB 2026
+''   Updated.... 28 FEB 2026
+''
+'' =================================================================================================
+''
+'' Tests dual-device aspects of the unified driver:
+''   - Flash mount state tracking (mounted before/after, SD survives Flash mount)
+''   - Flash serial number
+''   - SD file I/O works after Flash mount (bus switching verification)
+''   - Flash unmount/remount cycle
+''   - mount(DEV_BOTH) / unmount(DEV_BOTH)
+''   - SD data integrity after heavy Flash file operations
+''   - Worker cog stack guard
+''
+'' 37 tests total
 ''
 '' =================================================================================================
 
@@ -39,18 +52,39 @@ DAT
 
 testfile1       BYTE    "TEST2.TXT", 0
 testdata        BYTE    "Hello from dual_sd_fat32_flash_fs Phase 2!", 0
+
+' SD regression test file (survives Flash operations)
+sd_regfile      BYTE    "SDREG.TXT", 0
+sd_regdata      BYTE    "SD regression data for bus switching", 0
+
+' Flash test files (for heavy Flash I/O before SD regression check)
+fl_testfile     BYTE    "FLTEST1", 0
+fl_testfile2    BYTE    "FLTEST2", 0
+fl_renamed      BYTE    "FLRNAME", 0
+fl_testdata     BYTE    "Flash bus switching test data!", 0
+
+' Handle pool test files
+hp_sd_file1     BYTE    "HPSD1.TXT", 0
+hp_sd_file2     BYTE    "HPSD2.TXT", 0
+hp_sd_file3     BYTE    "HPSD3.TXT", 0
+hp_fl_file1     BYTE    "HPFL1", 0
+hp_fl_file2     BYTE    "HPFL2", 0
+hp_fl_file3     BYTE    "HPFL3", 0
+hp_fl_file4     BYTE    "HPFL4", 0
+
 readBuffer      BYTE    0[512]
 readBuf_guard   BYTE    0[16]
 
-PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo
-'' Main entry point for Phase 2 verification tests
+PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo, h1, h2, h3, h4, h5, h6, h7
+'' Main entry point for dual-device verification tests
 ''
-'' Tests dual_sd_fat32_flash_fs.spin2 Flash mount, serial number, and bus switching
+'' Tests dual_sd_fat32_flash_fs.spin2 Flash mount, serial number, bus switching,
+'' and SD integrity after Flash file operations
 
     debug(" ")
     debug("==============================================")
-    debug("  Dual FS Phase 2 Verification Tests")
-    debug("  (Flash mount + bus switching)")
+    debug("  Dual FS Dual-Device Verification Tests")
+    debug("  (Flash mount + bus switching + SD integrity)")
     debug("==============================================")
 
     ' ----------------------------------
@@ -209,6 +243,177 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
 
     ' ----------------------------------
+    ' TEST GROUP: SD integrity after Flash file operations
+    ' ----------------------------------
+    utils.startTestGroup(@"SD integrity after Flash file ops")
+
+    ' Untracked setup: write an SD file, then do heavy Flash I/O
+    dfs.deleteFile(dfs.DEV_SD, @sd_regfile)
+    handle := dfs.createFileNew(dfs.DEV_SD, @sd_regfile)
+    if handle >= 0
+      dfs.writeHandle(handle, @sd_regdata, strsize(@sd_regdata))
+      dfs.closeFileHandle(handle)
+
+    ' Untracked: create Flash file, write data, seek, delete, rename
+    dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile)
+    dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile2)
+    dfs.deleteFile(dfs.DEV_FLASH, @fl_renamed)
+
+    handle := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_WRITE)
+    if handle >= 0
+      dfs.writeHandle(handle, @fl_testdata, strsize(@fl_testdata))
+      dfs.closeFileHandle(handle)
+
+    handle := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_READ)
+    if handle >= 0
+      dfs.seekHandle(handle, 6)
+      bytefill(@readBuffer, 0, 64)
+      dfs.readHandle(handle, @readBuffer, 4)
+      dfs.closeFileHandle(handle)
+
+    dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile)
+
+    status := dfs.create_file(dfs.DEV_FLASH, @fl_testfile2, $00, 100)
+    dfs.rename(dfs.DEV_FLASH, @fl_testfile2, @fl_renamed)
+    dfs.deleteFile(dfs.DEV_FLASH, @fl_renamed)
+
+    ' Tracked: Verify SD file is still intact after all that Flash activity
+    utils.startTest(@"freeSpace(DEV_SD) still valid")
+    freeSpace := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateRange(freeSpace, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
+
+    utils.startTest(@"openFileRead(SD) still works")
+    handle := dfs.openFileRead(dfs.DEV_SD, @sd_regfile)
+    utils.evaluateRange(handle, @"openFileRead(SD) handle", 0, 5)
+
+    if handle >= 0
+      utils.startTest(@"readHandle(SD) after Flash ops")
+      bytefill(@readBuffer, 0, 512)
+      bytesRead := dfs.readHandle(handle, @readBuffer, 512)
+      utils.evaluateSingleValue(bytesRead, @"readHandle(SD) bytes", strsize(@sd_regdata))
+
+      utils.startTest(@"SD data matches after Flash ops")
+      utils.evaluateBufferMatch(@readBuffer, @sd_regdata, strsize(@sd_regdata), @"SD read vs written")
+
+      dfs.closeFileHandle(handle)
+
+    ' Clean up
+    dfs.deleteFile(dfs.DEV_SD, @sd_regfile)
+
+    ' ----------------------------------
+    ' TEST GROUP: Cross-device handle pool
+    ' ----------------------------------
+    utils.startTestGroup(@"Cross-device handle pool")
+
+    ' Setup: create SD and Flash test files for handle pool tests
+    dfs.deleteFile(dfs.DEV_SD, @hp_sd_file1)
+    dfs.deleteFile(dfs.DEV_SD, @hp_sd_file2)
+    dfs.deleteFile(dfs.DEV_SD, @hp_sd_file3)
+    handle := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file1)
+    if handle >= 0
+      dfs.writeHandle(handle, @"SD1", 3)
+      dfs.closeFileHandle(handle)
+    handle := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file2)
+    if handle >= 0
+      dfs.writeHandle(handle, @"SD2", 3)
+      dfs.closeFileHandle(handle)
+    handle := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file3)
+    if handle >= 0
+      dfs.writeHandle(handle, @"SD3", 3)
+      dfs.closeFileHandle(handle)
+
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file1)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file2)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file3)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file4)
+    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_WRITE)
+    if handle >= 0
+      dfs.wr_str(handle, @"FL1")
+      dfs.close(handle)
+    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_WRITE)
+    if handle >= 0
+      dfs.wr_str(handle, @"FL2")
+      dfs.close(handle)
+    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_WRITE)
+    if handle >= 0
+      dfs.wr_str(handle, @"FL3")
+      dfs.close(handle)
+    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_WRITE)
+    if handle >= 0
+      dfs.wr_str(handle, @"FL4")
+      dfs.close(handle)
+
+    ' Test: Open 3 SD file handles simultaneously
+    utils.startTest(@"Open 3 SD handles simultaneously")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file3)
+    utils.evaluateBool(h1 >= 0 and h2 >= 0 and h3 >= 0, @"3 SD handles valid", true)
+
+    ' Test: Open 3 Flash handles (total 6 = max)
+    utils.startTest(@"Open 3 Flash handles (total 6)")
+    h4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
+    h5 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
+    h6 := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_READ)
+    utils.evaluateBool(h4 >= 0 and h5 >= 0 and h6 >= 0, @"3 Flash handles valid", true)
+
+    ' Test: 7th handle should fail (pool exhausted)
+    utils.startTest(@"7th handle returns error (pool full)")
+    h7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
+    utils.evaluateBool(h7 < 0, @"7th handle fails", true)
+
+    ' Test: Close one SD handle, open Flash handle in freed slot
+    utils.startTest(@"Pool reclaim across devices")
+    dfs.closeFileHandle(h1)
+    h7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
+    utils.evaluateBool(h7 >= 0, @"Flash handle in freed SD slot", true)
+
+    ' Test: Close all, verify all 6 slots available again
+    utils.startTest(@"All 6 slots available after close all")
+    dfs.closeFileHandle(h2)
+    dfs.closeFileHandle(h3)
+    dfs.closeFileHandle(h4)
+    dfs.closeFileHandle(h5)
+    dfs.closeFileHandle(h6)
+    if h7 >= 0
+      dfs.closeFileHandle(h7)
+    ' Open 6 fresh handles to confirm all slots free
+    h1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file3)
+    h4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
+    h5 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
+    h6 := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_READ)
+    utils.evaluateBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0 and h5 >= 0 and h6 >= 0, @"all 6 re-opened", true)
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+    dfs.closeFileHandle(h3)
+    dfs.closeFileHandle(h4)
+    dfs.closeFileHandle(h5)
+    dfs.closeFileHandle(h6)
+
+    ' Test: Interleaved open/close SD and Flash
+    utils.startTest(@"Interleaved open/close SD and Flash")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
+    h2 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
+    h3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
+    h4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
+    utils.evaluateBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0, @"interleaved 4 handles", true)
+    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h2)
+    dfs.closeFileHandle(h3)
+    dfs.closeFileHandle(h4)
+
+    ' Cleanup
+    dfs.deleteFile(dfs.DEV_SD, @hp_sd_file1)
+    dfs.deleteFile(dfs.DEV_SD, @hp_sd_file2)
+    dfs.deleteFile(dfs.DEV_SD, @hp_sd_file3)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file1)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file2)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file3)
+    dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file4)
+
+    ' ----------------------------------
     ' TEST GROUP: Worker cog health
     ' ----------------------------------
     utils.startTestGroup(@"Worker cog health")
@@ -227,7 +432,7 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.ShowTestEndCounts()
 
     debug(" ")
-    debug("* Phase 2 Verification Tests Complete")
+    debug("* Dual-Device Verification Tests Complete")
     debug("END_SESSION")
 
 

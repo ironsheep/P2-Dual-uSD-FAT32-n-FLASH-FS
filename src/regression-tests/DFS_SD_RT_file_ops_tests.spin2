@@ -76,7 +76,7 @@ readBuffer_guard BYTE   0[16]
 sectorBuffer    BYTE    0[512]        ' For reading raw sectors during diagnostics
 sectorBuffer_guard BYTE 0[16]
 
-PUB go() | workerCog, result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten, bytesRead, root_sec, i, pEntry, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
+PUB go() | workerCog, result, status, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten, bytesRead, root_sec, i, pEntry, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
 '' Main entry point for file operations regression tests
 ''
 '' Tests file create, open, close, delete, rename using V3 handle API
@@ -277,16 +277,16 @@ PUB go() | workerCog, result, handle, h1, h2, h3, pFilename, fileSize, attrs, by
         dfs.closeFileHandle(handle)
 
     utils.startTest(@"deleteFile() removes the file")
-    result := dfs.deleteFile(dfs.DEV_SD, @testfile2)
-    utils.evaluateBool(result, @"deleteFile()", true)
+    status := dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    utils.evaluateSingleValue(status, @"deleteFile()", dfs.SUCCESS)
 
     utils.startTest(@"Verify file is deleted (openFileRead fails)")
     handle := dfs.openFileRead(dfs.DEV_SD, @testfile2)
     utils.evaluateSingleValue(handle, @"openFileRead() after delete", E_FILE_NOT_FOUND)
 
     utils.startTest(@"deleteFile() fails for non-existent file")
-    result := dfs.deleteFile(dfs.DEV_SD, @testfile2)
-    utils.evaluateBool(result, @"deleteFile() non-existent", false)
+    status := dfs.deleteFile(dfs.DEV_SD, @testfile2)
+    utils.evaluateBool(status < 0, @"deleteFile() non-existent", true)
 
     ' ----------------------------------
     ' TEST GROUP: File rename
@@ -297,8 +297,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, pFilename, fileSize, attrs, by
     dfs.syncDirCache()
 
     utils.startTest(@"rename() changes filename")
-    result := dfs.rename(dfs.DEV_SD, @testfile1, @renamedFile)
-    utils.evaluateBool(result, @"rename()", true)
+    status := dfs.rename(dfs.DEV_SD, @testfile1, @renamedFile)
+    utils.evaluateSingleValue(status, @"rename()", dfs.SUCCESS)
 
     utils.startTest(@"Original file no longer accessible")
     handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
@@ -315,8 +315,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, pFilename, fileSize, attrs, by
         dfs.closeFileHandle(handle)
 
     utils.startTest(@"rename() fails for non-existent source")
-    result := dfs.rename(dfs.DEV_SD, @"NOFILE.TXT", @"OTHER.TXT")
-    utils.evaluateBool(result, @"rename() non-existent", false)
+    status := dfs.rename(dfs.DEV_SD, @"NOFILE.TXT", @"OTHER.TXT")
+    utils.evaluateBool(status < 0, @"rename() non-existent", true)
 
     ' ----------------------------------
     ' TEST GROUP: Multiple file creation
@@ -420,8 +420,8 @@ PUB go() | workerCog, result, handle, h1, h2, h3, pFilename, fileSize, attrs, by
 
     ' Create a test directory for these tests
     dfs.deleteFile(dfs.DEV_SD, @testdir1)   ' Clean up if exists
-    result := dfs.newDirectory(dfs.DEV_SD, @testdir1)
-    debug("  Created test directory RTDIR1, result=", sdec_(result))
+    status := dfs.newDirectory(dfs.DEV_SD, @testdir1)
+    debug("  Created test directory RTDIR1, status=", sdec_(status))
 
     utils.startTest(@"openFileRead() on directory returns E_NOT_A_FILE")
     handle := dfs.openFileRead(dfs.DEV_SD, @testdir1)

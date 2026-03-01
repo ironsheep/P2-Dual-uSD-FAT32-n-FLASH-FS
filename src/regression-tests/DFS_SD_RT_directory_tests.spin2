@@ -63,7 +63,7 @@ stressContent   BYTE    "Stress file data", 0
 ' Buffer for generated filenames
 genFileName     BYTE    0[16]
 
-PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, created
+PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, created
 '' Main entry point for directory regression tests
 ''
 '' Tests directory creation, navigation, listing, and nested directories
@@ -77,8 +77,8 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    status := dfs.mount(dfs.DEV_SD)
+    if status == false
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -99,16 +99,16 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     utils.startTestGroup(@"Directory Creation")
 
     utils.startTest(@"newDirectory() creates a directory")
-    result := dfs.newDirectory(dfs.DEV_SD, @testDir1)
-    utils.evaluateBool(result, @"newDirectory()", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateSingleValue(status, @"newDirectory()", dfs.SUCCESS)
 
     utils.startTest(@"newDirectory() fails if directory exists")
-    result := dfs.newDirectory(dfs.DEV_SD, @testDir1)
-    utils.evaluateBool(result, @"newDirectory() existing", false)
+    status := dfs.newDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateBool(status < 0, @"newDirectory() existing", true)
 
     utils.startTest(@"Create second directory")
-    result := dfs.newDirectory(dfs.DEV_SD, @testDir2)
-    utils.evaluateBool(result, @"newDirectory() second", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @testDir2)
+    utils.evaluateSingleValue(status, @"newDirectory() second", dfs.SUCCESS)
 
     ' ----------------------------------
     ' TEST GROUP: Change directory
@@ -116,8 +116,8 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     utils.startTestGroup(@"Change Directory")
 
     utils.startTest(@"changeDirectory() to new directory")
-    result := dfs.changeDirectory(dfs.DEV_SD, @testDir1)
-    utils.evaluateBool(result, @"changeDirectory()", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateSingleValue(status, @"changeDirectory()", dfs.SUCCESS)
 
     utils.startTest(@"Create file in subdirectory")
     handle := dfs.createFileNew(dfs.DEV_SD, @testFile1)
@@ -126,21 +126,21 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     dfs.closeFileHandle(handle)
 
     utils.startTest(@"changeDirectory() back to parent with ..")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"..")
-    utils.evaluateBool(result, @"changeDirectory(..) ", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"..")
+    utils.evaluateSingleValue(status, @"changeDirectory(..) ", dfs.SUCCESS)
 
     utils.startTest(@"changeDirectory() to root with /")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
 
     utils.startTest(@"changeDirectory() fails for non-existent")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"NOEXIST")
-    utils.evaluateBool(result, @"changeDirectory() non-existent", false)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"NOEXIST")
+    utils.evaluateBool(status < 0, @"changeDirectory() non-existent", true)
 
     utils.startTest(@"changeDirectory() fails on a file (not a directory)")
     dfs.changeDirectory(dfs.DEV_SD, @testDir1)                                               ' Go to RTDIR1 where FILE1.TXT exists
-    result := dfs.changeDirectory(dfs.DEV_SD, @testFile1)                                    ' Should fail - FILE1.TXT is not a directory
-    utils.evaluateBool(result, @"changeDirectory() on file", false)
+    status := dfs.changeDirectory(dfs.DEV_SD, @testFile1)                                    ' Should fail - FILE1.TXT is not a directory
+    utils.evaluateBool(status < 0, @"changeDirectory() on file", true)
     dfs.changeDirectory(dfs.DEV_SD, @"/")                                                    ' Return to root
 
     ' ----------------------------------
@@ -149,16 +149,16 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     utils.startTestGroup(@"Nested Directories")
 
     utils.startTest(@"Change to first directory")
-    result := dfs.changeDirectory(dfs.DEV_SD, @testDir1)
-    utils.evaluateBool(result, @"changeDirectory()", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @testDir1)
+    utils.evaluateSingleValue(status, @"changeDirectory()", dfs.SUCCESS)
 
     utils.startTest(@"Create subdirectory")
-    result := dfs.newDirectory(dfs.DEV_SD, @subDir1)
-    utils.evaluateBool(result, @"newDirectory() nested", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @subDir1)
+    utils.evaluateSingleValue(status, @"newDirectory() nested", dfs.SUCCESS)
 
     utils.startTest(@"Change to nested subdirectory")
-    result := dfs.changeDirectory(dfs.DEV_SD, @subDir1)
-    utils.evaluateBool(result, @"changeDirectory() nested", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @subDir1)
+    utils.evaluateSingleValue(status, @"changeDirectory() nested", dfs.SUCCESS)
 
     utils.startTest(@"Create file in nested directory")
     handle := dfs.createFileNew(dfs.DEV_SD, @testFile2)
@@ -168,8 +168,8 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
     utils.startTest(@"Navigate back to root")
     dfs.changeDirectory(dfs.DEV_SD, @"/")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"/")  ' Should succeed
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"/")  ' Should succeed
+    utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
 
     ' ----------------------------------
     ' TEST GROUP: Path navigation
@@ -187,8 +187,8 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     dfs.closeFileHandle(handle)
 
     utils.startTest(@"Ensure back at root after path operations")
-    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
 
     ' ----------------------------------
     ' TEST GROUP: Directory listing
@@ -239,8 +239,8 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     dfs.closeFileHandle(handle)
 
     utils.startTest(@"moveFile() to subdirectory")
-    result := dfs.moveFile(dfs.DEV_SD, @"MOVEME.TXT", @testDir2)
-    utils.evaluateBool(result, @"moveFile()", true)
+    status := dfs.moveFile(dfs.DEV_SD, @"MOVEME.TXT", @testDir2)
+    utils.evaluateSingleValue(status, @"moveFile()", dfs.SUCCESS)
 
     utils.startTest(@"File no longer in root")
     handle := dfs.openFileRead(dfs.DEV_SD, @"MOVEME.TXT")
@@ -261,20 +261,20 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     ' Test: Deep nesting (5 levels)
     utils.startTest(@"Deep nesting - create 5-level directory structure")
     dfs.changeDirectory(dfs.DEV_SD, @"/")
-    result := dfs.newDirectory(dfs.DEV_SD, @deepDir1)
-    utils.evaluateSubBool(result, @"create DEEP1", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @deepDir1)
+    utils.evaluateSubValue(status, @"create DEEP1", dfs.SUCCESS)
     dfs.changeDirectory(dfs.DEV_SD, @deepDir1)
-    result := dfs.newDirectory(dfs.DEV_SD, @deepDir2)
-    utils.evaluateSubBool(result, @"create DEEP2", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @deepDir2)
+    utils.evaluateSubValue(status, @"create DEEP2", dfs.SUCCESS)
     dfs.changeDirectory(dfs.DEV_SD, @deepDir2)
-    result := dfs.newDirectory(dfs.DEV_SD, @deepDir3)
-    utils.evaluateSubBool(result, @"create DEEP3", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @deepDir3)
+    utils.evaluateSubValue(status, @"create DEEP3", dfs.SUCCESS)
     dfs.changeDirectory(dfs.DEV_SD, @deepDir3)
-    result := dfs.newDirectory(dfs.DEV_SD, @deepDir4)
-    utils.evaluateSubBool(result, @"create DEEP4", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @deepDir4)
+    utils.evaluateSubValue(status, @"create DEEP4", dfs.SUCCESS)
     dfs.changeDirectory(dfs.DEV_SD, @deepDir4)
-    result := dfs.newDirectory(dfs.DEV_SD, @deepDir5)
-    utils.evaluateSubBool(result, @"create DEEP5", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @deepDir5)
+    utils.evaluateSubValue(status, @"create DEEP5", dfs.SUCCESS)
 
     utils.startTest(@"Navigate to deepest level and create file")
     dfs.changeDirectory(dfs.DEV_SD, @deepDir5)
@@ -289,13 +289,13 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     dfs.changeDirectory(dfs.DEV_SD, @"..")  ' DEEP2
     dfs.changeDirectory(dfs.DEV_SD, @"..")  ' DEEP1
     dfs.changeDirectory(dfs.DEV_SD, @"..")  ' root
-    result := dfs.changeDirectory(dfs.DEV_SD, @"/")
-    utils.evaluateBool(result, @"back at root", true)
+    status := dfs.changeDirectory(dfs.DEV_SD, @"/")
+    utils.evaluateSingleValue(status, @"back at root", dfs.SUCCESS)
 
     ' Test: Empty directory listing
     utils.startTest(@"Empty directory listing")
     dfs.changeDirectory(dfs.DEV_SD, @"/")
-    result := dfs.newDirectory(dfs.DEV_SD, @manyFilesDir)
+    status := dfs.newDirectory(dfs.DEV_SD, @manyFilesDir)
     dfs.changeDirectory(dfs.DEV_SD, @manyFilesDir)
     fileCount := 0
     idx := 0
@@ -355,8 +355,8 @@ PUB go() | workerCog, result, pEntry, pFilename, attrs, fileCount, idx, handle, 
     ' Create stress test directory
     dfs.changeDirectory(dfs.DEV_SD, @"/")
     dfs.deleteFile(dfs.DEV_SD, @stressDir)
-    result := dfs.newDirectory(dfs.DEV_SD, @stressDir)
-    utils.evaluateSubBool(result, @"create stress dir", true)
+    status := dfs.newDirectory(dfs.DEV_SD, @stressDir)
+    utils.evaluateSubValue(status, @"create stress dir", dfs.SUCCESS)
     dfs.changeDirectory(dfs.DEV_SD, @stressDir)
 
     ' Create 20 files: STR00.TXT through STR19.TXT

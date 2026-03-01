@@ -276,7 +276,7 @@ PRI run() | result, cardSectors
     ' Initialize card for raw sector access
     dfs.init(pin_cs, pin_mosi, pin_miso, pin_sck)
     result := dfs.initCardOnly()
-    if result == false
+    if result <> dfs.SUCCESS
         fifo.put(@"FATAL: Cannot initialize card!")
         op_done := true
         return

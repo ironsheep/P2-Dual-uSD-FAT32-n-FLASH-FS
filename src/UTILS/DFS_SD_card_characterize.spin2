@@ -258,7 +258,7 @@ PUB main() | result
   debug("Initializing SD card (no-mount mode)...")
   dfs.init(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
   result := dfs.initCardOnly()
-  if not result
+  if result <> dfs.SUCCESS
     debug("FATAL: Failed to initialize SD card!")
     debug("Check card insertion and wiring.")
     repeat  ' halt
@@ -317,21 +317,21 @@ PRI readAllRegisters() | result
 
   ' Read CID (Card Identification)
   result := dfs.readCIDRaw(@cid_buf)
-  if result
+  if result == dfs.SUCCESS
     debug("  CID: OK (16 bytes)")
   else
     debug("  CID: FAILED")
 
   ' Read CSD (Card Specific Data)
   result := dfs.readCSDRaw(@csd_buf)
-  if result
+  if result == dfs.SUCCESS
     debug("  CSD: OK (16 bytes)")
   else
     debug("  CSD: FAILED")
 
   ' Read SCR (SD Configuration Register)
   result := dfs.readSCRRaw(@scr_buf)
-  if result
+  if result == dfs.SUCCESS
     debug("  SCR: OK (8 bytes)")
   else
     debug("  SCR: FAILED")
@@ -342,7 +342,7 @@ PRI readAllRegisters() | result
 
   ' Read SD Status (ACMD13) - 64 bytes
   result := dfs.readSDStatusRaw(@sdst_buf)
-  if result
+  if result == dfs.SUCCESS
     debug("  SD Status: OK (64 bytes)")
     sdst_valid := 1
   else

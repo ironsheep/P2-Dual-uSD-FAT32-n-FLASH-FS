@@ -6,8 +6,11 @@ Theory of operations for each standalone utility program in `src/UTILS/`.
 
 | Document | Utility |
 |----------|---------|
-| [SD-CARD-CHARACTERIZE-THEORY.md](SD-CARD-CHARACTERIZE-THEORY.md) | Card register reader (CID/CSD/SCR/OCR) |
-| [SD-FAT32-AUDIT-THEORY.md](SD-FAT32-AUDIT-THEORY.md) | Read-only filesystem validator |
-| [SD-FAT32-FSCK-THEORY.md](SD-FAT32-FSCK-THEORY.md) | Filesystem check and repair |
-| [SD-FORMAT-UTILITY-THEORY.md](SD-FORMAT-UTILITY-THEORY.md) | FAT32 card formatter |
-| [SD-SPEED-CHARACTERIZE-THEORY.md](SD-SPEED-CHARACTERIZE-THEORY.md) | Maximum SPI speed tester |
+| [SD-FORMAT-UTILITY-THEORY.md](SD-FORMAT-UTILITY-THEORY.md) | SD FAT32 card formatter |
+| [SD-FAT32-AUDIT-THEORY.md](SD-FAT32-AUDIT-THEORY.md) | SD read-only filesystem validator |
+| [SD-FAT32-FSCK-THEORY.md](SD-FAT32-FSCK-THEORY.md) | SD filesystem check and repair |
+| [FLASH-FORMAT-UTILITY-THEORY.md](FLASH-FORMAT-UTILITY-THEORY.md) | Flash filesystem formatter |
+
+---
+
+*Part of the [P2 Dual SD FAT32 + Flash Filesystem](../../README.md) project — Iron Sheep Productions*
