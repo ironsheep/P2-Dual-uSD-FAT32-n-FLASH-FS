@@ -1,10 +1,12 @@
 # FAT32 Fsck — Theory of Operations
 
-*SD_FAT32_fsck.spin2 · isp_fsck_utility.spin2*
+*DFS_SD_FAT32_fsck.spin2 · isp_fsck_utility.spin2*
 
 ## Overview
 
-The FSCK (Filesystem Check) utility detects and repairs FAT32 filesystem corruption on SD cards. It operates in auto-repair mode using raw sector access (`initCardOnly` + `readSectorRaw` / `writeSectorRaw`), bypassing the filesystem driver entirely. This ensures it can repair corruption that would prevent normal mounting.
+The FSCK (Filesystem Check) utility detects and repairs FAT32 filesystem corruption on SD cards. It operates in auto-repair mode using the unified driver's raw sector access (`initCardOnly` + `readSectorRaw` / `writeSectorRaw`), bypassing the filesystem mount entirely. This ensures it can repair corruption that would prevent normal mounting.
+
+The FSCK engine (`isp_fsck_utility.spin2`) runs in a separate cog and communicates results via an inter-cog string FIFO. The `DFS_SD_FAT32_fsck.spin2` runner starts the engine in FSCK mode and pumps FIFO output to the debug terminal.
 
 ## Architecture: Four-Pass Design
 

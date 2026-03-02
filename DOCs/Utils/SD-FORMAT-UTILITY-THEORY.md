@@ -1,12 +1,12 @@
 # Format Utility — Theory of Operations
 
-*SD_format_card.spin2 · isp_format_utility.spin2*
+*DFS_SD_format_card.spin2 · isp_format_utility.spin2*
 
 ## Overview
 
-The format utility creates a complete FAT32 filesystem on an SD card from scratch. It is a library object (not a standalone program) that provides `format()` and `formatWithLabel()` public methods. The `SD_format_card.spin2` runner and regression tests use this library.
+The format utility creates a complete FAT32 filesystem on an SD card from scratch. It is a library object (not a standalone program) that provides `format()` and `formatWithLabel()` public methods. The `DFS_SD_format_card.spin2` runner and regression tests use this library.
 
-The utility writes all filesystem structures using raw sector access (`initCardOnly` + `writeSectorRaw`), creating a Microsoft-compatible FAT32 filesystem that works with Windows, macOS, and Linux.
+The utility writes all filesystem structures using the unified driver's raw sector access (`initCardOnly` + `writeSectorRaw`), creating a Microsoft-compatible FAT32 filesystem that works with Windows, macOS, and Linux.
 
 ## FAT32 Disk Layout
 
@@ -32,7 +32,7 @@ The `doFormat()` method executes these steps in order:
 
 ### 1. Card Initialization
 
-Calls `sd.initCardOnly()` for raw sector access, then reads card size via `sd.cardSizeSectors()`.
+Calls `dfs.initCardOnly()` for raw sector access, then reads card size via `dfs.cardSizeSectors()`.
 
 ### 2. Parameter Calculation (`calculateParameters`)
 

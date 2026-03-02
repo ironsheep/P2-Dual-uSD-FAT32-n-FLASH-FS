@@ -1,196 +1,89 @@
-# Format Utility — Theory of Operations
+# Flash Format Utility - Theory of Operations
 
-*SD_format_card.spin2 · isp_format_utility.spin2*
+*DFS_FL_format.spin2*
 
 ## Overview
 
-The format utility creates a complete FAT32 filesystem on an SD card from scratch. It is a library object (not a standalone program) that provides `format()` and `formatWithLabel()` public methods. The `SD_format_card.spin2` runner and regression tests use this library.
+The Flash format utility erases the onboard 16MB Flash filesystem, returning it to a clean empty state. Unlike the SD format utility (which builds a complex FAT32 disk layout), Flash formatting is straightforward: cancel every active block, then remount to rebuild the translation tables.
 
-The utility writes all filesystem structures using raw sector access (`initCardOnly` + `writeSectorRaw`), creating a Microsoft-compatible FAT32 filesystem that works with Windows, macOS, and Linux.
+The utility uses the unified driver's `format(DEV_FLASH)` API, which routes to the internal `fl_format()` method running in the worker cog.
 
-## FAT32 Disk Layout
+## Flash Filesystem Structure
 
-The format utility creates the following on-disk structure:
+The Flash filesystem occupies blocks $080 through $FFF of the W25Q128JV SPI Flash chip:
 
-```
-Sector 0:          MBR (Master Boot Record) with partition table
-Sectors 1-8191:    Unused (gap for 4MB alignment)
-Sector 8192:       VBR (Volume Boot Record / BPB)
-Sector 8193:       FSInfo sector
-Sectors 8194-8197: Reserved
-Sector 8198:       Backup VBR (copy of sector 8192)
-Sector 8199:       Backup FSInfo (copy of sector 8193)
-Sectors 8200-8223: Reserved (total 32 reserved sectors)
-Sector 8224:       FAT1 start
-Sector 8224+S:     FAT2 start (S = sectors per FAT)
-Sector 8224+2S:    Data region start (root directory cluster)
-```
+| Region | Blocks | Size | Purpose |
+|--------|--------|------|---------|
+| Boot image | $000-$07F | 512 KB | Reserved for P2 boot code (not touched by FS) |
+| Filesystem | $080-$FFF | 15.5 MB | 3,968 blocks available for files |
+
+Each block is 4 KB ($1000 bytes). The first byte of every block contains **lifecycle bits** that track the block's wear-leveling generation:
+
+| Bits [7:5] | State | Meaning |
+|------------|-------|---------|
+| %000 | Erased | Block has been erased (all $FF) |
+| %011 | Active (gen 1) | Block contains valid data |
+| %101 | Active (gen 2) | Block contains valid data (next generation) |
+| %110 | Active (gen 3) | Block contains valid data (next generation) |
+| %001 | Cancelled | Block was cancelled (data invalid) |
+
+The three active patterns cycle: %011 -> %101 -> %110 -> %011, providing wear-leveling without requiring a block erase. Flash bits can only be programmed from 1 to 0; the lifecycle pattern exploits this to transition between generations using single-byte writes.
 
 ## Format Sequence
 
-The `doFormat()` method executes these steps in order:
+The `fl_format()` method performs two steps:
 
-### 1. Card Initialization
+### 1. Cancel All Active Blocks
 
-Calls `sd.initCardOnly()` for raw sector access, then reads card size via `sd.cardSizeSectors()`.
-
-### 2. Parameter Calculation (`calculateParameters`)
-
-Computes filesystem geometry from card size:
-
-**Partition alignment**: Always starts at sector 8192 (4MB aligned), matching modern card formatting conventions.
-
-**Cluster size selection** (Microsoft-recommended):
-
-| Card Size | Sectors/Cluster | Cluster Size |
-|-----------|-----------------|--------------|
-| <= 8 GB   | 8               | 4 KB         |
-| <= 16 GB  | 16              | 8 KB         |
-| <= 32 GB  | 32              | 16 KB        |
-| > 32 GB   | 64              | 32 KB        |
-
-**FAT size calculation**:
 ```
-totalClusters = (dataSectors - 32) / sectorsPerCluster
-sectorsPerFat = (totalClusters * 4 + 511) / 512
-```
-Each FAT entry is 4 bytes (LONG), so one FAT sector holds 128 entries.
-
-**Derived layout**:
-```
-fat1Start = partitionStart + 32   (reserved sectors)
-fat2Start = fat1Start + sectorsPerFat
-dataStart = fat2Start + sectorsPerFat
+repeat FL_BLOCKS with block_address
+  fl_read_block_addr(block_address, @cycleBits, $000, $000)   ' Read first byte
+  if lookdown(cycleBits.[7..5] : %011, %101, %110)            ' Active?
+    fl_cancel_block(block_address)                             ' Cancel it
 ```
 
-FAT32 requires a minimum of 65,525 clusters. Cards too small for this are rejected.
+For each of the 3,968 filesystem blocks:
+1. Read the first byte to check the lifecycle bits
+2. If the block is active (any of the three valid lifecycle patterns), cancel it
 
-### 3. MBR Write (`writeMBR`)
+**Cancelling a block** programs %00011111 into the first byte. This clears the upper lifecycle bits to %000xx, which is not a valid active pattern. The block is now effectively dead -- it will be ignored during the next mount.
 
-Creates sector 0 with a single partition table entry:
+Note: Erased blocks (%000 in bits [7:5]) and already-cancelled blocks are skipped. Only blocks with valid lifecycle patterns are touched.
 
-| Offset | Size | Value | Description |
-|--------|------|-------|-------------|
-| $1BE   | 1    | $00   | Not bootable |
-| $1C2   | 1    | $0C   | FAT32 with LBA |
-| $1C6   | 4    | 8192  | Partition start (LBA) |
-| $1CA   | 4    | var   | Partition size in sectors |
-| $1FE   | 2    | $AA55 | Boot signature |
+### 2. Remount
 
-CHS fields use legacy placeholder values ($FE/$FF/$FF for end).
+After cancelling all blocks, the format clears the `flash_mounted` flag and calls `do_flash_mount()`. The mount process scans all blocks and rebuilds the translation tables. Since every block is now cancelled or erased, the mount finds no valid files and creates a clean, empty filesystem.
 
-### 4. VBR Write (`writeVBR`)
-
-Creates the Volume Boot Record at the partition start sector with the BIOS Parameter Block (BPB):
-
-**Jump instruction**: `$EB $58 $90` (standard FAT32 jump)
-
-**OEM name**: `"P2FMTER "` (8 bytes, identifies our formatter)
-
-**BPB fields**:
-
-| Offset | Field | Value |
-|--------|-------|-------|
-| $0B | Bytes/sector | 512 |
-| $0D | Sectors/cluster | Calculated |
-| $0E | Reserved sectors | 32 |
-| $10 | Number of FATs | 2 |
-| $11 | Root entries (16-bit) | 0 (FAT32) |
-| $13 | Total sectors (16-bit) | 0 (FAT32) |
-| $15 | Media type | $F8 (fixed disk) |
-| $16 | FAT size (16-bit) | 0 (FAT32) |
-| $1C | Hidden sectors | partitionStart |
-| $20 | Total sectors (32-bit) | totalSectors - partitionStart |
-| $24 | FAT size (32-bit) | sectorsPerFat |
-| $2C | Root cluster | 2 |
-| $30 | FSInfo sector | 1 |
-| $32 | Backup boot sector | 6 |
-| $42 | Extended boot sig | $29 |
-| $43 | Volume serial | getct() (random) |
-| $47 | Volume label | 11-byte padded label |
-| $52 | FS type string | "FAT32   " |
-| $1FE | Boot signature | $AA55 |
-
-### 5. FSInfo Write (`writeFSInfo`)
-
-Creates the FSInfo sector at partition+1:
-
-| Offset | Field | Value |
-|--------|-------|-------|
-| $000 | Lead signature | $41615252 ("RRaA") |
-| $1E4 | Structure signature | $61417272 ("rrAa") |
-| $1E8 | Free cluster count | totalClusters - 1 |
-| $1EC | Next free cluster hint | 3 |
-| $1FC | Trail signature | $AA550000 |
-
-The free count is `totalClusters - 1` because cluster 2 (root directory) is allocated.
-
-### 6. Backup Boot (`writeBackupBoot`)
-
-Copies the VBR to partition sector 6 and FSInfo to partition sector 7. This provides redundancy for critical boot structures.
-
-### 7. FAT Initialization (`initFAT`)
-
-Called twice (once for FAT1, once for FAT2). Each FAT table requires `sectorsPerFat` sectors.
-
-**First sector** has three special entries:
-
-| Entry | Value | Meaning |
-|-------|-------|---------|
-| FAT[0] | $0FFFFFF8 | Media type descriptor |
-| FAT[1] | $0FFFFFFF | End-of-chain marker |
-| FAT[2] | $0FFFFFFF | Root directory (single cluster, EOC) |
-
-**Remaining sectors** are written as all zeros (every cluster is free).
-
-Progress is reported every 256 sectors since this is the longest step (writing thousands of sectors for each FAT copy).
-
-### 8. Root Directory (`initRootDirectory`)
-
-Initializes the first data cluster (cluster 2) with a volume label directory entry:
-
-| Offset | Field | Value |
-|--------|-------|-------|
-| $00 | Name (11 bytes) | Volume label, space-padded |
-| $0B | Attributes | $08 (volume label) |
-| $10 | Creation date | $0021 (1980-01-01) |
-| $18 | Modification date | $0021 (1980-01-01) |
-| $1C | File size | 0 |
-
-All remaining bytes in the root cluster are zeroed (indicating no more directory entries).
-
-## Volume Label Handling
-
-Labels are always:
-- Converted to uppercase (FAT32 requirement)
-- Padded with spaces to exactly 11 characters
-- Stored in both the VBR (offset $47) and as the first root directory entry
-
-The default label is `"P2-XFER    "`.
-
-## Library API
+## Driver API
 
 ```spin2
-OBJ fmt : "isp_format_utility"
+OBJ dfs : "dual_sd_fat32_flash_fs"
 
-' Format with default label "P2-XFER"
-result := fmt.format(cs, mosi, miso, sck)
+' Initialize and mount
+dfs.init(CS, MOSI, MISO, SCK)
+status := dfs.mount(dfs.DEV_FLASH)
 
-' Format with custom label (max 11 chars)
-result := fmt.formatWithLabel(cs, mosi, miso, sck, @"MYVOLUME")
+' Format (erases all files)
+status := dfs.format(dfs.DEV_FLASH)
 
-' Release SPI pins after formatting
-fmt.stop()
+' Clean up
+dfs.stop()
 ```
 
-Both methods return TRUE on success, FALSE on failure. After formatting, call `stop()` to release the worker cog and SPI pins before using the card with another driver instance.
+`format()` returns `SUCCESS` on completion. The mount attempt before format is optional -- `format()` works on both mounted and unmounted Flash.
 
-## Cross-OS Compatibility
+## Comparison with SD Format
 
-The format follows the Microsoft FAT32 specification to ensure compatibility:
-- Standard partition alignment (4MB / sector 8192)
-- All required BPB fields populated
-- Dual FAT tables (FAT1 and FAT2)
-- FSInfo sector with proper signatures
-- Backup boot structures at standard locations
-- Volume label in both VBR and root directory
+| Aspect | Flash Format | SD Format |
+|--------|-------------|-----------|
+| Complexity | Simple (cancel + remount) | Complex (MBR, VBR, FSInfo, FAT, root dir) |
+| Time | < 1 second | Minutes (FAT table writes) |
+| Mechanism | Program lifecycle bits to cancel | Write entire disk structure |
+| Library needed | None (built into driver) | `isp_format_utility.spin2` (temp cog) |
+| Block erase | Not required | N/A (sector writes) |
+
+Flash formatting is fast because it only needs to program a single byte per active block. There is no need to erase the Flash chip -- cancelled blocks will be erased on demand when the filesystem needs free space for new writes.
+
+## Recovery
+
+If the Flash filesystem becomes corrupt and `format()` cannot recover it (e.g., the SPI bus is not functional), the Flash chip can be bulk-erased externally. After a chip erase, all blocks return to $FF (erased state), and the next `mount()` will create a clean filesystem.
