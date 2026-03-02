@@ -54,6 +54,7 @@ jobs:
           cp LICENSE "${DEST}/"
           cp CHANGELOG.md "${DEST}/"
           [ -f AUTHORS.md ] && cp AUTHORS.md "${DEST}/"
+          cp .release/README.md "${DEST}/"
 
           # DOCs/ - user-facing documentation
           mkdir -p "${DEST}/DOCs"
@@ -71,28 +72,28 @@ jobs:
           mkdir -p "${DEST}/DOCs/Reference"
           cp DOCs/Reference/*.md "${DEST}/DOCs/Reference/" 2>/dev/null || true
 
-          # src/ - driver
+          # src/ - driver + release README
           mkdir -p "${DEST}/src"
-          [ -f src/README.md ] && cp src/README.md "${DEST}/src/"
+          cp .release/src/README.md "${DEST}/src/"
           cp src/dual_sd_fat32_flash_fs.spin2 "${DEST}/src/"
 
           # src/DEMO/ - demo shell and support files
           mkdir -p "${DEST}/src/DEMO"
-          [ -f src/DEMO/README.md ] && cp src/DEMO/README.md "${DEST}/src/DEMO/"
+          cp .release/src/DEMO/README.md "${DEST}/src/DEMO/"
           cp src/DEMO/DFS_demo_shell.spin2 "${DEST}/src/DEMO/"
           cp src/DEMO/isp_serial_singleton.spin2 "${DEST}/src/DEMO/"
           cp src/DEMO/isp_mem_strings.spin2 "${DEST}/src/DEMO/"
 
           # src/EXAMPLES/ - compilable example programs
           mkdir -p "${DEST}/src/EXAMPLES"
-          [ -f src/EXAMPLES/README.md ] && cp src/EXAMPLES/README.md "${DEST}/src/EXAMPLES/"
+          cp .release/src/EXAMPLES/README.md "${DEST}/src/EXAMPLES/"
           cp src/EXAMPLES/DFS_example_basic.spin2 "${DEST}/src/EXAMPLES/"
           cp src/EXAMPLES/DFS_example_cross_copy.spin2 "${DEST}/src/EXAMPLES/"
           cp src/EXAMPLES/DFS_example_data_logger.spin2 "${DEST}/src/EXAMPLES/"
 
           # src/UTILS/ - utility programs and support libraries
           mkdir -p "${DEST}/src/UTILS"
-          [ -f src/UTILS/README.md ] && cp src/UTILS/README.md "${DEST}/src/UTILS/"
+          cp .release/src/UTILS/README.md "${DEST}/src/UTILS/"
           cp src/UTILS/DFS_SD_format_card.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/DFS_SD_FAT32_audit.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/DFS_SD_FAT32_fsck.spin2 "${DEST}/src/UTILS/"
