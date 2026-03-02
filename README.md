@@ -6,7 +6,21 @@ A unified filesystem driver for the Parallax Propeller 2 (P2) that provides simu
 ![Platform](https://img.shields.io/badge/platform-Propeller%202-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **See also:** The standalone microSD FAT32 driver (SD-only, no Flash) is available separately at [P2 microSD FAT32 Filesystem](https://github.com/ironsheep/P2-uSD-FAT32-FS).
+> **See also:** The two individual drivers are also available as standalone alternatives:
+> [P2 FLASH Filesystem](https://github.com/ironsheep/P2-FLASH-FS) (Flash-only) and
+> [P2 microSD FAT32 Filesystem](https://github.com/ironsheep/P2-uSD-FAT32-FS) (SD-only).
+
+## When to Use This Driver
+
+This driver is larger than either standalone driver because it includes both filesystems. There are several ways to use it depending on your project needs:
+
+- **Dual-device product** — Your application uses both SD and Flash at runtime. One cog, one API, both devices always available.
+
+- **Provisioning tool** — Use the SD card to load configuration files, firmware images, or data onto Flash during manufacturing or field setup. Once Flash is populated, ship the product with the smaller [standalone Flash driver](https://github.com/ironsheep/P2-FLASH-FS) for a reduced image size.
+
+- **Development and testing** — Use the SD card as a convenient way to get data onto the board during development, then switch to Flash-only for production.
+
+If your product only ever needs one device, the standalone drivers ([Flash-only](https://github.com/ironsheep/P2-FLASH-FS), [SD-only](https://github.com/ironsheep/P2-uSD-FAT32-FS)) produce smaller binaries.
 
 ## Features
 
@@ -76,20 +90,18 @@ The SD card uses **SPI Mode 0** (CPOL=0, CPHA=0 — clock idles LOW) while the F
 ## Hardware Requirements
 
 - Parallax Propeller 2 — [P2-EC](https://www.parallax.com/product/p2-edge-module/) or [P2-EC32MB](https://www.parallax.com/product/p2-edge-module-32mb/)
-- microSD Add-on Board — [#64009](https://www.parallax.com/product/micro-sd-card-add-on-board/)
-- microSD card (SDHC or SDXC, FAT32 formatted)
+- microSD card (SDHC or SDXC) — the included format utility can format cards that are not already FAT32
 
 ### Default Pin Configuration (P2 Edge)
 
-| Signal | Pin | Device |
-|--------|-----|--------|
-| MISO (DAT0) | P58 | Shared |
-| MOSI (CMD) | P59 | Shared |
-| SD CS (DAT3) | P60 | SD Card |
-| SD SCK (CLK) / FLASH CS | P61 | SD Card clock / Flash select |
-| FLASH SCK | P60 | Flash clock (shared with SD CS) |
+| Pin | SD Card | Flash |
+|-----|---------|-------|
+| P58 | MISO (DAT0) | MISO |
+| P59 | MOSI (CMD) | MOSI |
+| P60 | CS (DAT3) | SCK |
+| P61 | SCK (CLK) | CS |
 
-The Flash chip on the P2 Edge Module shares physical pins with the SD header group. Pin assignments are configurable at `init()` time.
+The SD card and Flash chip share the same four SPI pins, with P60 and P61 swapping roles between devices. Pin assignments are configurable at `init()` time.
 
 ## Project Structure
 
