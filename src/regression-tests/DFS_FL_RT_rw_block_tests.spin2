@@ -54,21 +54,19 @@ PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, wor
     status := dfs.format(dfs.DEV_FLASH)
     if status <> dfs.SUCCESS
         utils.showError(@"format()", status)
-        return
+    else
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            utils.showError(@"mount()", status)
+        else
+            utils.ShowStats()                                   ' should have empty filesystem
+            utils.showFiles()
 
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-        utils.showError(@"mount()", status)
-        return
+            utils.showChipAndDriverVersion()
 
-    utils.ShowStats()                                   ' should have empty filesystem
-    utils.showFiles()
-
-    utils.showChipAndDriverVersion()
-
-    testWriteRecords(@testfile, 10, 1, 0)
-    testWriteRecords(@testfile2, 45, 2, 1)                 ' tail last record in 2nd block
-    testWriteRecords(@testfile3, 92, 3, 3)                 ' tail of last record in 3rd block
+            testWriteRecords(@testfile, 10, 1, 0)
+            testWriteRecords(@testfile2, 45, 2, 1)                 ' tail last record in 2nd block
+            testWriteRecords(@testfile3, 92, 3, 3)                 ' tail of last record in 3rd block
 
     utils.ShowTestEndCounts()
 

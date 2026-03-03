@@ -27,6 +27,10 @@ CON
     SD_MISO = 58
     SD_SCK  = 61
 
+    ' Display limits
+    MAX_DISPLAY_FILES   = 20        ' Max files to list before truncating
+    FNAME_BUF_SIZE      = 128       ' Filename buffer size
+
 OBJ
 
     dfs : "dual_sd_fat32_flash_fs"
@@ -48,80 +52,74 @@ PUB go() | status, used, free_ct, file_count, iter_count, iter_bytes, blockId, f
     status := dfs.canMount(dfs.DEV_FLASH)
     if status == dfs.SUCCESS
         debug("  canMount: PASS")
+
+        ' --- Phase 2: Mount and read statistics ---
+        debug(" ")
+        debug("Phase 2: Mount and statistics...")
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            debug("  Mount FAILED (status=", sdec_(status), ")")
+        else
+            debug("  Mount: PASS")
+
+            ' Get device stats
+            used, free_ct, file_count := dfs.stats(dfs.DEV_FLASH)
+            debug("  Used blocks:  ", udec_(used))
+            debug("  Free blocks:  ", udec_(free_ct))
+            debug("  File count:   ", udec_(file_count))
+            debug("  Total blocks: ", udec_(used + free_ct))
+
+            ' Get serial number
+            sn_hi, sn_lo := dfs.serial_number(dfs.DEV_FLASH)
+            debug("  JEDEC ID: $", uhex_(sn_hi), "_", uhex_(sn_lo))
+
+            ' --- Phase 3: Verify file iteration matches stats ---
+            debug(" ")
+            debug("Phase 3: File iteration verification...")
+            iter_count := 0
+            iter_bytes := 0
+            blockId := 0
+            repeat
+                dfs.directory(dfs.DEV_FLASH, @blockId, @fname, @fsize)
+                if BYTE[@fname][0] == 0
+                    quit
+                iter_count++
+                iter_bytes += fsize
+                if iter_count <= MAX_DISPLAY_FILES
+                    debug("  [", udec_(iter_count), "] ", zstr_(@fname), " (", udec_(fsize), " bytes)")
+                elseif iter_count == MAX_DISPLAY_FILES + 1
+                    debug("  ... (truncated)")
+            debug("  Iterated files: ", udec_(iter_count))
+            debug("  Total bytes:    ", udec_(iter_bytes))
+
+            ' Compare iteration count with stats
+            if iter_count == file_count
+                debug("  File count: MATCH")
+            else
+                debug("  File count: MISMATCH (stats=", udec_(file_count), " iter=", udec_(iter_count), ")")
+
+            ' --- Summary ---
+            debug(" ")
+            debug("======================================================")
+            if iter_count == file_count
+                debug("  AUDIT PASSED - Flash filesystem is healthy")
+            else
+                debug("  AUDIT WARNING - File count mismatch")
+            debug("======================================================")
+
+            dfs.unmount(dfs.DEV_FLASH)
+
+        dfs.stop()
     else
         debug("  canMount: FAIL (status=", sdec_(status), ")")
         debug("  Flash may need format().")
-        debug(" ")
-        debug("END_SESSION")
-        dfs.stop()
-        return
-
-    ' --- Phase 2: Mount and read statistics ---
-    debug(" ")
-    debug("Phase 2: Mount and statistics...")
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-        debug("  Mount FAILED (status=", sdec_(status), ")")
-        debug(" ")
-        debug("END_SESSION")
-        dfs.stop()
-        return
-    debug("  Mount: PASS")
-
-    ' Get device stats
-    used, free_ct, file_count := dfs.stats(dfs.DEV_FLASH)
-    debug("  Used blocks:  ", udec_(used))
-    debug("  Free blocks:  ", udec_(free_ct))
-    debug("  File count:   ", udec_(file_count))
-    debug("  Total blocks: ", udec_(used + free_ct))
-
-    ' Get serial number
-    sn_hi, sn_lo := dfs.serial_number(dfs.DEV_FLASH)
-    debug("  JEDEC ID: $", uhex_(sn_hi), "_", uhex_(sn_lo))
-
-    ' --- Phase 3: Verify file iteration matches stats ---
-    debug(" ")
-    debug("Phase 3: File iteration verification...")
-    iter_count := 0
-    iter_bytes := 0
-    blockId := 0
-    repeat
-        dfs.directory(dfs.DEV_FLASH, @blockId, @fname, @fsize)
-        if BYTE[@fname][0] == 0
-            quit
-        iter_count++
-        iter_bytes += fsize
-        if iter_count <= 20
-            debug("  [", udec_(iter_count), "] ", zstr_(@fname), " (", udec_(fsize), " bytes)")
-        elseif iter_count == 21
-            debug("  ... (truncated)")
-    debug("  Iterated files: ", udec_(iter_count))
-    debug("  Total bytes:    ", udec_(iter_bytes))
-
-    ' Compare iteration count with stats
-    if iter_count == file_count
-        debug("  File count: MATCH")
-    else
-        debug("  File count: MISMATCH (stats=", udec_(file_count), " iter=", udec_(iter_count), ")")
-
-    ' --- Summary ---
-    debug(" ")
-    debug("======================================================")
-    if iter_count == file_count
-        debug("  AUDIT PASSED - Flash filesystem is healthy")
-    else
-        debug("  AUDIT WARNING - File count mismatch")
-    debug("======================================================")
-
-    dfs.unmount(dfs.DEV_FLASH)
-    dfs.stop()
 
     debug(" ")
     debug("END_SESSION")
 
 DAT
 
-fname   BYTE    0[128]
+fname   BYTE    0[FNAME_BUF_SIZE]
 
 CON { license }
 

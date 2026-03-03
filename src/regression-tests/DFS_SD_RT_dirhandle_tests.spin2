@@ -38,15 +38,8 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' Error codes we expect to encounter
-     E_TOO_MANY_FILES    = -90
-     E_INVALID_HANDLE    = -91
-     E_FILE_NOT_FOUND    = -40
-     E_NOT_A_DIR         = -43
-     E_NOT_A_DIR_HANDLE  = -93
-
-     ' Maximum handles (must match driver's MAX_OPEN_FILES)
-     MAX_TEST_HANDLES = 6
+     ' FAT32 directory attribute
+     ATTR_DIRECTORY       = $10
 
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #IFDEF __SPINTOOLS__
@@ -101,381 +94,377 @@ PUB go() | workerCog, result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
-        debug("ERROR: Could not mount SD card!")
-        dfs.stop()
-        debug("END_SESSION")
-        return
+    if result == dfs.SUCCESS
 
-    ' Show card info
-    debug(" ")
-    debug("* SD Card Information:")
-    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
-    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+        ' Show card info
+        debug(" ")
+        debug("* SD Card Information:")
+        debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+        debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
 
-    ' Clean up any existing test items
-    cleanupTestItems()
+        ' Clean up any existing test items
+        cleanupTestItems()
 
-    ' Create test directory structure
-    createTestStructure()
+        ' Create test directory structure
+        createTestStructure()
 
-    ' ======================================================================
-    ' TEST GROUP: Basic Enumeration
-    ' ======================================================================
-    utils.startTestGroup(@"Basic Enumeration")
+        ' ======================================================================
+        ' TEST GROUP: Basic Enumeration
+        ' ======================================================================
+        utils.startTestGroup(@"Basic Enumeration")
 
-    ' Test: openDirectory with "." enumerates current directory
-    utils.startTest(@"openDirectory(.) enumerates current directory")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @".")
-    utils.evaluateSubBool(hDir >= 0, @"openDirectory(.) succeeds", true)
-    if hDir >= 0
-        entryCount := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            entryCount++
-        utils.evaluateSubBool(entryCount > 0, @"root has entries", true)
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: openDirectory with "" enumerates current directory
-    utils.startTest(@"openDirectory('') enumerates current directory")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhEmpty)
-    utils.evaluateSubBool(hDir >= 0, @"openDirectory('') succeeds", true)
-    if hDir >= 0
-        entryCount := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            entryCount++
-        utils.evaluateSubBool(entryCount > 0, @"entries found", true)
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: openDirectory with named directory
-    utils.startTest(@"openDirectory(DHTDIR1) enumerates subdirectory")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    utils.evaluateSubBool(hDir >= 0, @"openDirectory(DHTDIR1) succeeds", true)
-    if hDir >= 0
-        entryCount := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            pName := dfs.fileName()
-            debug("  Entry: [", zstr_(pName), "]")
-            entryCount++
-        ' Should have: . .. DH1.TXT DH2.TXT DH3.TXT DHSUB1 = at least 4 non-dot entries
-        utils.evaluateSubBool(entryCount >= 4, @"DHTDIR1 has >= 4 entries", true)
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: closeDirectoryHandle releases slot
-    utils.startTest(@"closeDirectoryHandle releases handle slot")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @".")
-    utils.evaluateSubBool(hDir >= 0, @"first open succeeds", true)
-    dfs.closeDirectoryHandle(hDir)
-    ' Open again - should get a valid handle (slot was released)
-    hDir := dfs.openDirectory(dfs.DEV_SD, @".")
-    utils.evaluateSubBool(hDir >= 0, @"reopen after close succeeds", true)
-    if hDir >= 0
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: Enumerate returns all expected files
-    utils.startTest(@"Enumerate DHTDIR1 finds all 3 files and subdirectory")
-    utils.setCheckCountPerTest(4)
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    if hDir >= 0
-        foundFiles := 0
-        foundDirs := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            pName := dfs.fileName()
-            attrs := dfs.attributes()
-            if attrs & $10  ' directory attribute
-                foundDirs++
-            else
-                foundFiles++
-        utils.evaluateSubBool(foundFiles >= 3, @"found >= 3 files", true)
-        utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", true)
-        dfs.closeDirectoryHandle(hDir)
-    else
-        utils.evaluateSubBool(false, @"found >= 3 files", true)
-        utils.evaluateSubBool(false, @"found >= 1 subdir", true)
-    utils.setCheckCountPerTest(1)
-
-    ' ======================================================================
-    ' TEST GROUP: Entry Inspection
-    ' ======================================================================
-    utils.startTestGroup(@"Entry Inspection")
-
-    ' Test: fileName() returns correct name for each entry
-    utils.startTest(@"fileName() returns valid names during enumeration")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    if hDir >= 0
-        entryCount := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            pName := dfs.fileName()
-            ' Every filename should be non-empty
-            utils.evaluateSubBool(strsize(pName) > 0, @"filename non-empty", true)
-            entryCount++
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: attributes() distinguishes file from directory
-    utils.startTest(@"attributes() distinguishes file vs directory")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    if hDir >= 0
-        foundFiles := 0
-        foundDirs := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            attrs := dfs.attributes()
-            if attrs & $10
-                foundDirs++
-            else
-                foundFiles++
-        utils.evaluateSubBool(foundFiles > 0, @"has file entries", true)
-        utils.evaluateSubBool(foundDirs > 0, @"has dir entries", true)
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: Empty directory returns only dot entries (. and ..)
-    utils.startTest(@"Empty directory has only dot entries")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhEmptyDir)
-    if hDir >= 0
-        entryCount := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            entryCount++
-        ' FAT32 empty directories contain . and .. entries (2 entries)
-        utils.evaluateSingleValue(entryCount, @"empty dir entry count", 2)
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: Subdirectory enumeration works
-    utils.startTest(@"Subdirectory enumeration finds file")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @"/DHTDIR1/DHSUB1")
-    if hDir >= 0
-        foundFiles := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            attrs := dfs.attributes()
-            if (attrs & $10) == 0  ' not a directory
-                foundFiles++
-        utils.evaluateSubBool(foundFiles >= 1, @"subdir has file", true)
-        dfs.closeDirectoryHandle(hDir)
-    else
-        utils.evaluateSubBool(false, @"subdir has file", true)
-
-    ' ======================================================================
-    ' TEST GROUP: Error Conditions
-    ' ======================================================================
-    utils.startTestGroup(@"Error Conditions")
-
-    ' Test: Non-existent directory returns E_FILE_NOT_FOUND
-    utils.startTest(@"openDirectory non-existent returns E_FILE_NOT_FOUND")
-    result := dfs.openDirectory(dfs.DEV_SD, @dhNonExist)
-    utils.evaluateSingleValue(result, @"openDirectory(NXDIR999)", E_FILE_NOT_FOUND)
-
-    ' Test: Opening a file as directory returns E_NOT_A_DIR
-    utils.startTest(@"openDirectory on a file returns E_NOT_A_DIR")
-    dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
-    result := dfs.openDirectory(dfs.DEV_SD, @dhFile1)
-    utils.evaluateSingleValue(result, @"openDirectory(DH1.TXT)", E_NOT_A_DIR)
-    dfs.changeDirectory(dfs.DEV_SD, @"/")
-
-    ' Test: Invalid handle to readDirectoryHandle returns 0
-    utils.startTest(@"readDirectoryHandle(-1) returns 0")
-    result := dfs.readDirectoryHandle(-1)
-    utils.evaluateSingleValue(result, @"readDirectoryHandle(-1)", 0)
-
-    ' Test: File handle used with readDirectoryHandle
-    utils.startTest(@"readDirectoryHandle on file handle returns 0")
-    dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
-    h1 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
-    if h1 >= 0
-        result := dfs.readDirectoryHandle(h1)
-        utils.evaluateSingleValue(result, @"readDirHandle(fileHandle)", 0)
-        dfs.closeFileHandle(h1)
-    dfs.changeDirectory(dfs.DEV_SD, @"/")
-
-    ' Test: closeDirectoryHandle on file handle (should be harmless or error)
-    utils.startTest(@"closeDirectoryHandle on invalid handle")
-    ' Close an already-closed handle - should not crash
-    dfs.closeDirectoryHandle(-1)
-    utils.recordPass()  ' If we get here without crash, pass
-
-    ' ======================================================================
-    ' TEST GROUP: Handle Pool Interaction
-    ' ======================================================================
-    utils.startTestGroup(@"Handle Pool Interaction")
-
-    ' Test: Dir handle consumes shared pool slot
-    utils.startTest(@"Dir handle shares pool with file handles")
-    utils.setCheckCountPerTest(4)
-    ' Open 5 files + 1 dir = 6 handles (pool full)
-    dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
-    h1 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
-    h2 := dfs.openFileRead(dfs.DEV_SD, @dhFile2)
-    h3 := dfs.openFileRead(dfs.DEV_SD, @dhFile3)
-    h4 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
-    h5 := dfs.openFileRead(dfs.DEV_SD, @dhFile2)
-    utils.evaluateSubBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0 and h5 >= 0, @"5 file handles OK", true)
-    dfs.changeDirectory(dfs.DEV_SD, @"/")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @".")
-    utils.evaluateSubBool(hDir >= 0, @"6th handle (dir) OK", true)
-    ' 7th should fail
-    result := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    utils.evaluateSubValue(result, @"7th handle fails", E_TOO_MANY_FILES)
-    ' Clean up
-    dfs.closeFileHandle(h1)
-    dfs.closeFileHandle(h2)
-    dfs.closeFileHandle(h3)
-    dfs.closeFileHandle(h4)
-    dfs.closeFileHandle(h5)
-    dfs.closeDirectoryHandle(hDir)
-    utils.setCheckCountPerTest(1)
-
-    ' Test: Multiple dir handles simultaneously
-    utils.startTest(@"Multiple directory handles simultaneously")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @".")
-    hDir2 := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    utils.evaluateSubBool(hDir >= 0, @"first dir handle OK", true)
-    utils.evaluateSubBool(hDir2 >= 0, @"second dir handle OK", true)
-    utils.evaluateSubBool(hDir <> hDir2, @"handles are different", true)
-    if hDir >= 0
-        dfs.closeDirectoryHandle(hDir)
-    if hDir2 >= 0
-        dfs.closeDirectoryHandle(hDir2)
-
-    ' Test: File + dir handles coexist
-    utils.startTest(@"File and dir handles coexist")
-    dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
-    h1 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
-    dfs.changeDirectory(dfs.DEV_SD, @"/")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    utils.evaluateSubBool(h1 >= 0, @"file handle valid", true)
-    utils.evaluateSubBool(hDir >= 0, @"dir handle valid", true)
-    ' Read from file handle
-    if h1 >= 0
-        utils.initGuard(@readBuffer_guard)
-        result := dfs.readHandle(h1, @readBuffer, 10)
-        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSubBool(result > 0, @"file read works", true)
-        dfs.closeFileHandle(h1)
-    ' Read from dir handle
-    if hDir >= 0
-        pEntry := dfs.readDirectoryHandle(hDir)
-        utils.evaluateSubBool(pEntry <> 0, @"dir read works", true)
-        dfs.closeDirectoryHandle(hDir)
-
-    ' Test: Restart enumeration requires close + reopen
-    utils.startTest(@"Restart enumeration requires close and reopen")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    if hDir >= 0
-        ' Read some entries
-        entryCount := 0
-        repeat 2
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry <> 0
+        ' Test: openDirectory with "." enumerates current directory
+        utils.startTest(@"openDirectory(.) enumerates current directory")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @".")
+        utils.evaluateSubBool(hDir >= 0, @"openDirectory(.) succeeds", true)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
                 entryCount++
-        utils.evaluateSubBool(entryCount > 0, @"partial read OK", true)
-        ' Close and reopen to restart
-        dfs.closeDirectoryHandle(hDir)
+            utils.evaluateSubBool(entryCount > 0, @"root has entries", true)
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: openDirectory with "" enumerates current directory
+        utils.startTest(@"openDirectory('') enumerates current directory")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhEmpty)
+        utils.evaluateSubBool(hDir >= 0, @"openDirectory('') succeeds", true)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                entryCount++
+            utils.evaluateSubBool(entryCount > 0, @"entries found", true)
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: openDirectory with named directory
+        utils.startTest(@"openDirectory(DHTDIR1) enumerates subdirectory")
         hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-        ' Should start from beginning again
-        pEntry := dfs.readDirectoryHandle(hDir)
-        utils.evaluateSubBool(pEntry <> 0, @"restart has entries", true)
+        utils.evaluateSubBool(hDir >= 0, @"openDirectory(DHTDIR1) succeeds", true)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                pName := dfs.fileName()
+                debug("  Entry: [", zstr_(pName), "]")
+                entryCount++
+            ' Should have: . .. DH1.TXT DH2.TXT DH3.TXT DHSUB1 = at least 4 non-dot entries
+            utils.evaluateSubBool(entryCount >= 4, @"DHTDIR1 has >= 4 entries", true)
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: closeDirectoryHandle releases slot
+        utils.startTest(@"closeDirectoryHandle releases handle slot")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @".")
+        utils.evaluateSubBool(hDir >= 0, @"first open succeeds", true)
         dfs.closeDirectoryHandle(hDir)
+        ' Open again - should get a valid handle (slot was released)
+        hDir := dfs.openDirectory(dfs.DEV_SD, @".")
+        utils.evaluateSubBool(hDir >= 0, @"reopen after close succeeds", true)
+        if hDir >= 0
+            dfs.closeDirectoryHandle(hDir)
 
-    ' ======================================================================
-    ' TEST GROUP: Path Handling
-    ' ======================================================================
-    utils.startTestGroup(@"Path Handling")
+        ' Test: Enumerate returns all expected files
+        utils.startTest(@"Enumerate DHTDIR1 finds all 3 files and subdirectory")
+        utils.setCheckCountPerTest(4)
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        if hDir >= 0
+            foundFiles := 0
+            foundDirs := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                pName := dfs.fileName()
+                attrs := dfs.attributes()
+                if attrs & ATTR_DIRECTORY  ' directory attribute
+                    foundDirs++
+                else
+                    foundFiles++
+            utils.evaluateSubBool(foundFiles >= 3, @"found >= 3 files", true)
+            utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", true)
+            dfs.closeDirectoryHandle(hDir)
+        else
+            utils.evaluateSubBool(false, @"found >= 3 files", true)
+            utils.evaluateSubBool(false, @"found >= 1 subdir", true)
+        utils.setCheckCountPerTest(1)
 
-    ' Test: openDirectory("/") enumerates root
-    utils.startTest(@"openDirectory(/) enumerates root")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @"/")
-    utils.evaluateSubBool(hDir >= 0, @"openDirectory(/) succeeds", true)
-    if hDir >= 0
-        entryCount := 0
-        repeat
+        ' ======================================================================
+        ' TEST GROUP: Entry Inspection
+        ' ======================================================================
+        utils.startTestGroup(@"Entry Inspection")
+
+        ' Test: fileName() returns correct name for each entry
+        utils.startTest(@"fileName() returns valid names during enumeration")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                pName := dfs.fileName()
+                ' Every filename should be non-empty
+                utils.evaluateSubBool(strsize(pName) > 0, @"filename non-empty", true)
+                entryCount++
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: attributes() distinguishes file from directory
+        utils.startTest(@"attributes() distinguishes file vs directory")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        if hDir >= 0
+            foundFiles := 0
+            foundDirs := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                attrs := dfs.attributes()
+                if attrs & ATTR_DIRECTORY
+                    foundDirs++
+                else
+                    foundFiles++
+            utils.evaluateSubBool(foundFiles > 0, @"has file entries", true)
+            utils.evaluateSubBool(foundDirs > 0, @"has dir entries", true)
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: Empty directory returns only dot entries (. and ..)
+        utils.startTest(@"Empty directory has only dot entries")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhEmptyDir)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                entryCount++
+            ' FAT32 empty directories contain . and .. entries (2 entries)
+            utils.evaluateSingleValue(entryCount, @"empty dir entry count", 2)
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: Subdirectory enumeration works
+        utils.startTest(@"Subdirectory enumeration finds file")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @"/DHTDIR1/DHSUB1")
+        if hDir >= 0
+            foundFiles := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                attrs := dfs.attributes()
+                if (attrs & ATTR_DIRECTORY) == 0  ' not a directory
+                    foundFiles++
+            utils.evaluateSubBool(foundFiles >= 1, @"subdir has file", true)
+            dfs.closeDirectoryHandle(hDir)
+        else
+            utils.evaluateSubBool(false, @"subdir has file", true)
+
+        ' ======================================================================
+        ' TEST GROUP: Error Conditions
+        ' ======================================================================
+        utils.startTestGroup(@"Error Conditions")
+
+        ' Test: Non-existent directory returns dfs.E_FILE_NOT_FOUND
+        utils.startTest(@"openDirectory non-existent returns dfs.E_FILE_NOT_FOUND")
+        result := dfs.openDirectory(dfs.DEV_SD, @dhNonExist)
+        utils.evaluateSingleValue(result, @"openDirectory(NXDIR999)", dfs.E_FILE_NOT_FOUND)
+
+        ' Test: Opening a file as directory returns E_NOT_A_DIR
+        utils.startTest(@"openDirectory on a file returns E_NOT_A_DIR")
+        dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
+        result := dfs.openDirectory(dfs.DEV_SD, @dhFile1)
+        utils.evaluateSingleValue(result, @"openDirectory(DH1.TXT)", dfs.E_NOT_A_DIR)
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+        ' Test: Invalid handle to readDirectoryHandle returns 0
+        utils.startTest(@"readDirectoryHandle(-1) returns 0")
+        result := dfs.readDirectoryHandle(-1)
+        utils.evaluateSingleValue(result, @"readDirectoryHandle(-1)", 0)
+
+        ' Test: File handle used with readDirectoryHandle
+        utils.startTest(@"readDirectoryHandle on file handle returns 0")
+        dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
+        h1 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
+        if h1 >= 0
+            result := dfs.readDirectoryHandle(h1)
+            utils.evaluateSingleValue(result, @"readDirHandle(fileHandle)", 0)
+            dfs.closeFileHandle(h1)
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+        ' Test: closeDirectoryHandle on file handle (should be harmless or error)
+        utils.startTest(@"closeDirectoryHandle on invalid handle")
+        ' Close an already-closed handle - should not crash
+        dfs.closeDirectoryHandle(-1)
+        utils.recordPass()  ' If we get here without crash, pass
+
+        ' ======================================================================
+        ' TEST GROUP: Handle Pool Interaction
+        ' ======================================================================
+        utils.startTestGroup(@"Handle Pool Interaction")
+
+        ' Test: Dir handle consumes shared pool slot
+        utils.startTest(@"Dir handle shares pool with file handles")
+        utils.setCheckCountPerTest(4)
+        ' Open 5 files + 1 dir = 6 handles (pool full)
+        dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
+        h1 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
+        h2 := dfs.openFileRead(dfs.DEV_SD, @dhFile2)
+        h3 := dfs.openFileRead(dfs.DEV_SD, @dhFile3)
+        h4 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
+        h5 := dfs.openFileRead(dfs.DEV_SD, @dhFile2)
+        utils.evaluateSubBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0 and h5 >= 0, @"5 file handles OK", true)
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @".")
+        utils.evaluateSubBool(hDir >= 0, @"6th handle (dir) OK", true)
+        ' 7th should fail
+        result := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        utils.evaluateSubValue(result, @"7th handle fails", dfs.E_TOO_MANY_FILES)
+        ' Clean up
+        dfs.closeFileHandle(h1)
+        dfs.closeFileHandle(h2)
+        dfs.closeFileHandle(h3)
+        dfs.closeFileHandle(h4)
+        dfs.closeFileHandle(h5)
+        dfs.closeDirectoryHandle(hDir)
+        utils.setCheckCountPerTest(1)
+
+        ' Test: Multiple dir handles simultaneously
+        utils.startTest(@"Multiple directory handles simultaneously")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @".")
+        hDir2 := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        utils.evaluateSubBool(hDir >= 0, @"first dir handle OK", true)
+        utils.evaluateSubBool(hDir2 >= 0, @"second dir handle OK", true)
+        utils.evaluateSubBool(hDir <> hDir2, @"handles are different", true)
+        if hDir >= 0
+            dfs.closeDirectoryHandle(hDir)
+        if hDir2 >= 0
+            dfs.closeDirectoryHandle(hDir2)
+
+        ' Test: File + dir handles coexist
+        utils.startTest(@"File and dir handles coexist")
+        dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
+        h1 := dfs.openFileRead(dfs.DEV_SD, @dhFile1)
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        utils.evaluateSubBool(h1 >= 0, @"file handle valid", true)
+        utils.evaluateSubBool(hDir >= 0, @"dir handle valid", true)
+        ' Read from file handle
+        if h1 >= 0
+            utils.initGuard(@readBuffer_guard)
+            result := dfs.readHandle(h1, @readBuffer, 10)
+            utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+            utils.evaluateSubBool(result > 0, @"file read works", true)
+            dfs.closeFileHandle(h1)
+        ' Read from dir handle
+        if hDir >= 0
             pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            entryCount++
-        utils.evaluateSubBool(entryCount > 0, @"root has entries", true)
-        dfs.closeDirectoryHandle(hDir)
+            utils.evaluateSubBool(pEntry <> 0, @"dir read works", true)
+            dfs.closeDirectoryHandle(hDir)
 
-    ' Test: Absolute path works
-    utils.startTest(@"openDirectory with absolute path")
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhAbsPath)
-    utils.evaluateSubBool(hDir >= 0, @"openDirectory(/DHTDIR1) OK", true)
-    if hDir >= 0
-        entryCount := 0
-        repeat
+        ' Test: Restart enumeration requires close + reopen
+        utils.startTest(@"Restart enumeration requires close and reopen")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        if hDir >= 0
+            ' Read some entries
+            entryCount := 0
+            repeat 2
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry <> 0
+                    entryCount++
+            utils.evaluateSubBool(entryCount > 0, @"partial read OK", true)
+            ' Close and reopen to restart
+            dfs.closeDirectoryHandle(hDir)
+            hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+            ' Should start from beginning again
             pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            entryCount++
-        utils.evaluateSubBool(entryCount >= 4, @"abs path has entries", true)
-        dfs.closeDirectoryHandle(hDir)
+            utils.evaluateSubBool(pEntry <> 0, @"restart has entries", true)
+            dfs.closeDirectoryHandle(hDir)
 
-    ' Test: After changeDirectory, "." reflects new CWD
-    utils.startTest(@"After changeDirectory, . reflects new CWD")
-    dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
-    hDir := dfs.openDirectory(dfs.DEV_SD, @".")
-    if hDir >= 0
-        foundFiles := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(hDir)
-            if pEntry == 0
-                quit
-            foundFiles++
-        ' DHTDIR1 has files + subdir, different count from root
-        utils.evaluateSubBool(foundFiles >= 4, @"CWD entries match subdir", true)
-        dfs.closeDirectoryHandle(hDir)
-    dfs.changeDirectory(dfs.DEV_SD, @"/")
+        ' ======================================================================
+        ' TEST GROUP: Path Handling
+        ' ======================================================================
+        utils.startTestGroup(@"Path Handling")
 
-    ' Test: openDirectory does NOT change CWD
-    utils.startTest(@"openDirectory does not change CWD")
-    ' We are at root. Open DHTDIR1 for enumeration
-    hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
-    if hDir >= 0
-        dfs.closeDirectoryHandle(hDir)
-    ' CWD should still be root - verify by creating file in root
-    h1 := dfs.openDirectory(dfs.DEV_SD, @".")
-    if h1 >= 0
-        entryCount := 0
-        repeat
-            pEntry := dfs.readDirectoryHandle(h1)
-            if pEntry == 0
-                quit
-            pName := dfs.fileName()
-            if strcomp(pName, @dhTestDir)
-                entryCount++  ' Found DHTDIR1 in root listing
-        utils.evaluateSubBool(entryCount > 0, @"CWD still at root", true)
-        dfs.closeDirectoryHandle(h1)
+        ' Test: openDirectory("/") enumerates root
+        utils.startTest(@"openDirectory(/) enumerates root")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @"/")
+        utils.evaluateSubBool(hDir >= 0, @"openDirectory(/) succeeds", true)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                entryCount++
+            utils.evaluateSubBool(entryCount > 0, @"root has entries", true)
+            dfs.closeDirectoryHandle(hDir)
 
-    ' ======================================================================
-    ' Cleanup and Summary
-    ' ======================================================================
-    cleanupTestItems()
+        ' Test: Absolute path works
+        utils.startTest(@"openDirectory with absolute path")
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhAbsPath)
+        utils.evaluateSubBool(hDir >= 0, @"openDirectory(/DHTDIR1) OK", true)
+        if hDir >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                entryCount++
+            utils.evaluateSubBool(entryCount >= 4, @"abs path has entries", true)
+            dfs.closeDirectoryHandle(hDir)
+
+        ' Test: After changeDirectory, "." reflects new CWD
+        utils.startTest(@"After changeDirectory, . reflects new CWD")
+        dfs.changeDirectory(dfs.DEV_SD, @dhTestDir)
+        hDir := dfs.openDirectory(dfs.DEV_SD, @".")
+        if hDir >= 0
+            foundFiles := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(hDir)
+                if pEntry == 0
+                    quit
+                foundFiles++
+            ' DHTDIR1 has files + subdir, different count from root
+            utils.evaluateSubBool(foundFiles >= 4, @"CWD entries match subdir", true)
+            dfs.closeDirectoryHandle(hDir)
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+
+        ' Test: openDirectory does NOT change CWD
+        utils.startTest(@"openDirectory does not change CWD")
+        ' We are at root. Open DHTDIR1 for enumeration
+        hDir := dfs.openDirectory(dfs.DEV_SD, @dhTestDir)
+        if hDir >= 0
+            dfs.closeDirectoryHandle(hDir)
+        ' CWD should still be root - verify by creating file in root
+        h1 := dfs.openDirectory(dfs.DEV_SD, @".")
+        if h1 >= 0
+            entryCount := 0
+            repeat
+                pEntry := dfs.readDirectoryHandle(h1)
+                if pEntry == 0
+                    quit
+                pName := dfs.fileName()
+                if strcomp(pName, @dhTestDir)
+                    entryCount++  ' Found DHTDIR1 in root listing
+            utils.evaluateSubBool(entryCount > 0, @"CWD still at root", true)
+            dfs.closeDirectoryHandle(h1)
+
+        ' ======================================================================
+        ' Cleanup and Summary
+        ' ======================================================================
+        cleanupTestItems()
 
 #IFDEF SD_INCLUDE_STACK_CHECK
-    debug(" ")
-    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+        debug(" ")
+        debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
 #ENDIF
 
-    dfs.unmount(dfs.DEV_SD)
+        dfs.unmount(dfs.DEV_SD)
 
     dfs.stop()
 

@@ -62,332 +62,326 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
     result := dfs.mount(dfs.DEV_SD)
     if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
-        dfs.stop()
-        debug("END_SESSION")
-        return
+    else
+        ' Show card info
+        debug(" ")
+        debug("* SD Card Information:")
+        debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+        debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
 
-    ' Show card info
-    debug(" ")
-    debug("* SD Card Information:")
-    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
-    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+        ' Clean up any existing test file
+        dfs.deleteFile(dfs.DEV_SD, @testSeek)
 
-    ' Clean up any existing test file
-    dfs.deleteFile(dfs.DEV_SD, @testSeek)
+        ' ----------------------------------
+        ' Create test file with known pattern
+        ' ----------------------------------
+        utils.startTestGroup(@"Create Test File")
 
-    ' ----------------------------------
-    ' Create test file with known pattern
-    ' ----------------------------------
-    utils.startTestGroup(@"Create Test File")
+        ' Fill buffer with pattern: each byte = position & $FF (setup)
+        repeat idx from 0 to TEST_FILE_SIZE - 1
+            writeBuffer[idx] := idx & $FF
+        debug("  Buffer filled with position pattern (0-255 repeating)")
 
-    ' Fill buffer with pattern: each byte = position & $FF (setup)
-    repeat idx from 0 to TEST_FILE_SIZE - 1
-        writeBuffer[idx] := idx & $FF
-    debug("  Buffer filled with position pattern (0-255 repeating)")
+        utils.startTest(@"Create test file with 2048 bytes")
+        handle := dfs.createFileNew(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"createFileNew()", true)
 
-    utils.startTest(@"Create test file with 2048 bytes")
-    handle := dfs.createFileNew(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"createFileNew()", true)
+        ' Write test data and close (setup)
+        dfs.writeHandle(handle, @writeBuffer, TEST_FILE_SIZE)
+        dfs.closeFileHandle(handle)
+        debug("  Wrote ", udec_(TEST_FILE_SIZE), " bytes")
 
-    ' Write test data and close (setup)
-    dfs.writeHandle(handle, @writeBuffer, TEST_FILE_SIZE)
-    dfs.closeFileHandle(handle)
-    debug("  Wrote ", udec_(TEST_FILE_SIZE), " bytes")
+        utils.startTest(@"Verify file size")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        fileSize := dfs.fileSizeHandle(handle)
+        utils.evaluateSingleValue(fileSize, @"fileSize()", TEST_FILE_SIZE)
 
-    utils.startTest(@"Verify file size")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    fileSize := dfs.fileSizeHandle(handle)
-    utils.evaluateSingleValue(fileSize, @"fileSize()", TEST_FILE_SIZE)
+        dfs.closeFileHandle(handle)
 
-    dfs.closeFileHandle(handle)
+        ' ----------------------------------
+        ' TEST GROUP: Basic seek operations
+        ' ----------------------------------
+        utils.startTestGroup(@"Basic Seek Operations")
 
-    ' ----------------------------------
-    ' TEST GROUP: Basic seek operations
-    ' ----------------------------------
-    utils.startTestGroup(@"Basic Seek Operations")
+        utils.startTest(@"Open file for seek tests")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
-    utils.startTest(@"Open file for seek tests")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
-
-    utils.startTest(@"seek(0) - beginning of file")
-    result := dfs.seekHandle(handle, 0)
-    utils.evaluateSingleValue(result, @"seek(0)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at position 0")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 0", 0)
-
-    utils.startTest(@"seek(100) - position 100")
-    result := dfs.seekHandle(handle, 100)
-    utils.evaluateSingleValue(result, @"seek(100)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at position 100")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 100", 100)
-
-    utils.startTest(@"seek(255) - position 255")
-    result := dfs.seekHandle(handle, 255)
-    utils.evaluateSingleValue(result, @"seek(255)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at position 255")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 255", 255)
-
-    utils.startTest(@"seek(256) - position 256 (wraps to 0 in pattern)")
-    result := dfs.seekHandle(handle, 256)
-    utils.evaluateSingleValue(result, @"seek(256)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at position 256")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 256", 0)  ' 256 & $FF = 0
-
-    dfs.closeFileHandle(handle)
-
-    ' ----------------------------------
-    ' TEST GROUP: Cross-sector seeks
-    ' ----------------------------------
-    utils.startTestGroup(@"Cross-Sector Seeks")
-
-    utils.startTest(@"Open file")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
-
-    ' Sector boundary is at 512 bytes
-    utils.startTest(@"seek(511) - last byte of first sector")
-    result := dfs.seekHandle(handle, 511)
-    utils.evaluateSingleValue(result, @"seek(511)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at 511")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 511", 511 & $FF)
-
-    utils.startTest(@"seek(512) - first byte of second sector")
-    result := dfs.seekHandle(handle, 512)
-    utils.evaluateSingleValue(result, @"seek(512)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at 512")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 512", 512 & $FF)
-
-    utils.startTest(@"seek(1023) - last byte of second sector")
-    result := dfs.seekHandle(handle, 1023)
-    utils.evaluateSingleValue(result, @"seek(1023)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at 1023")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 1023", 1023 & $FF)
-
-    utils.startTest(@"seek(1024) - first byte of third sector")
-    result := dfs.seekHandle(handle, 1024)
-    utils.evaluateSingleValue(result, @"seek(1024)", dfs.SUCCESS)
-
-    utils.startTest(@"Read byte at 1024")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at 1024", 1024 & $FF)
-
-    dfs.closeFileHandle(handle)
-
-    ' ----------------------------------
-    ' TEST GROUP: Random access pattern
-    ' ----------------------------------
-    utils.startTestGroup(@"Random Access Pattern")
-
-    utils.startTest(@"Open file")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
-
-    utils.startTest(@"Random seeks and reads")
-    utils.setCheckCountPerTest(2)
-
-    ' Test several random positions
-    testSeekPosition(1500)
-    testSeekPosition(200)
-    testSeekPosition(1999)
-    testSeekPosition(0)
-    testSeekPosition(750)
-    testSeekPosition(2000)
-    testSeekPosition(512)
-    testSeekPosition(1024)
-
-    dfs.closeFileHandle(handle)
-
-    ' ----------------------------------
-    ' TEST GROUP: readByte() with position
-    ' ----------------------------------
-    utils.startTestGroup(@"readByte() Random Access")
-
-    utils.startTest(@"Open file")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
-
-    utils.startTest(@"readByte(0)")
-    dfs.seekHandle(handle, 0)
-    dfs.readHandle(handle, @rdByteBuf, 1)
-    actualByte := rdByteBuf[0]
-    utils.evaluateSingleValue(actualByte, @"readByte(0)", 0)
-
-    utils.startTest(@"readByte(100)")
-    dfs.seekHandle(handle, 100)
-    dfs.readHandle(handle, @rdByteBuf, 1)
-    actualByte := rdByteBuf[0]
-    utils.evaluateSingleValue(actualByte, @"readByte(100)", 100)
-
-    utils.startTest(@"readByte(512)")
-    dfs.seekHandle(handle, 512)
-    dfs.readHandle(handle, @rdByteBuf, 1)
-    actualByte := rdByteBuf[0]
-    utils.evaluateSingleValue(actualByte, @"readByte(512)", 512 & $FF)
-
-    utils.startTest(@"readByte(1000)")
-    dfs.seekHandle(handle, 1000)
-    dfs.readHandle(handle, @rdByteBuf, 1)
-    actualByte := rdByteBuf[0]
-    utils.evaluateSingleValue(actualByte, @"readByte(1000)", 1000 & $FF)
-
-    dfs.closeFileHandle(handle)
-
-    ' ----------------------------------
-    ' TEST GROUP: Seek beyond EOF
-    ' ----------------------------------
-    utils.startTestGroup(@"Seek Edge Cases")
-
-    utils.startTest(@"Open file")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
-
-    utils.startTest(@"seek() beyond EOF should fail")
-    result := dfs.seekHandle(handle, TEST_FILE_SIZE + 100)
-    utils.evaluateBool(result <> dfs.SUCCESS, @"seek(beyond EOF)", true)
-
-    utils.startTest(@"seek() to exact EOF should succeed")
-    result := dfs.seekHandle(handle, TEST_FILE_SIZE - 1)
-    utils.evaluateSingleValue(result, @"seek(EOF-1)", dfs.SUCCESS)
-
-    utils.startTest(@"Read at EOF position")
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 1)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSingleValue(readBuffer[0], @"byte at EOF-1", (TEST_FILE_SIZE - 1) & $FF)
-
-    dfs.closeFileHandle(handle)
-
-    ' ----------------------------------
-    ' TEST GROUP: Sequential vs seek read
-    ' ----------------------------------
-    utils.startTestGroup(@"Sequential vs Seek Read Comparison")
-
-    utils.startTest(@"Open file")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
-
-    utils.startTest(@"Sequential read first 10 bytes")
-    utils.setCheckCountPerTest(10)
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 10)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    repeat idx from 0 to 9
-        utils.evaluateSubValue(readBuffer[idx], @"sequential byte", idx)
-
-    utils.startTest(@"Seek back and re-read")
-    dfs.seekHandle(handle, 0)
-    utils.setCheckCountPerTest(10)
-    utils.initGuard(@readBuffer_guard)
-    bytesRead := dfs.readHandle(handle, @readBuffer, 10)
-    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    repeat idx from 0 to 9
-        utils.evaluateSubValue(readBuffer[idx], @"re-read byte", idx)
-
-    dfs.closeFileHandle(handle)
-
-    ' ----------------------------------
-    ' TEST GROUP: Seek Boundary Conditions
-    ' ----------------------------------
-    utils.startTestGroup(@"Seek Boundary Conditions")
-
-    ' Test: Seek to position 0 returns to absolute start
-    utils.startTest(@"Seek to position 0 returns to absolute start")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    if handle >= 0
-        ' First read to move position forward
-        dfs.readHandle(handle, @readBuffer, 50)
-        ' Now seek back to 0
+        utils.startTest(@"seek(0) - beginning of file")
         result := dfs.seekHandle(handle, 0)
-        utils.evaluateSubValue(result, @"seek(0)", dfs.SUCCESS)
-        ' Read first byte - verifies we're at position 0
+        utils.evaluateSingleValue(result, @"seek(0)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at position 0")
         utils.initGuard(@readBuffer_guard)
         bytesRead := dfs.readHandle(handle, @readBuffer, 1)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSubValue(readBuffer[0], @"first byte", 0)
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 0", 0)
+
+        utils.startTest(@"seek(100) - position 100")
+        result := dfs.seekHandle(handle, 100)
+        utils.evaluateSingleValue(result, @"seek(100)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at position 100")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 100", 100)
+
+        utils.startTest(@"seek(255) - position 255")
+        result := dfs.seekHandle(handle, 255)
+        utils.evaluateSingleValue(result, @"seek(255)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at position 255")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 255", 255)
+
+        utils.startTest(@"seek(256) - position 256 (wraps to 0 in pattern)")
+        result := dfs.seekHandle(handle, 256)
+        utils.evaluateSingleValue(result, @"seek(256)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at position 256")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 256", 0)  ' 256 & $FF = 0
+
         dfs.closeFileHandle(handle)
 
-    ' Test: Seek to exact EOF and verify read returns 0
-    utils.startTest(@"Seek to exact EOF position")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
-    if handle >= 0
-        ' Seek to exact end (file size position)
-        result := dfs.seekHandle(handle, TEST_FILE_SIZE)
-        ' This should succeed - seeking to EOF is valid
-        ' (seeking past EOF is what fails)
-        debug("  seek(", udec_(TEST_FILE_SIZE), ") = ", sdec_(result))
-        ' Try to read - should get 0 bytes
+        ' ----------------------------------
+        ' TEST GROUP: Cross-sector seeks
+        ' ----------------------------------
+        utils.startTestGroup(@"Cross-Sector Seeks")
+
+        utils.startTest(@"Open file")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+        ' Sector boundary is at 512 bytes
+        utils.startTest(@"seek(511) - last byte of first sector")
+        result := dfs.seekHandle(handle, 511)
+        utils.evaluateSingleValue(result, @"seek(511)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at 511")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 511", 511 & $FF)
+
+        utils.startTest(@"seek(512) - first byte of second sector")
+        result := dfs.seekHandle(handle, 512)
+        utils.evaluateSingleValue(result, @"seek(512)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at 512")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 512", 512 & $FF)
+
+        utils.startTest(@"seek(1023) - last byte of second sector")
+        result := dfs.seekHandle(handle, 1023)
+        utils.evaluateSingleValue(result, @"seek(1023)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at 1023")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 1023", 1023 & $FF)
+
+        utils.startTest(@"seek(1024) - first byte of third sector")
+        result := dfs.seekHandle(handle, 1024)
+        utils.evaluateSingleValue(result, @"seek(1024)", dfs.SUCCESS)
+
+        utils.startTest(@"Read byte at 1024")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at 1024", 1024 & $FF)
+
+        dfs.closeFileHandle(handle)
+
+        ' ----------------------------------
+        ' TEST GROUP: Random access pattern
+        ' ----------------------------------
+        utils.startTestGroup(@"Random Access Pattern")
+
+        utils.startTest(@"Open file")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+        utils.startTest(@"Random seeks and reads")
+        utils.setCheckCountPerTest(2)
+
+        ' Test several random positions
+        testSeekPosition(1500)
+        testSeekPosition(200)
+        testSeekPosition(1999)
+        testSeekPosition(0)
+        testSeekPosition(750)
+        testSeekPosition(2000)
+        testSeekPosition(512)
+        testSeekPosition(1024)
+
+        dfs.closeFileHandle(handle)
+
+        ' ----------------------------------
+        ' TEST GROUP: readByte() with position
+        ' ----------------------------------
+        utils.startTestGroup(@"readByte() Random Access")
+
+        utils.startTest(@"Open file")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+        utils.startTest(@"readByte(0)")
+        dfs.seekHandle(handle, 0)
+        dfs.readHandle(handle, @rdByteBuf, 1)
+        actualByte := rdByteBuf[0]
+        utils.evaluateSingleValue(actualByte, @"readByte(0)", 0)
+
+        utils.startTest(@"readByte(100)")
+        dfs.seekHandle(handle, 100)
+        dfs.readHandle(handle, @rdByteBuf, 1)
+        actualByte := rdByteBuf[0]
+        utils.evaluateSingleValue(actualByte, @"readByte(100)", 100)
+
+        utils.startTest(@"readByte(512)")
+        dfs.seekHandle(handle, 512)
+        dfs.readHandle(handle, @rdByteBuf, 1)
+        actualByte := rdByteBuf[0]
+        utils.evaluateSingleValue(actualByte, @"readByte(512)", 512 & $FF)
+
+        utils.startTest(@"readByte(1000)")
+        dfs.seekHandle(handle, 1000)
+        dfs.readHandle(handle, @rdByteBuf, 1)
+        actualByte := rdByteBuf[0]
+        utils.evaluateSingleValue(actualByte, @"readByte(1000)", 1000 & $FF)
+
+        dfs.closeFileHandle(handle)
+
+        ' ----------------------------------
+        ' TEST GROUP: Seek beyond EOF
+        ' ----------------------------------
+        utils.startTestGroup(@"Seek Edge Cases")
+
+        utils.startTest(@"Open file")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+        utils.startTest(@"seek() beyond EOF should fail")
+        result := dfs.seekHandle(handle, TEST_FILE_SIZE + 100)
+        utils.evaluateBool(result <> dfs.SUCCESS, @"seek(beyond EOF)", true)
+
+        utils.startTest(@"seek() to exact EOF should succeed")
+        result := dfs.seekHandle(handle, TEST_FILE_SIZE - 1)
+        utils.evaluateSingleValue(result, @"seek(EOF-1)", dfs.SUCCESS)
+
+        utils.startTest(@"Read at EOF position")
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(readBuffer[0], @"byte at EOF-1", (TEST_FILE_SIZE - 1) & $FF)
+
+        dfs.closeFileHandle(handle)
+
+        ' ----------------------------------
+        ' TEST GROUP: Sequential vs seek read
+        ' ----------------------------------
+        utils.startTestGroup(@"Sequential vs Seek Read Comparison")
+
+        utils.startTest(@"Open file")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+        utils.startTest(@"Sequential read first 10 bytes")
+        utils.setCheckCountPerTest(10)
         utils.initGuard(@readBuffer_guard)
         bytesRead := dfs.readHandle(handle, @readBuffer, 10)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSingleValue(bytesRead, @"read at EOF", 0)
-        dfs.closeFileHandle(handle)
+        repeat idx from 0 to 9
+            utils.evaluateSubValue(readBuffer[idx], @"sequential byte", idx)
 
-    ' Test: Seek in empty file
-    utils.startTest(@"Seek in empty file behavior")
-    dfs.deleteFile(dfs.DEV_SD, @testEmpty)
-    handle := dfs.createFileNew(dfs.DEV_SD, @testEmpty)
-    if handle >= 0
-        dfs.closeFileHandle(handle)  ' Create 0-byte file
-    handle := dfs.openFileRead(dfs.DEV_SD, @testEmpty)
-    if handle >= 0
-        ' Try seek(0) in empty file - should succeed
-        result := dfs.seekHandle(handle, 0)
-        utils.evaluateSubValue(result, @"seek(0) in empty", dfs.SUCCESS)
-        ' Try to read - should get 0 bytes
+        utils.startTest(@"Seek back and re-read")
+        dfs.seekHandle(handle, 0)
+        utils.setCheckCountPerTest(10)
         utils.initGuard(@readBuffer_guard)
-        bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+        bytesRead := dfs.readHandle(handle, @readBuffer, 10)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSubValue(bytesRead, @"read from empty", 0)
-        ' Try seek(1) in empty file - should fail (beyond EOF)
-        result := dfs.seekHandle(handle, 1)
-        utils.evaluateSubBool(result <> dfs.SUCCESS, @"seek(1) in empty fails", true)
+        repeat idx from 0 to 9
+            utils.evaluateSubValue(readBuffer[idx], @"re-read byte", idx)
+
         dfs.closeFileHandle(handle)
-    dfs.deleteFile(dfs.DEV_SD, @testEmpty)
 
-    ' ----------------------------------
-    ' Cleanup
-    ' ----------------------------------
-    debug(" ")
-    debug("* Cleaning up test file...")
-    dfs.deleteFile(dfs.DEV_SD, @testSeek)
+        ' ----------------------------------
+        ' TEST GROUP: Seek Boundary Conditions
+        ' ----------------------------------
+        utils.startTestGroup(@"Seek Boundary Conditions")
 
-    ' Unmount
-    dfs.unmount(dfs.DEV_SD)
+        ' Test: Seek to position 0 returns to absolute start
+        utils.startTest(@"Seek to position 0 returns to absolute start")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        if handle >= 0
+            ' First read to move position forward
+            dfs.readHandle(handle, @readBuffer, 50)
+            ' Now seek back to 0
+            result := dfs.seekHandle(handle, 0)
+            utils.evaluateSubValue(result, @"seek(0)", dfs.SUCCESS)
+            ' Read first byte - verifies we're at position 0
+            utils.initGuard(@readBuffer_guard)
+            bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+            utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+            utils.evaluateSubValue(readBuffer[0], @"first byte", 0)
+            dfs.closeFileHandle(handle)
 
-    ' ----------------------------------
-    ' Summary
-    ' ----------------------------------
+        ' Test: Seek to exact EOF and verify read returns 0
+        utils.startTest(@"Seek to exact EOF position")
+        handle := dfs.openFileRead(dfs.DEV_SD, @testSeek)
+        if handle >= 0
+            ' Seek to exact end (file size position)
+            result := dfs.seekHandle(handle, TEST_FILE_SIZE)
+            ' This should succeed - seeking to EOF is valid
+            ' (seeking past EOF is what fails)
+            debug("  seek(", udec_(TEST_FILE_SIZE), ") = ", sdec_(result))
+            ' Try to read - should get 0 bytes
+            utils.initGuard(@readBuffer_guard)
+            bytesRead := dfs.readHandle(handle, @readBuffer, 10)
+            utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+            utils.evaluateSingleValue(bytesRead, @"read at EOF", 0)
+            dfs.closeFileHandle(handle)
+
+        ' Test: Seek in empty file
+        utils.startTest(@"Seek in empty file behavior")
+        dfs.deleteFile(dfs.DEV_SD, @testEmpty)
+        handle := dfs.createFileNew(dfs.DEV_SD, @testEmpty)
+        if handle >= 0
+            dfs.closeFileHandle(handle)  ' Create 0-byte file
+        handle := dfs.openFileRead(dfs.DEV_SD, @testEmpty)
+        if handle >= 0
+            ' Try seek(0) in empty file - should succeed
+            result := dfs.seekHandle(handle, 0)
+            utils.evaluateSubValue(result, @"seek(0) in empty", dfs.SUCCESS)
+            ' Try to read - should get 0 bytes
+            utils.initGuard(@readBuffer_guard)
+            bytesRead := dfs.readHandle(handle, @readBuffer, 1)
+            utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+            utils.evaluateSubValue(bytesRead, @"read from empty", 0)
+            ' Try seek(1) in empty file - should fail (beyond EOF)
+            result := dfs.seekHandle(handle, 1)
+            utils.evaluateSubBool(result <> dfs.SUCCESS, @"seek(1) in empty fails", true)
+            dfs.closeFileHandle(handle)
+        dfs.deleteFile(dfs.DEV_SD, @testEmpty)
+
+        ' ----------------------------------
+        ' Cleanup
+        ' ----------------------------------
+        debug(" ")
+        debug("* Cleaning up test file...")
+        dfs.deleteFile(dfs.DEV_SD, @testSeek)
+
+        ' Unmount
+        dfs.unmount(dfs.DEV_SD)
+
     dfs.stop()
 
     utils.ShowTestEndCounts()

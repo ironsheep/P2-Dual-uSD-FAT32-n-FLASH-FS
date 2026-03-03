@@ -96,416 +96,412 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
     status := dfs.mount(dfs.DEV_SD)
     if status <> dfs.SUCCESS
         debug("ERROR: SD mount failed - aborting!")
-        dfs.stop()
-        debug("END_SESSION")
-        return
-    utils.evaluateSingleValue(status, @"mount SD", dfs.SUCCESS)
+    else
+        utils.evaluateSingleValue(status, @"mount SD", dfs.SUCCESS)
 
-    utils.startTest(@"mount(DEV_FLASH) succeeds")
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-        debug("ERROR: Flash mount failed - aborting!")
+        utils.startTest(@"mount(DEV_FLASH) succeeds")
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            debug("ERROR: Flash mount failed - aborting!")
+        else
+            utils.evaluateSingleValue(status, @"mount Flash", dfs.SUCCESS)
+
+            utils.startTest(@"Both devices mounted")
+            utils.setCheckCountPerTest(2)
+            utils.evaluateSubBool(dfs.mounted(dfs.DEV_SD), @"SD mounted", true)
+            utils.evaluateSubBool(dfs.mounted(dfs.DEV_FLASH), @"Flash mounted", true)
+            utils.showSubTestResults()
+
+            ' Clean up any prior test files
+            dfs.deleteFile(dfs.DEV_SD, @sdFile1)
+            dfs.deleteFile(dfs.DEV_SD, @sdFile2)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFile1)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFile2)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileCopy)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
+
+            ' ======================================================================
+            ' TEST GROUP: Interleaved SD and Flash I/O
+            ' ======================================================================
+            utils.startTestGroup(@"Interleaved SD and Flash I/O")
+
+            ' Test: Write to SD, write to Flash, read back both
+            utils.startTest(@"Write SD then Flash, read both back")
+            utils.setCheckCountPerTest(4)
+
+            ' Write to SD
+            handle := dfs.createFileNew(dfs.DEV_SD, @sdFile1)
+            if handle >= 0
+                dfs.writeHandle(handle, @shortContent, strsize(@shortContent))
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubBool(handle >= 0, @"SD write OK", true)
+
+            ' Write to Flash
+            handle := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_WRITE)
+            if handle >= 0
+                dfs.wr_str(handle, @shortContent)
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubBool(handle >= 0, @"Flash write OK", true)
+
+            ' Read back SD file
+            handle := dfs.openFileRead(dfs.DEV_SD, @sdFile1)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            bMatch := (bytesRead == strsize(@shortContent))
+            utils.evaluateSubBool(bMatch, @"SD readback size OK", true)
+
+            ' Read back Flash file
+            handle := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer2, 0, BUFFER_SIZE)
+                bytesRead2 := dfs.rd_str(handle, @readBuffer2, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            bMatch := (bytesRead2 == strsize(@shortContent))    ' rd_str returns length without terminator
+            utils.evaluateSubBool(bMatch, @"Flash readback OK", true)
+            utils.showSubTestResults()
+
+            ' Test: Simultaneous handles across devices
+            utils.startTest(@"Simultaneous handles on both devices")
+            utils.setCheckCountPerTest(4)
+
+            h_sd := dfs.createFileNew(dfs.DEV_SD, @sdFile2)
+            utils.evaluateSubBool(h_sd >= 0, @"SD handle", true)
+
+            h_fl := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_WRITE)
+            utils.evaluateSubBool(h_fl >= 0, @"Flash handle", true)
+
+            ' Write interleaved: SD, Flash, SD, Flash
+            if h_sd >= 0 and h_fl >= 0
+                dfs.writeHandle(h_sd, @"SD-A", 4)
+                dfs.writeHandle(h_fl, @"FL-A", 4)
+                dfs.writeHandle(h_sd, @"SD-B", 4)
+                dfs.writeHandle(h_fl, @"FL-B", 4)
+
+            if h_sd >= 0
+                dfs.closeFileHandle(h_sd)
+            if h_fl >= 0
+                dfs.closeFileHandle(h_fl)
+
+            ' Read back and verify
+            handle := dfs.openFileRead(dfs.DEV_SD, @sdFile2)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubValue(bytesRead, @"SD got 8 bytes", 8)
+
+            handle := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer2, 0, BUFFER_SIZE)
+                bytesRead2 := dfs.readHandle(handle, @readBuffer2, 8)
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubValue(bytesRead2, @"Flash got 8 bytes", 8)
+            utils.showSubTestResults()
+
+            ' ======================================================================
+            ' TEST GROUP: Rapid Device Alternation
+            ' ======================================================================
+            utils.startTestGroup(@"Rapid Device Alternation")
+
+            utils.startTest(@"10x alternating read/write across devices")
+            utils.setCheckCountPerTest(2)
+
+            ' Reopen SD file for read, Flash file for read
+            h_sd := dfs.openFileRead(dfs.DEV_SD, @sdFile1)
+            h_fl := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_READ)
+
+            ' Alternate reads: SD, Flash, SD, Flash... (10 total)
+            bMatch := true
+            if h_sd >= 0 and h_fl >= 0
+                repeat 5
+                    bytefill(@readBuffer, 0, 64)
+                    bytesRead := dfs.readHandle(h_sd, @readBuffer, 1)
+                    if bytesRead < 0
+                        bMatch := false
+                    bytefill(@readBuffer2, 0, 64)
+                    bytesRead2 := dfs.rd_byte(h_fl)
+                    if bytesRead2 < 0
+                        bMatch := false
+
+            if h_sd >= 0
+                dfs.closeFileHandle(h_sd)
+            if h_fl >= 0
+                dfs.closeFileHandle(h_fl)
+
+            utils.evaluateSubBool(bMatch, @"alternating reads OK", true)
+            utils.evaluateSubBool(h_sd >= 0 and h_fl >= 0, @"both handles valid", true)
+            utils.showSubTestResults()
+
+            ' ======================================================================
+            ' TEST GROUP: copyFile SD -> Flash
+            ' ======================================================================
+            utils.startTestGroup(@"copyFile SD to Flash")
+
+            ' Test: Copy small file SD -> Flash
+            utils.startTest(@"Copy small file SD -> Flash")
+            utils.setCheckCountPerTest(3)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileCopy)
+            status := dfs.copyFile(dfs.DEV_SD, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
+            utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
+
+            ' Verify destination exists on Flash
+            bMatch := dfs.exists(dfs.DEV_FLASH, @flFileCopy)
+            utils.evaluateSubBool(bMatch, @"dest file exists", true)
+
+            ' Read back and verify content matches
+            handle := dfs.open(dfs.DEV_FLASH, @flFileCopy, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubValue(bytesRead, @"content size matches", strsize(@shortContent))
+            utils.showSubTestResults()
+
+            ' Test: Copy pattern-filled file SD -> Flash (512 bytes = 1 sector)
+            utils.startTest(@"Copy 512-byte pattern SD -> Flash")
+            utils.setCheckCountPerTest(2)
+
+            ' Create 512-byte pattern file on SD
+            utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $A5)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
+            handle := dfs.createFileNew(dfs.DEV_SD, @sdFileLarge)
+            if handle >= 0
+                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+
+            ' Copy to Flash
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
+            status := dfs.copyFile(dfs.DEV_SD, @sdFileLarge, dfs.DEV_FLASH, @flFileLarge)
+            utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
+
+            ' Read back from Flash and verify pattern
+            handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                utils.initGuard(@readBuf_guard)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                utils.checkGuard(@readBuf_guard, @"readBuf guard")
+                dfs.closeFileHandle(handle)
+            bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $A5)
+            utils.evaluateSubBool(bMatch, @"pattern intact", true)
+            utils.showSubTestResults()
+
+            ' Test: Copy multi-sector file SD -> Flash (1024 bytes)
+            utils.startTest(@"Copy 1024-byte file SD -> Flash")
+            utils.setCheckCountPerTest(3)
+
+            ' Create 1024-byte file on SD (2 sectors)
+            utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $B7)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
+            handle := dfs.createFileNew(dfs.DEV_SD, @sdFileLarge)
+            if handle >= 0
+                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
+            status := dfs.copyFile(dfs.DEV_SD, @sdFileLarge, dfs.DEV_FLASH, @flFileLarge)
+            utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
+
+            ' Read back first 512 bytes from Flash
+            handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $B7)
+                utils.evaluateSubBool(bMatch, @"first 512 bytes OK", true)
+
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $B7)
+                utils.evaluateSubBool(bMatch, @"second 512 bytes OK", true)
+                dfs.closeFileHandle(handle)
+            utils.showSubTestResults()
+
+            ' ======================================================================
+            ' TEST GROUP: copyFile Flash -> SD
+            ' ======================================================================
+            utils.startTestGroup(@"copyFile Flash to SD")
+
+            ' Test: Copy small file Flash -> SD
+            utils.startTest(@"Copy small file Flash -> SD")
+            utils.setCheckCountPerTest(3)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
+            status := dfs.copyFile(dfs.DEV_FLASH, @flFile1, dfs.DEV_SD, @sdFileCopy)
+            utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
+
+            ' Verify destination exists on SD
+            handle := dfs.openFileRead(dfs.DEV_SD, @sdFileCopy)
+            utils.evaluateSubBool(handle >= 0, @"dest file exists", true)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            ' Flash file was written with wr_str which includes terminator
+            utils.evaluateSubBool(bytesRead > 0, @"has content", true)
+            utils.showSubTestResults()
+
+            ' Test: Copy pattern file Flash -> SD (512 bytes)
+            utils.startTest(@"Copy 512-byte pattern Flash -> SD")
+            utils.setCheckCountPerTest(2)
+
+            ' Create 512-byte pattern file on Flash
+            utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $C3)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
+            handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_WRITE)
+            if handle >= 0
+                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+
+            ' Copy to SD
+            dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
+            status := dfs.copyFile(dfs.DEV_FLASH, @flFileLarge, dfs.DEV_SD, @sdFileCopy)
+            utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
+
+            ' Read back from SD and verify pattern
+            handle := dfs.openFileRead(dfs.DEV_SD, @sdFileCopy)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                utils.initGuard(@readBuf_guard)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                utils.checkGuard(@readBuf_guard, @"readBuf guard")
+                dfs.closeFileHandle(handle)
+            bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $C3)
+            utils.evaluateSubBool(bMatch, @"pattern intact", true)
+            utils.showSubTestResults()
+
+            ' ======================================================================
+            ' TEST GROUP: copyFile Error Cases
+            ' ======================================================================
+            utils.startTestGroup(@"copyFile Error Cases")
+
+            ' Test: Copy non-existent source returns error
+            utils.startTest(@"Copy non-existent source file")
+            dfs.deleteFile(dfs.DEV_SD, @"NOEXIST.BIN")
+            status := dfs.copyFile(dfs.DEV_SD, @"NOEXIST.BIN", dfs.DEV_FLASH, @"noexist.bin")
+            utils.evaluateBool(status < 0, @"returns error", true)
+
+            ' Test: Copy with bad source device
+            utils.startTest(@"Copy with bad device returns error")
+            status := dfs.copyFile(99, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
+            utils.evaluateSingleValue(status, @"bad src dev", dfs.E_BAD_DEVICE)
+
+            ' ======================================================================
+            ' TEST GROUP: Post-Copy Regression
+            ' ======================================================================
+            utils.startTestGroup(@"Post-Copy Regression")
+
+            ' Verify original files on both devices still intact
+            utils.startTest(@"Original SD file intact after copies")
+            handle := dfs.openFileRead(dfs.DEV_SD, @sdFile1)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubValue(bytesRead, @"SD file size OK", strsize(@shortContent))
+
+            utils.startTest(@"Original Flash file intact after copies")
+            handle := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.rd_str(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            utils.evaluateBool(bytesRead > 0, @"Flash file has content", true)
+
+            ' Verify both devices still operational
+            utils.startTest(@"Both devices still mounted")
+            utils.setCheckCountPerTest(2)
+            utils.evaluateSubBool(dfs.mounted(dfs.DEV_SD), @"SD mounted", true)
+            utils.evaluateSubBool(dfs.mounted(dfs.DEV_FLASH), @"Flash mounted", true)
+            utils.showSubTestResults()
+
+            ' ======================================================================
+            ' TEST GROUP: Cross-Device Edge Cases
+            ' ======================================================================
+            utils.startTestGroup(@"Cross-Device Edge Cases")
+
+            ' Test: copyFile when destination already exists on Flash (should overwrite)
+            utils.startTest(@"copyFile to existing Flash file overwrites")
+            ' flFileCopy was created earlier -- write new content to SD source
+            dfs.deleteFile(dfs.DEV_SD, @sdFile1)
+            handle := dfs.createFileNew(dfs.DEV_SD, @sdFile1)
+            if handle >= 0
+                dfs.writeHandle(handle, @"OVERWRITE-TEST!", 15)
+                dfs.closeFileHandle(handle)
+            ' Copy over existing Flash file
+            status := dfs.copyFile(dfs.DEV_SD, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
+            utils.evaluateSubValue(status, @"copyFile overwrites Flash", dfs.SUCCESS)
+            ' Verify content is the new data
+            handle := dfs.open(dfs.DEV_FLASH, @flFileCopy, dfs.FILEMODE_READ)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            utils.evaluateSubValue(bytesRead, @"new content size", 15)
+
+            ' Test: copyFile when destination already exists on SD (should fail with E_FILE_EXISTS)
+            utils.startTest(@"copyFile to existing SD file returns E_FILE_EXISTS")
+            ' sdFile1 exists. Copy Flash file to same SD filename.
+            status := dfs.copyFile(dfs.DEV_FLASH, @flFile1, dfs.DEV_SD, @sdFile1)
+            debug("  copyFile to existing SD: ", sdec_(status))
+            ' SD uses createFileNew which fails if file exists
+            utils.evaluateBool(status < 0, @"copy to existing SD fails", true)
+
+            ' Test: seekHandle on SD write-mode handle + write at position
+            utils.startTest(@"seekHandle + write at position on SD")
+            dfs.deleteFile(dfs.DEV_SD, @sdFile2)
+            handle := dfs.createFileNew(dfs.DEV_SD, @sdFile2)
+            if handle >= 0
+                ' Write initial content: 16 bytes
+                dfs.writeHandle(handle, @mediumContent, 16)
+                ' Seek back to position 4 and overwrite
+                dfs.seekHandle(handle, 4)
+                dfs.writeHandle(handle, @"XXXX", 4)
+                dfs.closeFileHandle(handle)
+            ' Read back and verify the overwrite
+            handle := dfs.openFileRead(dfs.DEV_SD, @sdFile2)
+            if handle >= 0
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                dfs.closeFileHandle(handle)
+            ' Bytes 4-7 should be "XXXX"
+            bMatch := (readBuffer[4] == "X" and readBuffer[5] == "X" and readBuffer[6] == "X" and readBuffer[7] == "X")
+            utils.evaluateBool(bMatch, @"SD seek+write overwrote", true)
+
+            ' Test: seekHandle on Flash read handle + read at position
+            utils.startTest(@"seekHandle + read at position on Flash")
+            ' flFile2 contains "FL-AFL-B" (8 bytes written interleaved earlier)
+            handle := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_READ)
+            if handle >= 0
+                ' Seek to position 4 to read "FL-B"
+                dfs.seekHandle(handle, 4)
+                bytefill(@readBuffer, 0, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(handle, @readBuffer, 4)
+                dfs.closeFileHandle(handle)
+            bMatch := (readBuffer[0] == "F" and readBuffer[1] == "L" and readBuffer[2] == "-" and readBuffer[3] == "B")
+            utils.evaluateBool(bMatch, @"Flash seek+read correct", true)
+
+            ' ======================================================================
+            ' Cleanup and Summary
+            ' ======================================================================
+            debug(" ")
+            debug("* Cleaning up test files...")
+            dfs.deleteFile(dfs.DEV_SD, @sdFile1)
+            dfs.deleteFile(dfs.DEV_SD, @sdFile2)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
+            dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFile1)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFile2)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileCopy)
+            dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
+
         dfs.unmount(dfs.DEV_SD)
-        dfs.stop()
-        debug("END_SESSION")
-        return
-    utils.evaluateSingleValue(status, @"mount Flash", dfs.SUCCESS)
+        dfs.unmount(dfs.DEV_FLASH)
 
-    utils.startTest(@"Both devices mounted")
-    utils.setCheckCountPerTest(2)
-    utils.evaluateSubBool(dfs.mounted(dfs.DEV_SD), @"SD mounted", true)
-    utils.evaluateSubBool(dfs.mounted(dfs.DEV_FLASH), @"Flash mounted", true)
-    utils.showSubTestResults()
-
-    ' Clean up any prior test files
-    dfs.deleteFile(dfs.DEV_SD, @sdFile1)
-    dfs.deleteFile(dfs.DEV_SD, @sdFile2)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFile1)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFile2)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileCopy)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
-
-    ' ======================================================================
-    ' TEST GROUP: Interleaved SD and Flash I/O
-    ' ======================================================================
-    utils.startTestGroup(@"Interleaved SD and Flash I/O")
-
-    ' Test: Write to SD, write to Flash, read back both
-    utils.startTest(@"Write SD then Flash, read both back")
-    utils.setCheckCountPerTest(4)
-
-    ' Write to SD
-    handle := dfs.createFileNew(dfs.DEV_SD, @sdFile1)
-    if handle >= 0
-        dfs.writeHandle(handle, @shortContent, strsize(@shortContent))
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubBool(handle >= 0, @"SD write OK", true)
-
-    ' Write to Flash
-    handle := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_WRITE)
-    if handle >= 0
-        dfs.wr_str(handle, @shortContent)
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubBool(handle >= 0, @"Flash write OK", true)
-
-    ' Read back SD file
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdFile1)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    bMatch := (bytesRead == strsize(@shortContent))
-    utils.evaluateSubBool(bMatch, @"SD readback size OK", true)
-
-    ' Read back Flash file
-    handle := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer2, 0, BUFFER_SIZE)
-        bytesRead2 := dfs.rd_str(handle, @readBuffer2, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    bMatch := (bytesRead2 == strsize(@shortContent))    ' rd_str returns length without terminator
-    utils.evaluateSubBool(bMatch, @"Flash readback OK", true)
-    utils.showSubTestResults()
-
-    ' Test: Simultaneous handles across devices
-    utils.startTest(@"Simultaneous handles on both devices")
-    utils.setCheckCountPerTest(4)
-
-    h_sd := dfs.createFileNew(dfs.DEV_SD, @sdFile2)
-    utils.evaluateSubBool(h_sd >= 0, @"SD handle", true)
-
-    h_fl := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_WRITE)
-    utils.evaluateSubBool(h_fl >= 0, @"Flash handle", true)
-
-    ' Write interleaved: SD, Flash, SD, Flash
-    if h_sd >= 0 and h_fl >= 0
-        dfs.writeHandle(h_sd, @"SD-A", 4)
-        dfs.writeHandle(h_fl, @"FL-A", 4)
-        dfs.writeHandle(h_sd, @"SD-B", 4)
-        dfs.writeHandle(h_fl, @"FL-B", 4)
-
-    if h_sd >= 0
-        dfs.closeFileHandle(h_sd)
-    if h_fl >= 0
-        dfs.closeFileHandle(h_fl)
-
-    ' Read back and verify
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdFile2)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubValue(bytesRead, @"SD got 8 bytes", 8)
-
-    handle := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer2, 0, BUFFER_SIZE)
-        bytesRead2 := dfs.readHandle(handle, @readBuffer2, 8)
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubValue(bytesRead2, @"Flash got 8 bytes", 8)
-    utils.showSubTestResults()
-
-    ' ======================================================================
-    ' TEST GROUP: Rapid Device Alternation
-    ' ======================================================================
-    utils.startTestGroup(@"Rapid Device Alternation")
-
-    utils.startTest(@"10x alternating read/write across devices")
-    utils.setCheckCountPerTest(2)
-
-    ' Reopen SD file for read, Flash file for read
-    h_sd := dfs.openFileRead(dfs.DEV_SD, @sdFile1)
-    h_fl := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_READ)
-
-    ' Alternate reads: SD, Flash, SD, Flash... (10 total)
-    bMatch := true
-    if h_sd >= 0 and h_fl >= 0
-        repeat 5
-            bytefill(@readBuffer, 0, 64)
-            bytesRead := dfs.readHandle(h_sd, @readBuffer, 1)
-            if bytesRead < 0
-                bMatch := false
-            bytefill(@readBuffer2, 0, 64)
-            bytesRead2 := dfs.rd_byte(h_fl)
-            if bytesRead2 < 0
-                bMatch := false
-
-    if h_sd >= 0
-        dfs.closeFileHandle(h_sd)
-    if h_fl >= 0
-        dfs.closeFileHandle(h_fl)
-
-    utils.evaluateSubBool(bMatch, @"alternating reads OK", true)
-    utils.evaluateSubBool(h_sd >= 0 and h_fl >= 0, @"both handles valid", true)
-    utils.showSubTestResults()
-
-    ' ======================================================================
-    ' TEST GROUP: copyFile SD -> Flash
-    ' ======================================================================
-    utils.startTestGroup(@"copyFile SD to Flash")
-
-    ' Test: Copy small file SD -> Flash
-    utils.startTest(@"Copy small file SD -> Flash")
-    utils.setCheckCountPerTest(3)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileCopy)
-    status := dfs.copyFile(dfs.DEV_SD, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
-    utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
-
-    ' Verify destination exists on Flash
-    bMatch := dfs.exists(dfs.DEV_FLASH, @flFileCopy)
-    utils.evaluateSubBool(bMatch, @"dest file exists", true)
-
-    ' Read back and verify content matches
-    handle := dfs.open(dfs.DEV_FLASH, @flFileCopy, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubValue(bytesRead, @"content size matches", strsize(@shortContent))
-    utils.showSubTestResults()
-
-    ' Test: Copy pattern-filled file SD -> Flash (512 bytes = 1 sector)
-    utils.startTest(@"Copy 512-byte pattern SD -> Flash")
-    utils.setCheckCountPerTest(2)
-
-    ' Create 512-byte pattern file on SD
-    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $A5)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
-    handle := dfs.createFileNew(dfs.DEV_SD, @sdFileLarge)
-    if handle >= 0
-        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-
-    ' Copy to Flash
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
-    status := dfs.copyFile(dfs.DEV_SD, @sdFileLarge, dfs.DEV_FLASH, @flFileLarge)
-    utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
-
-    ' Read back from Flash and verify pattern
-    handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        utils.initGuard(@readBuf_guard)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        utils.checkGuard(@readBuf_guard, @"readBuf guard")
-        dfs.closeFileHandle(handle)
-    bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $A5)
-    utils.evaluateSubBool(bMatch, @"pattern intact", true)
-    utils.showSubTestResults()
-
-    ' Test: Copy multi-sector file SD -> Flash (1024 bytes)
-    utils.startTest(@"Copy 1024-byte file SD -> Flash")
-    utils.setCheckCountPerTest(3)
-
-    ' Create 1024-byte file on SD (2 sectors)
-    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $B7)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
-    handle := dfs.createFileNew(dfs.DEV_SD, @sdFileLarge)
-    if handle >= 0
-        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
-    status := dfs.copyFile(dfs.DEV_SD, @sdFileLarge, dfs.DEV_FLASH, @flFileLarge)
-    utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
-
-    ' Read back first 512 bytes from Flash
-    handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $B7)
-        utils.evaluateSubBool(bMatch, @"first 512 bytes OK", true)
-
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $B7)
-        utils.evaluateSubBool(bMatch, @"second 512 bytes OK", true)
-        dfs.closeFileHandle(handle)
-    utils.showSubTestResults()
-
-    ' ======================================================================
-    ' TEST GROUP: copyFile Flash -> SD
-    ' ======================================================================
-    utils.startTestGroup(@"copyFile Flash to SD")
-
-    ' Test: Copy small file Flash -> SD
-    utils.startTest(@"Copy small file Flash -> SD")
-    utils.setCheckCountPerTest(3)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
-    status := dfs.copyFile(dfs.DEV_FLASH, @flFile1, dfs.DEV_SD, @sdFileCopy)
-    utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
-
-    ' Verify destination exists on SD
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdFileCopy)
-    utils.evaluateSubBool(handle >= 0, @"dest file exists", true)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    ' Flash file was written with wr_str which includes terminator
-    utils.evaluateSubBool(bytesRead > 0, @"has content", true)
-    utils.showSubTestResults()
-
-    ' Test: Copy pattern file Flash -> SD (512 bytes)
-    utils.startTest(@"Copy 512-byte pattern Flash -> SD")
-    utils.setCheckCountPerTest(2)
-
-    ' Create 512-byte pattern file on Flash
-    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $C3)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
-    handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_WRITE)
-    if handle >= 0
-        dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-
-    ' Copy to SD
-    dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
-    status := dfs.copyFile(dfs.DEV_FLASH, @flFileLarge, dfs.DEV_SD, @sdFileCopy)
-    utils.evaluateSubValue(status, @"copyFile status", dfs.SUCCESS)
-
-    ' Read back from SD and verify pattern
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdFileCopy)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        utils.initGuard(@readBuf_guard)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        utils.checkGuard(@readBuf_guard, @"readBuf guard")
-        dfs.closeFileHandle(handle)
-    bMatch := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $C3)
-    utils.evaluateSubBool(bMatch, @"pattern intact", true)
-    utils.showSubTestResults()
-
-    ' ======================================================================
-    ' TEST GROUP: copyFile Error Cases
-    ' ======================================================================
-    utils.startTestGroup(@"copyFile Error Cases")
-
-    ' Test: Copy non-existent source returns error
-    utils.startTest(@"Copy non-existent source file")
-    dfs.deleteFile(dfs.DEV_SD, @"NOEXIST.BIN")
-    status := dfs.copyFile(dfs.DEV_SD, @"NOEXIST.BIN", dfs.DEV_FLASH, @"noexist.bin")
-    utils.evaluateBool(status < 0, @"returns error", true)
-
-    ' Test: Copy with bad source device
-    utils.startTest(@"Copy with bad device returns error")
-    status := dfs.copyFile(99, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
-    utils.evaluateSingleValue(status, @"bad src dev", dfs.E_BAD_DEVICE)
-
-    ' ======================================================================
-    ' TEST GROUP: Post-Copy Regression
-    ' ======================================================================
-    utils.startTestGroup(@"Post-Copy Regression")
-
-    ' Verify original files on both devices still intact
-    utils.startTest(@"Original SD file intact after copies")
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdFile1)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubValue(bytesRead, @"SD file size OK", strsize(@shortContent))
-
-    utils.startTest(@"Original Flash file intact after copies")
-    handle := dfs.open(dfs.DEV_FLASH, @flFile1, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.rd_str(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    utils.evaluateBool(bytesRead > 0, @"Flash file has content", true)
-
-    ' Verify both devices still operational
-    utils.startTest(@"Both devices still mounted")
-    utils.setCheckCountPerTest(2)
-    utils.evaluateSubBool(dfs.mounted(dfs.DEV_SD), @"SD mounted", true)
-    utils.evaluateSubBool(dfs.mounted(dfs.DEV_FLASH), @"Flash mounted", true)
-    utils.showSubTestResults()
-
-    ' ======================================================================
-    ' TEST GROUP: Cross-Device Edge Cases
-    ' ======================================================================
-    utils.startTestGroup(@"Cross-Device Edge Cases")
-
-    ' Test: copyFile when destination already exists on Flash (should overwrite)
-    utils.startTest(@"copyFile to existing Flash file overwrites")
-    ' flFileCopy was created earlier -- write new content to SD source
-    dfs.deleteFile(dfs.DEV_SD, @sdFile1)
-    handle := dfs.createFileNew(dfs.DEV_SD, @sdFile1)
-    if handle >= 0
-        dfs.writeHandle(handle, @"OVERWRITE-TEST!", 15)
-        dfs.closeFileHandle(handle)
-    ' Copy over existing Flash file
-    status := dfs.copyFile(dfs.DEV_SD, @sdFile1, dfs.DEV_FLASH, @flFileCopy)
-    utils.evaluateSubValue(status, @"copyFile overwrites Flash", dfs.SUCCESS)
-    ' Verify content is the new data
-    handle := dfs.open(dfs.DEV_FLASH, @flFileCopy, dfs.FILEMODE_READ)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    utils.evaluateSubValue(bytesRead, @"new content size", 15)
-
-    ' Test: copyFile when destination already exists on SD (should fail with E_FILE_EXISTS)
-    utils.startTest(@"copyFile to existing SD file returns E_FILE_EXISTS")
-    ' sdFile1 exists. Copy Flash file to same SD filename.
-    status := dfs.copyFile(dfs.DEV_FLASH, @flFile1, dfs.DEV_SD, @sdFile1)
-    debug("  copyFile to existing SD: ", sdec_(status))
-    ' SD uses createFileNew which fails if file exists
-    utils.evaluateBool(status < 0, @"copy to existing SD fails", true)
-
-    ' Test: seekHandle on SD write-mode handle + write at position
-    utils.startTest(@"seekHandle + write at position on SD")
-    dfs.deleteFile(dfs.DEV_SD, @sdFile2)
-    handle := dfs.createFileNew(dfs.DEV_SD, @sdFile2)
-    if handle >= 0
-        ' Write initial content: 16 bytes
-        dfs.writeHandle(handle, @mediumContent, 16)
-        ' Seek back to position 4 and overwrite
-        dfs.seekHandle(handle, 4)
-        dfs.writeHandle(handle, @"XXXX", 4)
-        dfs.closeFileHandle(handle)
-    ' Read back and verify the overwrite
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdFile2)
-    if handle >= 0
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    ' Bytes 4-7 should be "XXXX"
-    bMatch := (readBuffer[4] == "X" and readBuffer[5] == "X" and readBuffer[6] == "X" and readBuffer[7] == "X")
-    utils.evaluateBool(bMatch, @"SD seek+write overwrote", true)
-
-    ' Test: seekHandle on Flash read handle + read at position
-    utils.startTest(@"seekHandle + read at position on Flash")
-    ' flFile2 contains "FL-AFL-B" (8 bytes written interleaved earlier)
-    handle := dfs.open(dfs.DEV_FLASH, @flFile2, dfs.FILEMODE_READ)
-    if handle >= 0
-        ' Seek to position 4 to read "FL-B"
-        dfs.seekHandle(handle, 4)
-        bytefill(@readBuffer, 0, BUFFER_SIZE)
-        bytesRead := dfs.readHandle(handle, @readBuffer, 4)
-        dfs.closeFileHandle(handle)
-    bMatch := (readBuffer[0] == "F" and readBuffer[1] == "L" and readBuffer[2] == "-" and readBuffer[3] == "B")
-    utils.evaluateBool(bMatch, @"Flash seek+read correct", true)
-
-    ' ======================================================================
-    ' Cleanup and Summary
-    ' ======================================================================
-    debug(" ")
-    debug("* Cleaning up test files...")
-    dfs.deleteFile(dfs.DEV_SD, @sdFile1)
-    dfs.deleteFile(dfs.DEV_SD, @sdFile2)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileCopy)
-    dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFile1)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFile2)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileCopy)
-    dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
-
-    dfs.unmount(dfs.DEV_SD)
-    dfs.unmount(dfs.DEV_FLASH)
     dfs.stop()
 
     utils.ShowTestEndCounts()

@@ -62,84 +62,82 @@ PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog
     status := dfs.format(dfs.DEV_FLASH)
     if status < 0
         utils.showError(@"format()", status)
-        return
+    else
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status < 0
+            utils.showError(@"mount()", status)
+        else
+            utils.ShowStats()                   ' should have empty filesystem
+            utils.showFiles()
 
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status < 0
-        utils.showError(@"mount()", status)
-        return
+            utils.showChipAndDriverVersion()
 
-    utils.ShowStats()                   ' should have empty filesystem
-    utils.showFiles()
+            utils.startTest(@"Ensure we have no files at start")
+            utils.ensureEmptyDirectory()
 
-    utils.showChipAndDriverVersion()
+            ' ----------------------------------
+            ' TEST
+            '  open file for read
+            '  ensure returns error (doesn't exist)
+            utils.startTest(@"BAD: Read when file doesn't exist")
+            handle := dfs.open(dfs.DEV_FLASH, @testfile1, dfs.FILEMODE_READ)
+            utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
 
-    utils.startTest(@"Ensure we have no files at start")
-    utils.ensureEmptyDirectory()
+            debug(" ")
+            debug(" - report on chip S/N and Driver version")
+            snHi, snLo := dfs.serial_number(dfs.DEV_FLASH)
+            debug("CHIP Serial Number: ", uhex_long_(snHi), "-", uhex_long_(snLo))
 
-    ' ----------------------------------
-    ' TEST
-    '  open file for read
-    '  ensure returns error (doesn't exist)
-    utils.startTest(@"BAD: Read when file doesn't exist")
-    handle := dfs.open(dfs.DEV_FLASH, @testfile1, dfs.FILEMODE_READ)
-    utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
+            ' FIXME: add free block checks after each file write/append
 
-    debug(" ")
-    debug(" - report on chip S/N and Driver version")
-    snHi, snLo := dfs.serial_number(dfs.DEV_FLASH)
-    debug("CHIP Serial Number: ", uhex_long_(snHi), "-", uhex_long_(snLo))
+            ' Real tests start here:
+            utils.startTestGroup(@"Head block only - partially filled with 10 BYTEs then apppend 10 more")
+            testWriteBytes(@testfile1, 10, 0, 0) ' this replaces file so we start at 0,0
+            testAppendBytes(@testfile1, 10, 10, 1, 1)
 
-    ' FIXME: add free block checks after each file write/append
+            utils.showFiles()
 
-    ' Real tests start here:
-    utils.startTestGroup(@"Head block only - partially filled with 10 BYTEs then apppend 10 more")
-    testWriteBytes(@testfile1, 10, 0, 0) ' this replaces file so we start at 0,0
-    testAppendBytes(@testfile1, 10, 10, 1, 1)
+            utils.startTestGroup(@"Head block only - partially filled with 9 WORDs then apppend 9 more")
+            testWriteWords(@testfile2, 9, 1, 1)
+            testAppendWords(@testfile2, 9, 9, 2, 2)
 
-    utils.showFiles()
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only - partially filled with 9 WORDs then apppend 9 more")
-    testWriteWords(@testfile2, 9, 1, 1)
-    testAppendWords(@testfile2, 9, 9, 2, 2)
+            utils.startTestGroup(@"Head block only - partially filled with 12 LONGs then apppend 12 more")
+            nbrLongs := 12
+            testWriteLongs(@testfile3, nbrLongs, 2, 2)
+            testAppendLongs(@testfile3, nbrLongs, 12, 3, 3)
 
-    utils.showFiles()
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only - partially filled with 12 LONGs then apppend 12 more")
-    nbrLongs := 12
-    testWriteLongs(@testfile3, nbrLongs, 2, 2)
-    testAppendLongs(@testfile3, nbrLongs, 12, 3, 3)
+            utils.startTestGroup(@"Head block only - partially filled with 10 STRINGs then apppend 10 more")
+            expectedStrFileSize := testWriteStrings(@testfile4, 10, 3, 3)
+            expectedStrFileSize := testAppendStrings(@testfile4, 10, expectedStrFileSize, 4, 4)
 
-    utils.showFiles()
+            utils.startTestGroup(@"Read and verify the content of all 20 string")
+            testVerifyAllStrings(@testfile4, 20)
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only - partially filled with 10 STRINGs then apppend 10 more")
-    expectedStrFileSize := testWriteStrings(@testfile4, 10, 3, 3)
-    expectedStrFileSize := testAppendStrings(@testfile4, 10, expectedStrFileSize, 4, 4)
+            utils.startTestGroup(@"Head block + body block - filled with LONGs full HEAD, 2 in BODY, append 8 more")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK +2
+            testWriteLongs(@testfile5, nbrLongs, 4, 4)
+            testAppendLongs(@testfile5, nbrLongs, 8, 5, 6)
 
-    utils.startTestGroup(@"Read and verify the content of all 20 string")
-    testVerifyAllStrings(@testfile4, 20)
-    utils.showFiles()
+            utils.startTestGroup(@"Head block + 2 x body block - filled with LONGs full HEAD & BODY, 2 in 2nd BODY, append 8 more")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK +2
+            testWriteLongs(@testfile6, nbrLongs, 5, 6)
+            testAppendLongs(@testfile6, nbrLongs, 8, 6, 9)
 
-    utils.startTestGroup(@"Head block + body block - filled with LONGs full HEAD, 2 in BODY, append 8 more")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK +2
-    testWriteLongs(@testfile5, nbrLongs, 4, 4)
-    testAppendLongs(@testfile5, nbrLongs, 8, 5, 6)
+            utils.startTestGroup(@"Head block + 2 x body block - filled with LONGsfull HEAD & 2 BODY (-3), append 9 more append causes add of new body")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK + (dfs.LONGS_IN_BODY_BLOCK - 3)
+            testWriteLongs(@testfile7, nbrLongs, 6, 9)
+            testAppendLongs(@testfile7, nbrLongs, 9, 7, 12)
 
-    utils.startTestGroup(@"Head block + 2 x body block - filled with LONGs full HEAD & BODY, 2 in 2nd BODY, append 8 more")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK +2
-    testWriteLongs(@testfile6, nbrLongs, 5, 6)
-    testAppendLongs(@testfile6, nbrLongs, 8, 6, 9)
+            ' --- special case - flush() testing
+            nbrLongs += 9
+            testAppendWithIntermedFlush(nbrLongs, 7, 13)
 
-    utils.startTestGroup(@"Head block + 2 x body block - filled with LONGsfull HEAD & 2 BODY (-3), append 9 more append causes add of new body")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK + (dfs.LONGS_IN_BODY_BLOCK - 3)
-    testWriteLongs(@testfile7, nbrLongs, 6, 9)
-    testAppendLongs(@testfile7, nbrLongs, 9, 7, 12)
-
-    ' --- special case - flush() testing
-    nbrLongs += 9
-    testAppendWithIntermedFlush(nbrLongs, 7, 13)
-
-    utils.showFiles()
+            utils.showFiles()
 
     utils.ShowTestEndCounts()
 
@@ -424,7 +422,7 @@ pri testWriteLongs(pFilename, count, startingFileCount, startingBlockCount) | by
     '  ensure returns SUCCESS
     utils.startTest(@"Open File for write")
     handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_WRITE)
-    utils.evaluateResultNegError(handle, 0)
+    utils.evaluateResultNegError(handle, dfs.SUCCESS)
 
     utils.startTest(@"Write N LONGs")
     utils.setCheckCountPerTest(1)

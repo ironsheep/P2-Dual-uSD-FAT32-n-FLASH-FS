@@ -30,6 +30,28 @@ CON
      MEDIUM_BUF = 512
      LARGE_BUF = 4096
 
+     ' Expected test file sizes (from TEST-CARD-SPECIFICATION.md)
+     TINY_FILE_SIZE      = 29
+     EXACT512_FILE_SIZE  = 512
+     TWOSEC_FILE_SIZE    = 2550
+     FOURK_FILE_SIZE     = 4096
+     SIXTYK_FILE_SIZE    = 65536
+     SEEKTEST_FILE_SIZE  = 2016
+     CHECKSUM_FILE_SIZE  = 1024
+     LEVEL1_FILE_SIZE    = 54
+     DEEP_FILE_SIZE      = 71
+
+     ' Seek test block size
+     SEEK_BLOCK_SIZE     = 63      ' Each block in SEEKTEST.BIN is 63 bytes
+     SEEK_NUM_BLOCKS     = 32      ' 32 blocks total
+
+     ' Multi directory expected file count
+     MULTI_DIR_FILES     = 5
+
+     ' Benchmark parameters
+     BENCHMARK_SIZE      = 65536   ' 64KB sequential read
+     BENCHMARK_SECTORS   = 128     ' 65536 / 512
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
@@ -79,33 +101,30 @@ PUB go() | workerCog, result
     if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         debug("Is the test card inserted?")
-        dfs.stop()
-        debug("END_SESSION")
-        return
+    else
+        ' Show card info
+        debug(" ")
+        debug("* SD Card Information:")
+        debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+        debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
 
-    ' Show card info
-    debug(" ")
-    debug("* SD Card Information:")
-    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
-    debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+        ' Run all validation tests
+        test_mount_validation()
+        test_root_directory_enum()
+        test_tiny_file()
+        test_exact_sector()
+        test_four_k_pattern()
+        test_multi_sector_text()
+        test_large_file_cluster_chain()
+        test_seek_operations()
+        test_checksum_integrity()
+        test_path_resolution()
+        test_deep_path()
+        test_directory_navigation()
+        test_benchmark_sequential()
 
-    ' Run all validation tests
-    test_mount_validation()
-    test_root_directory_enum()
-    test_tiny_file()
-    test_exact_sector()
-    test_four_k_pattern()
-    test_multi_sector_text()
-    test_large_file_cluster_chain()
-    test_seek_operations()
-    test_checksum_integrity()
-    test_path_resolution()
-    test_deep_path()
-    test_directory_navigation()
-    test_benchmark_sequential()
-
-    ' Unmount
-    dfs.unmount(dfs.DEV_SD)
+        ' Unmount
+        dfs.unmount(dfs.DEV_SD)
 
     ' Summary
     dfs.stop()
@@ -155,7 +174,7 @@ PRI test_tiny_file() | result, fileSize, bytesRead, handle
 
     utils.startTest(@"Verify file size is 29 bytes")
     fileSize := dfs.fileSizeHandle(handle)
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 29)
+    utils.evaluateSingleValue(fileSize, @"fileSize()", TINY_FILE_SIZE)
 
     utils.startTest(@"Read and verify content starts correctly")
     bytesRead := dfs.readHandle(handle, @smallBuf, 14)
@@ -178,15 +197,15 @@ PRI test_exact_sector() | result, i, allMatch, handle
     utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is exactly 512 bytes")
-    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", 512)
+    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", EXACT512_FILE_SIZE)
 
     utils.startTest(@"Read 512 bytes")
-    result := dfs.readHandle(handle, @mediumBuf, 512)
-    utils.evaluateSingleValue(result, @"bytes read", 512)
+    result := dfs.readHandle(handle, @mediumBuf, MEDIUM_BUF)
+    utils.evaluateSingleValue(result, @"bytes read", EXACT512_FILE_SIZE)
 
     utils.startTest(@"Verify all bytes are 0x58 ('X')")
     allMatch := true
-    repeat i from 0 to 511
+    repeat i from 0 to MEDIUM_BUF - 1
         if mediumBuf[i] <> $58
             debug("  Mismatch at ", udec_(i), ": got $", uhex_(mediumBuf[i]))
             allMatch := false
@@ -204,18 +223,18 @@ PRI test_four_k_pattern() | result, i, expected, allMatch, handle
     utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 4096 bytes")
-    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", 4096)
+    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", FOURK_FILE_SIZE)
 
     utils.startTest(@"Read and verify sequential pattern")
     allMatch := true
 
     ' Read in chunks and verify pattern: byte[i] = i & 0xFF
     repeat i from 0 to 7  ' 8 sectors
-        dfs.readHandle(handle, @mediumBuf, 512)
-        repeat result from 0 to 511
-            expected := ((i * 512) + result) & $FF
+        dfs.readHandle(handle, @mediumBuf, MEDIUM_BUF)
+        repeat result from 0 to MEDIUM_BUF - 1
+            expected := ((i * MEDIUM_BUF) + result) & $FF
             if mediumBuf[result] <> expected
-                debug("  Mismatch at ", udec_((i * 512) + result), ": got $", uhex_(mediumBuf[result]), " expected $", uhex_(expected))
+                debug("  Mismatch at ", udec_((i * MEDIUM_BUF) + result), ": got $", uhex_(mediumBuf[result]), " expected $", uhex_(expected))
                 allMatch := false
                 quit
         if not allMatch
@@ -235,7 +254,7 @@ PRI test_multi_sector_text() | result, fileSize, handle
 
     utils.startTest(@"Verify file size is 2550 bytes")
     fileSize := dfs.fileSizeHandle(handle)
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 2550)
+    utils.evaluateSingleValue(fileSize, @"fileSize()", TWOSEC_FILE_SIZE)
 
     utils.startTest(@"Read first line - should start with LINE0001")
     dfs.readHandle(handle, @smallBuf, 8)
@@ -254,16 +273,16 @@ PRI test_large_file_cluster_chain() | result, fileSize, pos, expected, actual, h
 
     utils.startTest(@"Verify file size is 65536 bytes")
     fileSize := dfs.fileSizeHandle(handle)
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 65536)
+    utils.evaluateSingleValue(fileSize, @"fileSize()", SIXTYK_FILE_SIZE)
 
     utils.startTest(@"Verify pattern at various positions")
     utils.setCheckCountPerTest(8)
 
     ' Pattern: byte[i] = (block << 1) XOR (i & 0xFF) where block = i / 512
-    repeat pos from 0 to 65535 step 8192  ' Check every 8KB
+    repeat pos from 0 to SIXTYK_FILE_SIZE - 1 step 8192  ' Check every 8KB
         dfs.seekHandle(handle, pos)
         dfs.readHandle(handle, @smallBuf, 1)
-        expected := ((pos / 512) << 1) ^ (pos & $FF)
+        expected := ((pos / MEDIUM_BUF) << 1) ^ (pos & $FF)
         utils.evaluateSubValueHex(smallBuf[0], @"pattern byte", expected)
 
     dfs.closeFileHandle(handle)
@@ -277,29 +296,29 @@ PRI test_seek_operations() | result, handle
     utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 2016 bytes")
-    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", 2016)
+    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", SEEKTEST_FILE_SIZE)
 
     ' File has 32 blocks of 63 bytes each: "BLK##---" + 55 bytes of 0x55
     utils.startTest(@"Seek to block 0 (offset 0)")
-    dfs.seekHandle(handle, 0)
+    dfs.seekHandle(handle, 0 * SEEK_BLOCK_SIZE)
     dfs.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 0 header", @"BLK00---")
 
     utils.startTest(@"Seek to block 1 (offset 63)")
-    dfs.seekHandle(handle, 63)
+    dfs.seekHandle(handle, 1 * SEEK_BLOCK_SIZE)
     dfs.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 1 header", @"BLK01---")
 
     utils.startTest(@"Seek to block 10 (offset 630)")
-    dfs.seekHandle(handle, 630)
+    dfs.seekHandle(handle, 10 * SEEK_BLOCK_SIZE)
     dfs.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 10 header", @"BLK10---")
 
     utils.startTest(@"Seek to block 31 (offset 1953)")
-    dfs.seekHandle(handle, 1953)
+    dfs.seekHandle(handle, (SEEK_NUM_BLOCKS - 1) * SEEK_BLOCK_SIZE)
     dfs.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 31 header", @"BLK31---")
@@ -315,16 +334,16 @@ PRI test_checksum_integrity() | result, i, sum, handle
     utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 1024 bytes")
-    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", 1024)
+    utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSize()", CHECKSUM_FILE_SIZE)
 
     utils.startTest(@"Read and calculate checksum")
     ' Read in two chunks since buffer is 512
     sum := 0
-    dfs.readHandle(handle, @mediumBuf, 512)
-    repeat i from 0 to 511
+    dfs.readHandle(handle, @mediumBuf, MEDIUM_BUF)
+    repeat i from 0 to MEDIUM_BUF - 1
         sum += mediumBuf[i]
-    dfs.readHandle(handle, @mediumBuf, 512)
-    repeat i from 0 to 511
+    dfs.readHandle(handle, @mediumBuf, MEDIUM_BUF)
+    repeat i from 0 to MEDIUM_BUF - 1
         sum += mediumBuf[i]
 
     ' Expected sum: 130560 (bytes 0-255 repeated 4 times: 4 * (0+1+2+...+255) = 4 * 32640)
@@ -342,7 +361,7 @@ PRI test_path_resolution() | result, fileSize, handle
 
     utils.startTest(@"Verify file size is 54 bytes")
     fileSize := dfs.fileSizeHandle(handle)
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 54)
+    utils.evaluateSingleValue(fileSize, @"fileSize()", LEVEL1_FILE_SIZE)
 
     utils.startTest(@"Verify content starts correctly")
     dfs.readHandle(handle, @smallBuf, 22)
@@ -361,7 +380,7 @@ PRI test_deep_path() | result, fileSize, handle
 
     utils.startTest(@"Verify file size is 71 bytes")
     fileSize := dfs.fileSizeHandle(handle)
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 71)
+    utils.evaluateSingleValue(fileSize, @"fileSize()", DEEP_FILE_SIZE)
 
     utils.startTest(@"Verify content starts correctly")
     dfs.readHandle(handle, @smallBuf, 13)
@@ -389,7 +408,7 @@ PRI test_directory_navigation() | result, status, count, idx, pEntry
         count++
         idx++
 
-    utils.evaluateSingleValue(count, @"file count", 5)
+    utils.evaluateSingleValue(count, @"file count", MULTI_DIR_FILES)
 
     utils.startTest(@"Navigate back to root")
     status := dfs.changeDirectory(dfs.DEV_SD, @"/")
@@ -403,15 +422,15 @@ PRI test_benchmark_sequential() | start, elapsed, bytesRead, i, bytesPerSec, han
     handle := dfs.openFileRead(dfs.DEV_SD, @fileSixtyK)
 
     start := getct()
-    repeat i from 0 to 127
-        dfs.readHandle(handle, @mediumBuf, 512)
+    repeat i from 0 to BENCHMARK_SECTORS - 1
+        dfs.readHandle(handle, @mediumBuf, MEDIUM_BUF)
     elapsed := getct() - start
 
     dfs.closeFileHandle(handle)
 
     ' Calculate throughput
     ' elapsed is in clock ticks, convert to microseconds then to bytes/sec
-    bytesPerSec := (65536 * (clkfreq / 1000)) / (elapsed / 1000)
+    bytesPerSec := (BENCHMARK_SIZE * (clkfreq / 1000)) / (elapsed / 1000)
 
     debug("  64KB read time: ", udec_(elapsed / (clkfreq / 1000000)), " microseconds")
     debug("  Throughput: ~", udec_(bytesPerSec / 1024), " KB/sec")

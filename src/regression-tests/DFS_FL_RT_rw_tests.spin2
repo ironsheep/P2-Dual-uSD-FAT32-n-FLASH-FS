@@ -84,166 +84,164 @@ PUB go() | snHi, snLo, lenBytes, desiredLenBytes, fillByteValue, blocksUsed, wor
     status := dfs.format(dfs.DEV_FLASH)
     if status < 0
         utils.showError(@"format()", status)
-        return
+    else
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status < 0
+            utils.showError(@"mount()", status)
+        else
+            utils.ShowStats()                   ' should have empty filesystem
+            utils.showFiles()
 
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status < 0
-        utils.showError(@"mount()", status)
-        return
+            utils.showChipAndDriverVersion()
 
-    utils.ShowStats()                   ' should have empty filesystem
-    utils.showFiles()
+            utils.startTest(@"Ensure we have no files at start")
+            utils.ensureEmptyDirectory()
 
-    utils.showChipAndDriverVersion()
+            ' ----------------------------------
+            ' TEST
+            '  open file for read
+            '  ensure returns error (doesn't exist)
+            utils.startTest(@"BAD: Read when file doesn't exist")
+            handle := dfs.open(dfs.DEV_FLASH, @testfile1, dfs.FILEMODE_READ)
+            utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
 
-    utils.startTest(@"Ensure we have no files at start")
-    utils.ensureEmptyDirectory()
+            ' Real tests start here:
+            utils.startTestGroup(@"Head block only - partially filled with 5 BYTEs")
+            testWriteBytes(@testfile1, 5, 0, 0)
+            testVerifyBytes(@testfile1, 5)
 
-    ' ----------------------------------
-    ' TEST
-    '  open file for read
-    '  ensure returns error (doesn't exist)
-    utils.startTest(@"BAD: Read when file doesn't exist")
-    handle := dfs.open(dfs.DEV_FLASH, @testfile1, dfs.FILEMODE_READ)
-    utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
+            utils.showFiles()
 
-    ' Real tests start here:
-    utils.startTestGroup(@"Head block only - partially filled with 5 BYTEs")
-    testWriteBytes(@testfile1, 5, 0, 0)
-    testVerifyBytes(@testfile1, 5)
+            utils.startTestGroup(@"Head block only (replace file) - partially filled with 10 BYTEs")
+            testWriteBytes(@testfile1, 10, 0, 0)
+            testVerifyBytes(@testfile1, 10)
 
-    utils.showFiles()
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only (replace file) - partially filled with 10 BYTEs")
-    testWriteBytes(@testfile1, 10, 0, 0)
-    testVerifyBytes(@testfile1, 10)
+            utils.startTestGroup(@"Head block only - partially filled with 9 WORDs")
+            testWriteWords(@testfile2, 9, 1, 1)
+            testVerifyWords(@testfile2, 9)
 
-    utils.showFiles()
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only - partially filled with 9 WORDs")
-    testWriteWords(@testfile2, 9, 1, 1)
-    testVerifyWords(@testfile2, 9)
+            utils.startTest(@"Ensure we have 2 files written so far")
+            'stuff absolute addresses of filenames into directory entries
+            dirEntr01 := @testfile1
+            dirEntr02 := @testfile2
+            utils.checkMatchingEntries(@dirEntr01)
 
-    utils.showFiles()
+            utils.startTestGroup(@"Head block only - partially filled with 12 LONGs")
+            testWriteLongs(@testfile3, 12, 2, 2)
+            testVerifyLongs(@testfile3, 12)
 
-    utils.startTest(@"Ensure we have 2 files written so far")
-    'stuff absolute addresses of filenames into directory entries
-    dirEntr01 := @testfile1
-    dirEntr02 := @testfile2
-    utils.checkMatchingEntries(@dirEntr01)
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only - partially filled with 12 LONGs")
-    testWriteLongs(@testfile3, 12, 2, 2)
-    testVerifyLongs(@testfile3, 12)
+            utils.startTest(@"Ensure we have 3 files written so far")
+            'stuff absolute addresses of filenames into directory entries
+            dirEntr11 := @testfile1
+            dirEntr12 := @testfile2
+            dirEntr13 := @testfile3
+            utils.checkMatchingEntries(@dirEntr11)
 
-    utils.showFiles()
+            utils.startTestGroup(@"Head block only - partially filled with 10 STRINGs")
+            testWriteStrings(@testfile4, 10, 3, 3)              ' 10 is built in for now, so ignored in this call
 
-    utils.startTest(@"Ensure we have 3 files written so far")
-    'stuff absolute addresses of filenames into directory entries
-    dirEntr11 := @testfile1
-    dirEntr12 := @testfile2
-    dirEntr13 := @testfile3
-    utils.checkMatchingEntries(@dirEntr11)
+            utils.showFiles()
 
-    utils.startTestGroup(@"Head block only - partially filled with 10 STRINGs")
-    testWriteStrings(@testfile4, 10, 3, 3)              ' 10 is built in for now, so ignored in this call
+            utils.startTestGroup(@"Head block only - filled with LONGs")
+            testWriteLongs(@testfile5, dfs.LONGS_IN_HEAD_BLOCK, 4, 4)
+            testVerifyLongs(@testfile5, dfs.LONGS_IN_HEAD_BLOCK)
 
-    utils.showFiles()
+            utils.startTestGroup(@"Head block + body block - filled with LONGs full head + 2")
+            testWriteLongs(@testfile6, dfs.LONGS_IN_HEAD_BLOCK+2, 5, 5)
+            testVerifyLongs(@testfile6, dfs.LONGS_IN_HEAD_BLOCK+2)
 
-    utils.startTestGroup(@"Head block only - filled with LONGs")
-    testWriteLongs(@testfile5, dfs.LONGS_IN_HEAD_BLOCK, 4, 4)
-    testVerifyLongs(@testfile5, dfs.LONGS_IN_HEAD_BLOCK)
+            utils.startTestGroup(@"Head block + body block * 2 - filled with LONGs full head, full body, + 2")
+            testWriteLongs(@testfile7, dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK+2, 6, 7)
+            testVerifyLongs(@testfile7, dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK+2)
 
-    utils.startTestGroup(@"Head block + body block - filled with LONGs full head + 2")
-    testWriteLongs(@testfile6, dfs.LONGS_IN_HEAD_BLOCK+2, 5, 5)
-    testVerifyLongs(@testfile6, dfs.LONGS_IN_HEAD_BLOCK+2)
+            utils.startTestGroup(@"Various odd size reads for Issue (#2)")
+            ' REF https://github.com/ironsheep/P2-FLASH-FS/issues/2
+            testVerifyReads(@testfile7)
 
-    utils.startTestGroup(@"Head block + body block * 2 - filled with LONGs full head, full body, + 2")
-    testWriteLongs(@testfile7, dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK+2, 6, 7)
-    testVerifyLongs(@testfile7, dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK+2)
-
-    utils.startTestGroup(@"Various odd size reads for Issue (#2)")
-    ' REF https://github.com/ironsheep/P2-FLASH-FS/issues/2
-    testVerifyReads(@testfile7)
-
-    utils.showFiles()
+            utils.showFiles()
 
 
-    ' --- special case - Mount() testing do files survive unmount()/mount()?
-    utils.startTestGroup(@"unmount(), mount() - ensure files survive")
-    utils.startTest(@"unmount()")
-    status := dfs.unmount(dfs.DEV_FLASH)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+            ' --- special case - Mount() testing do files survive unmount()/mount()?
+            utils.startTestGroup(@"unmount(), mount() - ensure files survive")
+            utils.startTest(@"unmount()")
+            status := dfs.unmount(dfs.DEV_FLASH)
+            utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    utils.startTest(@"serial_number()  while FS not mounted")
-    utils.setCheckCountPerTest(2)
-    snHi, snLo := dfs.serial_number(dfs.DEV_FLASH)
-    utils.evaluateSubValue(snHi, @"serial_number() hi", 0)
-    utils.evaluateSubValue(snLo, @"serial_number() lo", 0)
+            utils.startTest(@"serial_number()  while FS not mounted")
+            utils.setCheckCountPerTest(2)
+            snHi, snLo := dfs.serial_number(dfs.DEV_FLASH)
+            utils.evaluateSubValue(snHi, @"serial_number() hi", 0)
+            utils.evaluateSubValue(snLo, @"serial_number() lo", 0)
 
-    utils.startTest(@"serial_number() valid not mounted status")
-    status := dfs.error()
-    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+            utils.startTest(@"serial_number() valid not mounted status")
+            status := dfs.error()
+            utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
 
-    utils.startTest(@"open()  while FS not mounted")
-    status := dfs.open(dfs.DEV_FLASH, @testfile7, dfs.FILEMODE_READ)
-    utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
+            utils.startTest(@"open()  while FS not mounted")
+            status := dfs.open(dfs.DEV_FLASH, @testfile7, dfs.FILEMODE_READ)
+            utils.evaluateResultNegError(status, dfs.E_NOT_MOUNTED)
 
-    utils.startTest(@"mount() FS")
-    status := dfs.mount(dfs.DEV_FLASH)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+            utils.startTest(@"mount() FS")
+            status := dfs.mount(dfs.DEV_FLASH)
+            utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    ' --- new feature at v2.0.0  - create_file() testing
+            ' --- new feature at v2.0.0  - create_file() testing
 
-    ' TEST CF1 - create new file filling with 0's - validate length and content
-    utils.startTestGroup(@"CF1 - create 4kb file filled with 0x00")
-    utils.startTest(@"create zero filled file")
-    desiredLenBytes := 4096
-    fillByteValue := $00
-    status := dfs.create_file(dfs.DEV_FLASH, @testfile8, fillByteValue, desiredLenBytes)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+            ' TEST CF1 - create new file filling with 0's - validate length and content
+            utils.startTestGroup(@"CF1 - create 4kb file filled with 0x00")
+            utils.startTest(@"create zero filled file")
+            desiredLenBytes := 4096
+            fillByteValue := $00
+            status := dfs.create_file(dfs.DEV_FLASH, @testfile8, fillByteValue, desiredLenBytes)
+            utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    utils.startTest(@"Does file exist")
-    lenBytes := dfs.file_size(dfs.DEV_FLASH, @testfile8)
-    status := dfs.error()
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+            utils.startTest(@"Does file exist")
+            lenBytes := dfs.file_size(dfs.DEV_FLASH, @testfile8)
+            status := dfs.error()
+            utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    blocksUsed := utils.blockCountForFileSize(lenBytes)
-    utils.evaluateFileStats(@testfile8, blocksUsed, lenBytes)
+            '  get single file stats and verify against expectation
+            utils.startTest(@"Ensure expected file stats")
+            blocksUsed := utils.blockCountForFileSize(lenBytes)
+            utils.evaluateFileStats(@testfile8, blocksUsed, lenBytes)
 
-    utils.startTest(@"Is correct size")
-    utils.evaluateSingleValue(lenBytes, @"file_size()", desiredLenBytes)
+            utils.startTest(@"Is correct size")
+            utils.evaluateSingleValue(lenBytes, @"file_size()", desiredLenBytes)
 
-    verifyFileFillContent(@testfile8, fillByteValue, desiredLenBytes)
-
-
-    ' TEST CF2 - create new file filling with $A5's - validate length and content
-    utils.startTestGroup(@"CF2 - create 2kb file filled with 0xA5")
-    utils.startTest(@"create zero filled file")
-    desiredLenBytes := 2048
-    fillByteValue := $A5
-    status := dfs.create_file(dfs.DEV_FLASH, @testfile9, fillByteValue, desiredLenBytes)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
-
-    utils.startTest(@"Does file exist")
-    lenBytes := dfs.file_size(dfs.DEV_FLASH, @testfile9)
-    status := dfs.error()
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
-
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    blocksUsed := utils.blockCountForFileSize(lenBytes)
-    utils.evaluateFileStats(@testfile9, blocksUsed, lenBytes)
-
-    utils.startTest(@"Is correct size")
-    utils.evaluateSingleValue(lenBytes, @"file_size()", desiredLenBytes)
-
-    verifyFileFillContent(@testfile9, fillByteValue, desiredLenBytes)
+            verifyFileFillContent(@testfile8, fillByteValue, desiredLenBytes)
 
 
-    utils.showFiles()
+            ' TEST CF2 - create new file filling with $A5's - validate length and content
+            utils.startTestGroup(@"CF2 - create 2kb file filled with 0xA5")
+            utils.startTest(@"create zero filled file")
+            desiredLenBytes := 2048
+            fillByteValue := $A5
+            status := dfs.create_file(dfs.DEV_FLASH, @testfile9, fillByteValue, desiredLenBytes)
+            utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+            utils.startTest(@"Does file exist")
+            lenBytes := dfs.file_size(dfs.DEV_FLASH, @testfile9)
+            status := dfs.error()
+            utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+            '  get single file stats and verify against expectation
+            utils.startTest(@"Ensure expected file stats")
+            blocksUsed := utils.blockCountForFileSize(lenBytes)
+            utils.evaluateFileStats(@testfile9, blocksUsed, lenBytes)
+
+            utils.startTest(@"Is correct size")
+            utils.evaluateSingleValue(lenBytes, @"file_size()", desiredLenBytes)
+
+            verifyFileFillContent(@testfile9, fillByteValue, desiredLenBytes)
+
+
+            utils.showFiles()
 
     utils.ShowTestEndCounts()
 
@@ -334,7 +332,7 @@ pri testVerifyBytes(pFilename, count)
     repeat count
         expectedValue++
         testValue := dfs.rd_byte(handle)
-        status := testValue < 0 ? testValue : 0
+        status := testValue < 0 ? testValue : dfs.SUCCESS
         utils.evaluateSubValue(testValue, @"rd_byte()", expectedValue)
         utils.evaluateSubStatus(status, @"rd_byte()", dfs.SUCCESS)
 

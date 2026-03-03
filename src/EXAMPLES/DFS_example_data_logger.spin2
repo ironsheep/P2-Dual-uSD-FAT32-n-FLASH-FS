@@ -33,8 +33,12 @@ CON
     SD_MISO = 58
     SD_SCK  = 61
 
-    NUM_SAMPLES  = 20                                           ' number of simulated readings
-    BUFFER_SIZE  = 512
+    NUM_SAMPLES      = 20                                       ' number of simulated readings
+    BUFFER_SIZE      = 512
+    SAMPLE_BASE      = 200                                      ' simulated base reading value
+    SAMPLE_SCALE     = 5                                        ' scale factor per sample index
+    SAMPLE_JITTER    = 10                                       ' random jitter range
+    LOG_INTERVAL     = 5                                        ' debug progress every N samples
 
 OBJ
 
@@ -62,76 +66,70 @@ PUB go() | status, handle, sample, reading, bytes_read
     debug(" ")
 
     ' --- Initialize and mount ---
+    status := dfs.SUCCESS                                       ' assume success
     if dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("ERROR: Driver init failed")
-        return
+        status := -1
+    if status == dfs.SUCCESS
+        status := dfs.mount(dfs.DEV_SD)
+        if status <> dfs.SUCCESS
+            debug("SD mount FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            debug("Flash mount FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        debug("Both devices mounted")
 
-    status := dfs.mount(dfs.DEV_SD)
-    if status <> dfs.SUCCESS
-        debug("SD mount FAILED: ", sdec_(status))
-        dfs.stop()
-        return
+        ' --- Step 1: Open Flash log for writing ---
+        debug(" ")
+        debug("Opening Flash log: ", zstr_(@flLogName))
+        dfs.deleteFile(dfs.DEV_FLASH, @flLogName)
+        handle := dfs.open(dfs.DEV_FLASH, @flLogName, dfs.FILEMODE_WRITE)
+        if handle < 0
+            debug("  ERROR opening log: ", sdec_(handle))
+            status := handle
+    if status == dfs.SUCCESS
+        ' --- Step 2: Write header ---
+        dfs.wr_str(handle, @"# Sensor Log")
+        dfs.wr_str(handle, @"# Sample, Reading")
 
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-        debug("Flash mount FAILED: ", sdec_(status))
-        dfs.unmount(dfs.DEV_SD)
-        dfs.stop()
-        return
-    debug("Both devices mounted")
+        ' --- Step 3: Write simulated sensor data ---
+        debug("Logging ", udec_(NUM_SAMPLES), " samples to Flash...")
+        repeat sample from 1 to NUM_SAMPLES
+            ' Simulate a sensor reading (temperature-like values 200-300)
+            reading := SAMPLE_BASE + (sample * SAMPLE_SCALE) + (getrnd() +/ SAMPLE_JITTER)
+            ' Format as simple CSV: "sample,reading"
+            format_sample(@buffer, sample, reading)
+            dfs.wr_str(handle, @buffer)
+            if (sample // LOG_INTERVAL) == 0
+                debug("  Logged sample ", udec_(sample), "/", udec_(NUM_SAMPLES))
 
-    ' --- Step 1: Open Flash log for writing ---
-    debug(" ")
-    debug("Opening Flash log: ", zstr_(@flLogName))
-    dfs.deleteFile(dfs.DEV_FLASH, @flLogName)
-    handle := dfs.open(dfs.DEV_FLASH, @flLogName, dfs.FILEMODE_WRITE)
-    if handle < 0
-        debug("  ERROR opening log: ", sdec_(handle))
-        cleanup()
-        return
+        ' --- Step 4: Close Flash log ---
+        dfs.closeFileHandle(handle)
+        debug("Flash log closed")
 
-    ' --- Step 2: Write header ---
-    dfs.wr_str(handle, @"# Sensor Log")
-    dfs.wr_str(handle, @"# Sample, Reading")
-
-    ' --- Step 3: Write simulated sensor data ---
-    debug("Logging ", udec_(NUM_SAMPLES), " samples to Flash...")
-    repeat sample from 1 to NUM_SAMPLES
-        ' Simulate a sensor reading (temperature-like values 200-300)
-        reading := 200 + (sample * 5) + (getrnd() +/ 10)
-        ' Format as simple CSV: "sample,reading"
-        format_sample(@buffer, sample, reading)
-        dfs.wr_str(handle, @buffer)
-        if (sample // 5) == 0
-            debug("  Logged sample ", udec_(sample), "/", udec_(NUM_SAMPLES))
-
-    ' --- Step 4: Close Flash log ---
-    dfs.closeFileHandle(handle)
-    debug("Flash log closed")
-
-    ' --- Step 5: Archive Flash log to SD ---
-    debug(" ")
-    debug("Archiving to SD: ", zstr_(@sdArchiveName))
-    dfs.deleteFile(dfs.DEV_SD, @sdArchiveName)
-    status := dfs.copyFile(dfs.DEV_FLASH, @flLogName, dfs.DEV_SD, @sdArchiveName)
+        ' --- Step 5: Archive Flash log to SD ---
+        debug(" ")
+        debug("Archiving to SD: ", zstr_(@sdArchiveName))
+        dfs.deleteFile(dfs.DEV_SD, @sdArchiveName)
+        status := dfs.copyFile(dfs.DEV_FLASH, @flLogName, dfs.DEV_SD, @sdArchiveName)
+        if status <> dfs.SUCCESS
+            debug("  Archive FAILED: ", sdec_(status))
     if status == dfs.SUCCESS
         debug("  Archive successful!")
-    else
-        debug("  Archive FAILED: ", sdec_(status))
-        cleanup()
-        return
 
-    ' --- Step 6: Verify archive on SD ---
-    debug("Verifying archive...")
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdArchiveName)
-    if handle >= 0
-        bytefill(@buffer, 0, BUFFER_SIZE)
-        bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
-        dfs.closeFileHandle(handle)
-        debug("  Archive contains ", udec_(bytes_read), " bytes")
-        debug("  First bytes: ", zstr_(@buffer))
-    else
-        debug("  ERROR: Cannot read archive: ", sdec_(handle))
+        ' --- Step 6: Verify archive on SD ---
+        debug("Verifying archive...")
+        handle := dfs.openFileRead(dfs.DEV_SD, @sdArchiveName)
+        if handle >= 0
+            bytefill(@buffer, 0, BUFFER_SIZE)
+            bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
+            dfs.closeFileHandle(handle)
+            debug("  Archive contains ", udec_(bytes_read), " bytes")
+            debug("  First bytes: ", zstr_(@buffer))
+        else
+            debug("  ERROR: Cannot read archive: ", sdec_(handle))
 
     ' --- Step 7: Clean up ---
     debug(" ")

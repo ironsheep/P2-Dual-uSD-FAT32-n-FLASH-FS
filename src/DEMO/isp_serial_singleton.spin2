@@ -49,6 +49,15 @@ CON { serial configuration }
     ' tx pin drive options (PU_NONE = strong CMOS push-pull for high-speed)
     #0, PU_NONE, PU_1K5, PU_3K3, PU_15K                         ' drive options
 
+CON { format radix codes (non-obvious aliases used with mstr.fmt_number()) }
+
+  FMT_FLOAT        = 99         ' floating-point format code
+
+CON { ASCII codes }
+
+  ASCII_QUOTE      = 34         ' double-quote character
+  MAX_BYTE_VALUE   = 255        ' maximum single-byte value
+
 CON { pst formatting }
 
   HOME     =  1
@@ -237,7 +246,7 @@ PUB rxline(p_dest, maxLen) : len | chr
 
     if (chr == 13)                                                   ' CR = end of line
       BYTE[p_dest][len] := 0
-      return
+      quit
 
     if (chr == 10)                                                   ' LF = ignore
       next
@@ -474,7 +483,7 @@ debug("FMT: [", zstr_(p_str), "]")
       elseif (chr == "%")
         tx("%")
       elseif (chr == "q")
-        tx(34)
+        tx(ASCII_QUOTE)
       elseif (chr == "b")
         tx(BKSP)
       elseif (chr == "t")
@@ -486,14 +495,14 @@ debug("FMT: [", zstr_(p_str), "]")
       elseif ((chr >= "0") and (chr <= "9"))
         --p_str
         p_str, asc, _ := get_nargs(p_str)
-        if ((asc >= 0) and (asc <= 255))
+        if ((asc >= 0) and (asc <= MAX_BYTE_VALUE))
           tx(asc)
 
     elseif (chr == "%")
       p_str, fld, digits := get_nargs(p_str)
       chr := byte[p_str++]
       if (chr == "f")
-        str(mstr.fmt_number(long[p_args][idx++], 99, digits, fld, " "))
+        str(mstr.fmt_number(long[p_args][idx++], FMT_FLOAT, digits, fld, " "))
       elseif (chr == "d")
         str(mstr.fmt_number(long[p_args][idx++], 10, digits, fld, " "))
       elseif (chr == "x")
@@ -558,7 +567,7 @@ PUB fmt_number(value, base, digits, width, pad)
 '' Emit value converted to number in padded field
 ''
 '' @param value - value to convert
-'' @param base - radix for conversion (99 for decimal with decimal point)
+'' @param base - radix for conversion (FMT_FLOAT for decimal with decimal point)
 '' @param digits - max number of digits to use
 '' @param width - width of final field (max)
 '' @param pad - character that fills out field
@@ -611,7 +620,7 @@ PUB jdpdec(value, dp, width, pad)
 '' @param width - width of final field (negative to left-align)
 '' @param pad - character that fills out field
 
-  str(mstr.fmt_number(value, 99, dp, width, pad))
+  str(mstr.fmt_number(value, FMT_FLOAT, dp, width, pad))
 
 
 PUB hex(value)

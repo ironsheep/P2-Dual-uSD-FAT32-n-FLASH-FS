@@ -25,6 +25,8 @@ CON
     SD_MISO = 58
     SD_SCK  = 61
 
+    SUCCESS = 0                     ' Successful operation (matches dfs.SUCCESS)
+
 OBJ
 
     fsck : "isp_fsck_utility"
@@ -37,23 +39,21 @@ PUB go() | pStr
     debug("==============================================")
     debug(" ")
 
-    if not fsck.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if fsck.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> SUCCESS
         debug("FATAL: Could not start Audit cog")
-        debug("END_SESSION")
-        return
-
-    ' Pump FIFO output to debug
-    repeat
-        pStr := fsck.getOutput()
-        if pStr
-            debug(zstr_(pStr))
-        elseif fsck.isDone()
-            ' Drain any remaining output
-            repeat while (pStr := fsck.getOutput())
+    else
+        ' Pump FIFO output to debug
+        repeat
+            pStr := fsck.getOutput()
+            if pStr
                 debug(zstr_(pStr))
-            quit
+            elseif fsck.isDone()
+                ' Drain any remaining output
+                repeat while (pStr := fsck.getOutput())
+                    debug(zstr_(pStr))
+                quit
 
-    fsck.stop()
+        fsck.stop()
 
     debug(" ")
     debug("END_SESSION")

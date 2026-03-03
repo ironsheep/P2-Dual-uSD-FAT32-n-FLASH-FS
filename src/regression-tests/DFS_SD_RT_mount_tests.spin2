@@ -27,8 +27,7 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' Error codes for pre-mount validation
-     E_NOT_MOUNTED   = -20
+     SECTOR_SIZE     = 512       ' SD card sector size in bytes
 
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
@@ -53,7 +52,7 @@ DAT
 
 testfile1       BYTE    "TEST1.TXT", 0
 testfile2       BYTE    "TEST2.BIN", 0
-sectorBuffer    BYTE    0[512]
+sectorBuffer    BYTE    0[SECTOR_SIZE]
 sectorBuffer_guard BYTE 0[16]
 
 PUB go() | workerCog, result, status, pLabel, freeSpace, handle
@@ -94,21 +93,21 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
 
     utils.startTest(@"openFileRead() before mount returns E_NOT_MOUNTED")
     handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-    utils.evaluateSingleValue(handle, @"openFileRead()", E_NOT_MOUNTED)
+    utils.evaluateSingleValue(handle, @"openFileRead()", dfs.E_NOT_MOUNTED)
 
     utils.startTest(@"createFileNew() before mount returns E_NOT_MOUNTED")
     handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-    utils.evaluateSingleValue(handle, @"createFileNew()", E_NOT_MOUNTED)
+    utils.evaluateSingleValue(handle, @"createFileNew()", dfs.E_NOT_MOUNTED)
 
     utils.startTest(@"readSectorRaw() before mount returns error")
     utils.initGuard(@sectorBuffer_guard)
     status := dfs.readSectorRaw(0, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
-    utils.evaluateSingleValue(status, @"readSectorRaw()", E_NOT_MOUNTED)
+    utils.evaluateSingleValue(status, @"readSectorRaw()", dfs.E_NOT_MOUNTED)
 
     utils.startTest(@"changeDirectory() before mount returns error")
     status := dfs.changeDirectory(dfs.DEV_SD, @"TESTDIR")
-    utils.evaluateSingleValue(status, @"changeDirectory()", E_NOT_MOUNTED)
+    utils.evaluateSingleValue(status, @"changeDirectory()", dfs.E_NOT_MOUNTED)
 
     ' ----------------------------------
     ' TEST GROUP: Mount card

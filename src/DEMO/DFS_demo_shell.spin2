@@ -67,11 +67,102 @@ CON { constants }
   ACTIVE_FLASH = 1
 
 
+CON { named constants - no magic numbers }
+
+  ' ASCII character codes
+  ASCII_TAB             = 9
+  ASCII_LF              = 10
+  ASCII_CR              = 13
+  ASCII_SPACE           = 32                                    ' first printable character
+  ASCII_DEL             = 127                                   ' first non-printable above space
+  CASE_OFFSET           = 32                                    ' 'a' - 'A'
+
+  ' Hexdump formatting
+  HEXDUMP_LINE_BYTES    = 16                                    ' bytes per hexdump line
+  HEXDUMP_MID_SEP       = 7                                     ' separator after this byte index
+  HEXDUMP_MAX_DISPLAY   = 512                                   ' truncate hexdump at this offset
+
+  ' FAT32 directory attributes
+  ATTR_READ_ONLY        = $01
+  ATTR_HIDDEN           = $02
+  ATTR_SYSTEM           = $04
+  ATTR_DIRECTORY        = $10
+
+  ' MBR / partition structure offsets
+  MBR_SIG_OFFSET        = $1FE                                  ' MBR signature location
+  MBR_PART1_OFFSET      = $1BE                                  ' first partition entry
+  VBR_OEM_OFFSET        = 3                                     ' OEM name offset in VBR
+  VBR_OEM_LENGTH        = 8                                     ' OEM name field length
+
+  ' FAT date/time fields
+  FAT_YEAR_BASE         = 2000                                  ' MDT year base for SD CID
+
+  ' Partition type codes
+  PART_TYPE_EMPTY       = $00
+  PART_TYPE_FAT12       = $01
+  PART_TYPE_FAT16_SM    = $04
+  PART_TYPE_FAT16_LG    = $06
+  PART_TYPE_NTFS_EXFAT  = $07
+  PART_TYPE_FAT32_CHS   = $0B
+  PART_TYPE_FAT32_LBA   = $0C
+  PART_TYPE_FAT16_LBA   = $0E
+  PART_TYPE_LINUX       = $83
+  PART_TYPE_GPT         = $EE
+
+  ' Nibble / byte masks
+  NIBBLE_MASK           = $0F
+  TWO_BIT_MASK          = $03
+
+  ' Card identification
+  PNM_LENGTH            = 5                                     ' product name length in CID
+  LABEL_MAX_LENGTH      = 11                                    ' FAT32 volume label max
+  TREE_NAME_BUF_SIZE    = 16                                    ' tree walk name buffer
+  TREE_NAME_MAX_COPY    = 15                                    ' max bytes to copy into name buffer
+  MID_HEX_OFFSET        = 5                                     ' offset of hex digits in "MID:$XX"
+  HEX_ALPHA_BASE        = 10                                    ' nibble value where A-F begins
+  DECIMAL_BASE          = 10                                    ' decimal digit modulus
+  OCR_CCS_BIT           = 30                                    ' CCS bit position in OCR
+  SDSC_MAX_MB           = 32768                                 ' SDSC/SDHC boundary in MB
+
+  ' PSN byte shift amounts
+  PSN_BYTE0_SHIFT       = 24
+  PSN_BYTE1_SHIFT       = 16
+  PSN_BYTE2_SHIFT       = 8
+
+  ' Size conversions
+  SECTORS_PER_MB        = 2048                                  ' 512-byte sectors per megabyte
+  MB_PER_GB             = 1024                                  ' megabytes per gigabyte
+  GB_ROUND_ADD          = 953                                   ' rounding addend for MB-to-GB
+  GB_ROUND_DIV          = 954                                   ' rounding divisor for MB-to-GB
+  HZ_PER_MHZ            = 1_000_000                             ' Hz per megahertz
+  HZ_PER_100KHZ         = 100_000                               ' Hz per 100 kHz
+  MS_PER_SEC            = 1000                                  ' milliseconds per second
+
+  ' Bench test parameters
+  BENCH_SINGLE_READS    = 100                                   ' single-sector iteration count
+  BENCH_X8_READS        = 100                                   ' x8 multi-sector iteration count
+  BENCH_X8_SECTORS      = 8                                     ' sectors per x8 read
+  BENCH_X32_READS       = 25                                    ' x32 multi-sector iteration count
+  BENCH_X32_SECTORS     = 32                                    ' sectors per x32 read
+  BENCH_X64_READS       = 16                                    ' x64 multi-sector iteration count
+  BENCH_X64_SECTORS     = 64                                    ' sectors per x64 read
+  BENCH_RATE_SCALE      = 10                                    ' divisor to avoid 32-bit overflow
+
+  ' Interactive
+  CONFIRM_TIMEOUT_MS    = 10_000                                ' y/n confirmation timeout
+  TREE_MAX_DEPTH        = 8                                     ' max tree recursion depth
+  FLASH_AUDIT_MAX_SHOW  = 20                                    ' max files shown in flash audit
+  DEV_PREFIX_MAX_SCAN   = 8                                     ' max chars to scan for ':'
+  PROMPT_LEN_MOUNTED    = 5                                     ' "FL:> " or base "SD:X> "
+  PROMPT_LEN_UNMOUNTED  = 16                                    ' "FL:(unmounted)> "
+  CONFIRM_SUFFIX_LEN    = 8                                     ' " (y/N)? " length for cursor
+  STARTUP_DELAY_MS      = 250                                   ' serial startup settle time
+
+
 CON { FAT32 / bench constants }
 
   ' FAT32 structure signatures (used by detectFilesystem / do_card_info)
   MBR_SIGNATURE               = $AA55
-  PARTITION_TYPE_FAT32_LBA    = $0C
 
   ' Bench test parameters
   BENCH_SECTOR_BASE   = 1_000_000         ' Safe area past filesystem
@@ -152,7 +243,7 @@ VAR { card info / bench }
 VAR { Flash directory }
 
   long  flDirBlockId                                             ' Flash directory iteration counter
-  byte  flDirName[128]                                           ' Flash directory filename buffer
+  byte  flDirName[MAX_PATH]                                       ' Flash directory filename buffer
   long  flDirSize                                                ' Flash directory file size
 
 
@@ -169,7 +260,7 @@ PUB main() | len, eCmd
 '' @local eCmd - Parsed command enum value
 
   serial.start(BR_TERM)
-  waitms(250)
+  waitms(STARTUP_DELAY_MS)
   serial.tx(serial.CLS)
   serial.fstr0(@"* Press return to start...\r\n")
   wait_for_terminal(false, 0)
@@ -209,10 +300,10 @@ PUB get_command() : len | i
 
   ' convert tabs to spaces
   repeat i from 0 to cliIdx - 1
-    if (cliBuf[i] == 9)
+    if (cliBuf[i] == ASCII_TAB)
       cliBuf[i] := " "
 
-  return cliIdx
+  len := cliIdx
 
 
 PUB show_prompt()
@@ -237,14 +328,14 @@ PRI prompt_len() : len
 
   if (activeDev == ACTIVE_FLASH)
     if (flashMounted)
-      len := 5                                                    ' "FL:> "
+      len := PROMPT_LEN_MOUNTED                                   ' "FL:> "
     else
-      len := 16                                                   ' "FL:(unmounted)> "
+      len := PROMPT_LEN_UNMOUNTED                                  ' "FL:(unmounted)> "
   else
     if (sdMounted)
-      len := 5 + strsize(@cwd)                                    ' "SD:" + cwd + "> "
+      len := PROMPT_LEN_MOUNTED + strsize(@cwd)                   ' "SD:" + cwd + "> "
     else
-      len := 16                                                   ' "SD:(unmounted)> "
+      len := PROMPT_LEN_UNMOUNTED                                  ' "SD:(unmounted)> "
 
 
 CON { command handlers }
@@ -256,38 +347,37 @@ PUB run_command(eCmd)
 
   if (eCmd == CMD_UNKNOWN)
     serial.fstr1(@"'%s' is not recognized as a command\r\n", token(0))
-    return
-
-  case eCmd
-    CMD_HELP                : show_help()
-    CMD_VERSION             : show_version()
-    CMD_CLS, CMD_CLEAR      : do_cls()
-    CMD_MOUNT               : do_mount()
-    CMD_UNMOUNT, CMD_EJECT  : do_unmount()
-    CMD_FORMAT              : do_format()
-    CMD_STATS, CMD_INFO     : do_stats()
-    CMD_DIR, CMD_LS         : do_dir()
-    CMD_CD                  : do_cd()
-    CMD_PWD                 : do_pwd()
-    CMD_MKDIR               : do_mkdir()
-    CMD_TYPE, CMD_CAT       : do_type()
-    CMD_HEXDUMP, CMD_HD     : do_hexdump()
-    CMD_REN                 : do_rename()
-    CMD_MV, CMD_MOVE        : do_move()
-    CMD_COPY, CMD_CP        : do_copy()
-    CMD_DEL, CMD_RM         : do_delete()
-    CMD_RMDIR               : do_rmdir()
-    CMD_DEMO                : do_demo()
-    CMD_CARD, CMD_CID       : do_card_info()
-    CMD_BENCHMARK, CMD_PERF, CMD_BENCH : do_bench()
-    CMD_TOUCH               : do_touch()
-    CMD_AUDIT               : do_audit()
-    CMD_FSCK                : do_fsck()
-    CMD_LABEL, CMD_VOL      : do_label()
-    CMD_ALIAS               : do_alias()
-    CMD_TREE                : do_tree()
-    CMD_DEV                 : do_dev()
-    other                   : not_implemented()
+  else
+    case eCmd
+      CMD_HELP                : show_help()
+      CMD_VERSION             : show_version()
+      CMD_CLS, CMD_CLEAR      : do_cls()
+      CMD_MOUNT               : do_mount()
+      CMD_UNMOUNT, CMD_EJECT  : do_unmount()
+      CMD_FORMAT              : do_format()
+      CMD_STATS, CMD_INFO     : do_stats()
+      CMD_DIR, CMD_LS         : do_dir()
+      CMD_CD                  : do_cd()
+      CMD_PWD                 : do_pwd()
+      CMD_MKDIR               : do_mkdir()
+      CMD_TYPE, CMD_CAT       : do_type()
+      CMD_HEXDUMP, CMD_HD     : do_hexdump()
+      CMD_REN                 : do_rename()
+      CMD_MV, CMD_MOVE        : do_move()
+      CMD_COPY, CMD_CP        : do_copy()
+      CMD_DEL, CMD_RM         : do_delete()
+      CMD_RMDIR               : do_rmdir()
+      CMD_DEMO                : do_demo()
+      CMD_CARD, CMD_CID       : do_card_info()
+      CMD_BENCHMARK, CMD_PERF, CMD_BENCH : do_bench()
+      CMD_TOUCH               : do_touch()
+      CMD_AUDIT               : do_audit()
+      CMD_FSCK                : do_fsck()
+      CMD_LABEL, CMD_VOL      : do_label()
+      CMD_ALIAS               : do_alias()
+      CMD_TREE                : do_tree()
+      CMD_DEV                 : do_dev()
+      other                   : not_implemented()
 
 
 PUB show_help()
@@ -296,32 +386,31 @@ PUB show_help()
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  serial.tx(serial.CLS)
-  serial.fstr0(@"  Dual FS Shell v1.0.0\r\n\r\n")
-  serial.fstr0(@"  Device Selection                    File Operations\r\n")
-  serial.fstr0(@"  dev sd|flash  Switch device         type <f>    Show text (cat)\r\n")
-  serial.fstr0(@"  mount [dev]   Mount device(s)       hexdump <f> Hex dump (hd)\r\n")
-  serial.fstr0(@"  unmount [dev] Unmount (eject)       copy <s><d> Copy file (cp)\r\n")
-  serial.fstr0(@"\r\n")
-  serial.fstr0(@"  Navigation (SD only)                del <f>     Delete (rm)\r\n")
-  serial.fstr0(@"  dir [path]  List files (ls)         ren <o> <n> Rename in place\r\n")
-  serial.fstr0(@"  tree [path] Directory tree          move <f><d> Move file (mv)\r\n")
-  serial.fstr0(@"  cd <path>   Change directory        touch <f>   Create file\r\n")
-  serial.fstr0(@"  pwd         Working directory       demo        Create demo files\r\n")
-  serial.fstr0(@"  mkdir <d>   Create directory\r\n")
-  serial.fstr0(@"  rmdir <d>   Remove directory\r\n")
-  serial.fstr0(@"\r\n")
-  serial.fstr0(@"  Information                         Diagnostics & Utility\r\n")
-  serial.fstr0(@"  stats       FS stats (info)         audit       Check FS integrity\r\n")
-  serial.fstr0(@"  card        Card summary (SD)       fsck        Check & repair FS\r\n")
-  serial.fstr0(@"  version     Driver version          bench       Throughput (SD only)\r\n")
-  serial.fstr0(@"  label [n]   Volume label (SD)       format      Format device\r\n")
-  serial.fstr0(@"  cls         Clear screen            help        This help\r\n")
-  serial.fstr0(@"  alias       Show command aliases\r\n")
-  serial.fstr0(@"\r\n")
-  serial.fstr0(@"  Cross-device:  copy sd:FILE flash:FILE\r\n")
+  else
+    serial.tx(serial.CLS)
+    serial.fstr0(@"  Dual FS Shell v1.0.0\r\n\r\n")
+    serial.fstr0(@"  Device Selection                    File Operations\r\n")
+    serial.fstr0(@"  dev sd|flash  Switch device         type <f>    Show text (cat)\r\n")
+    serial.fstr0(@"  mount [dev]   Mount device(s)       hexdump <f> Hex dump (hd)\r\n")
+    serial.fstr0(@"  unmount [dev] Unmount (eject)       copy <s><d> Copy file (cp)\r\n")
+    serial.fstr0(@"\r\n")
+    serial.fstr0(@"  Navigation (SD only)                del <f>     Delete (rm)\r\n")
+    serial.fstr0(@"  dir [path]  List files (ls)         ren <o> <n> Rename in place\r\n")
+    serial.fstr0(@"  tree [path] Directory tree          move <f><d> Move file (mv)\r\n")
+    serial.fstr0(@"  cd <path>   Change directory        touch <f>   Create file\r\n")
+    serial.fstr0(@"  pwd         Working directory       demo        Create demo files\r\n")
+    serial.fstr0(@"  mkdir <d>   Create directory\r\n")
+    serial.fstr0(@"  rmdir <d>   Remove directory\r\n")
+    serial.fstr0(@"\r\n")
+    serial.fstr0(@"  Information                         Diagnostics & Utility\r\n")
+    serial.fstr0(@"  stats       FS stats (info)         audit       Check FS integrity\r\n")
+    serial.fstr0(@"  card        Card summary (SD)       fsck        Check & repair FS\r\n")
+    serial.fstr0(@"  version     Driver version          bench       Throughput (SD only)\r\n")
+    serial.fstr0(@"  label [n]   Volume label (SD)       format      Format device\r\n")
+    serial.fstr0(@"  cls         Clear screen            help        This help\r\n")
+    serial.fstr0(@"  alias       Show command aliases\r\n")
+    serial.fstr0(@"\r\n")
+    serial.fstr0(@"  Cross-device:  copy sd:FILE flash:FILE\r\n")
 
 
 PUB show_version()
@@ -330,13 +419,12 @@ PUB show_version()
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  serial.fstr0(@"Dual FS Driver - Iron Sheep Productions\r\n")
-  if (sdMounted)
-    serial.fstr1(@"SD SPI Frequency: %d Hz\r\n", dfs.getSPIFrequency())
-  if (flashMounted)
-    serial.fstr1(@"Flash version: %d\r\n", dfs.version(dfs.DEV_FLASH))
+  else
+    serial.fstr0(@"Dual FS Driver - Iron Sheep Productions\r\n")
+    if (sdMounted)
+      serial.fstr1(@"SD SPI Frequency: %d Hz\r\n", dfs.getSPIFrequency())
+    if (flashMounted)
+      serial.fstr1(@"Flash version: %d\r\n", dfs.version(dfs.DEV_FLASH))
 
 
 PUB do_cls()
@@ -345,9 +433,8 @@ PUB do_cls()
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  serial.tx(serial.CLS)
+  else
+    serial.tx(serial.CLS)
 
 
 PUB do_dev() | p_arg
@@ -361,19 +448,18 @@ PUB do_dev() | p_arg
       serial.fstr0(@"SD\r\n")
     else
       serial.fstr0(@"Flash\r\n")
-    return
-
-  p_arg := token(1)
-  lcstr(p_arg)
-
-  if (strcomp(p_arg, @"sd"))
-    activeDev := ACTIVE_SD
-    serial.fstr0(@"Active device: SD\r\n")
-  elseif (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
-    activeDev := ACTIVE_FLASH
-    serial.fstr0(@"Active device: Flash\r\n")
   else
-    serial.fstr1(@"Unknown device '%s'. Use 'sd' or 'flash'.\r\n", p_arg)
+    p_arg := token(1)
+    lcstr(p_arg)
+
+    if (strcomp(p_arg, @"sd"))
+      activeDev := ACTIVE_SD
+      serial.fstr0(@"Active device: SD\r\n")
+    elseif (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
+      activeDev := ACTIVE_FLASH
+      serial.fstr0(@"Active device: Flash\r\n")
+    else
+      serial.fstr1(@"Unknown device '%s'. Use 'sd' or 'flash'.\r\n", p_arg)
 
 
 PUB do_mount() | p_arg, status
@@ -382,35 +468,33 @@ PUB do_mount() | p_arg, status
 
   if (ntokens > 2)
     bad_syntax()
-    return
-
-  ' Ensure driver is initialized
-  if not driverStarted
-    status := start_driver()
-    if status < 0
-      serial.fstr0(@"ERROR: Could not start driver cog\r\n")
-      return
-
-  if (ntokens == 1)
-    ' Mount active device
-    if (activeDev == ACTIVE_SD)
-      mount_sd()
-    else
-      mount_flash()
-    return
-
-  p_arg := token(1)
-  lcstr(p_arg)
-
-  if (strcomp(p_arg, @"sd"))
-    mount_sd()
-  elseif (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
-    mount_flash()
-  elseif (strcomp(p_arg, @"all") or strcomp(p_arg, @"both"))
-    mount_sd()
-    mount_flash()
   else
-    serial.fstr1(@"Unknown device '%s'. Use 'sd', 'flash', or 'all'.\r\n", p_arg)
+    ' Ensure driver is initialized
+    if not driverStarted
+      status := start_driver()
+      if status < 0
+        serial.fstr0(@"ERROR: Could not start driver cog\r\n")
+
+    if status >= 0
+      if (ntokens == 1)
+        ' Mount active device
+        if (activeDev == ACTIVE_SD)
+          mount_sd()
+        else
+          mount_flash()
+      else
+        p_arg := token(1)
+        lcstr(p_arg)
+
+        if (strcomp(p_arg, @"sd"))
+          mount_sd()
+        elseif (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
+          mount_flash()
+        elseif (strcomp(p_arg, @"all") or strcomp(p_arg, @"both"))
+          mount_sd()
+          mount_flash()
+        else
+          serial.fstr1(@"Unknown device '%s'. Use 'sd', 'flash', or 'all'.\r\n", p_arg)
 
 
 PRI mount_sd() | status
@@ -419,18 +503,17 @@ PRI mount_sd() | status
 
   if (sdMounted)
     serial.fstr0(@"SD card is already mounted\r\n")
-    return
-
-  serial.fstr0(@"Mounting SD card...\r\n")
-  status := dfs.mount(dfs.DEV_SD)
-
-  if (status == dfs.SUCCESS)
-    sdMounted := true
-    bytemove(@cwd, @"/", 2)
-    serial.fstr0(@"SD mounted successfully\r\n")
-    show_sd_summary()
   else
-    serial.fstr1(@"SD mount failed, error: %d\r\n", status)
+    serial.fstr0(@"Mounting SD card...\r\n")
+    status := dfs.mount(dfs.DEV_SD)
+
+    if (status == dfs.SUCCESS)
+      sdMounted := true
+      bytemove(@cwd, @"/", 2)
+      serial.fstr0(@"SD mounted successfully\r\n")
+      show_sd_summary()
+    else
+      serial.fstr1(@"SD mount failed, error: %d\r\n", status)
 
 
 PRI mount_flash() | status
@@ -439,16 +522,15 @@ PRI mount_flash() | status
 
   if (flashMounted)
     serial.fstr0(@"Flash is already mounted\r\n")
-    return
-
-  serial.fstr0(@"Mounting Flash...\r\n")
-  status := dfs.mount(dfs.DEV_FLASH)
-
-  if (status == dfs.SUCCESS)
-    flashMounted := true
-    serial.fstr0(@"Flash mounted successfully\r\n")
   else
-    serial.fstr1(@"Flash mount failed, error: %d\r\n", status)
+    serial.fstr0(@"Mounting Flash...\r\n")
+    status := dfs.mount(dfs.DEV_FLASH)
+
+    if (status == dfs.SUCCESS)
+      flashMounted := true
+      serial.fstr0(@"Flash mounted successfully\r\n")
+    else
+      serial.fstr1(@"Flash mount failed, error: %d\r\n", status)
 
 
 PUB do_unmount() | p_arg
@@ -457,28 +539,25 @@ PUB do_unmount() | p_arg
 
   if (ntokens > 2)
     bad_syntax()
-    return
-
-  if (ntokens == 1)
+  elseif (ntokens == 1)
     ' Unmount active device
     if (activeDev == ACTIVE_SD)
       unmount_sd()
     else
       unmount_flash()
-    return
-
-  p_arg := token(1)
-  lcstr(p_arg)
-
-  if (strcomp(p_arg, @"sd"))
-    unmount_sd()
-  elseif (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
-    unmount_flash()
-  elseif (strcomp(p_arg, @"all") or strcomp(p_arg, @"both"))
-    unmount_sd()
-    unmount_flash()
   else
-    serial.fstr1(@"Unknown device '%s'. Use 'sd', 'flash', or 'all'.\r\n", p_arg)
+    p_arg := token(1)
+    lcstr(p_arg)
+
+    if (strcomp(p_arg, @"sd"))
+      unmount_sd()
+    elseif (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
+      unmount_flash()
+    elseif (strcomp(p_arg, @"all") or strcomp(p_arg, @"both"))
+      unmount_sd()
+      unmount_flash()
+    else
+      serial.fstr1(@"Unknown device '%s'. Use 'sd', 'flash', or 'all'.\r\n", p_arg)
 
 
 PRI unmount_sd()
@@ -487,11 +566,10 @@ PRI unmount_sd()
 
   if (not sdMounted)
     serial.fstr0(@"SD card is not mounted\r\n")
-    return
-
-  dfs.unmount(dfs.DEV_SD)
-  sdMounted := false
-  serial.fstr0(@"SD card unmounted\r\n")
+  else
+    dfs.unmount(dfs.DEV_SD)
+    sdMounted := false
+    serial.fstr0(@"SD card unmounted\r\n")
 
 
 PRI unmount_flash()
@@ -500,11 +578,10 @@ PRI unmount_flash()
 
   if (not flashMounted)
     serial.fstr0(@"Flash is not mounted\r\n")
-    return
-
-  dfs.unmount(dfs.DEV_FLASH)
-  flashMounted := false
-  serial.fstr0(@"Flash unmounted\r\n")
+  else
+    dfs.unmount(dfs.DEV_FLASH)
+    flashMounted := false
+    serial.fstr0(@"Flash unmounted\r\n")
 
 
 PUB do_format() | p_arg, p_label, pStr, ok, status
@@ -515,25 +592,32 @@ PUB do_format() | p_arg, p_label, pStr, ok, status
 
   if (ntokens > 3)
     bad_syntax()
-    return
-
-  ' Determine which device to format
-  if (ntokens >= 2)
-    p_arg := token(1)
-    lcstr(p_arg)
   else
-    ' Default to active device
-    if (activeDev == ACTIVE_SD)
-      p_arg := @"sd"
+    ' Determine which device to format
+    if (ntokens >= 2)
+      p_arg := token(1)
+      lcstr(p_arg)
     else
-      p_arg := @"flash"
+      ' Default to active device
+      if (activeDev == ACTIVE_SD)
+        p_arg := @"sd"
+      else
+        p_arg := @"flash"
 
-  if (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
-    ' Flash format
-    serial.fstr0(@"WARNING: Format will erase ALL data on Flash!\r\n")
-    if (not confirmYN(@"Continue with Flash format"))
-      return
+    if (strcomp(p_arg, @"flash") or strcomp(p_arg, @"fl"))
+      format_flash(status)
+    elseif (strcomp(p_arg, @"sd"))
+      format_sd(p_label, pStr, ok, status)
+    else
+      serial.fstr1(@"Unknown device '%s'. Use 'sd' or 'flash'.\r\n", p_arg)
 
+
+PRI format_flash(status)
+
+' Flash format handler (called from do_format)
+
+  serial.fstr0(@"WARNING: Format will erase ALL data on Flash!\r\n")
+  if (confirmYN(@"Continue with Flash format"))
     if (not flashMounted)
       ' Must mount first to format
       if not driverStarted
@@ -541,78 +625,77 @@ PUB do_format() | p_arg, p_label, pStr, ok, status
       status := dfs.mount(dfs.DEV_FLASH)
       if status <> dfs.SUCCESS
         serial.fstr1(@"Cannot mount Flash for format: %d\r\n", status)
-        return
-      flashMounted := true
+      else
+        flashMounted := true
 
-    status := dfs.format(dfs.DEV_FLASH)
-    if (status == dfs.SUCCESS)
-      serial.fstr0(@"Flash format complete.\r\n")
-    else
-      serial.fstr1(@"Flash format FAILED: %d\r\n", status)
-    return
+    if flashMounted
+      status := dfs.format(dfs.DEV_FLASH)
+      if (status == dfs.SUCCESS)
+        serial.fstr0(@"Flash format complete.\r\n")
+      else
+        serial.fstr1(@"Flash format FAILED: %d\r\n", status)
 
-  if (strcomp(p_arg, @"sd"))
-    ' SD format via external utility
-    serial.fstr0(@"WARNING: Format will erase ALL data on the SD card!\r\n")
-    if (not confirmYN(@"Continue with SD format"))
-      return
 
+PRI format_sd(p_label, pStr, ok, status) | labelOk
+
+' SD format handler (called from do_format)
+
+  serial.fstr0(@"WARNING: Format will erase ALL data on the SD card!\r\n")
+  if (confirmYN(@"Continue with SD format"))
     ' Parse optional label (token 2)
     p_label := 0
+    labelOk := true
     if (ntokens == 3)
       p_label := token(2)
-      if strsize(p_label) > 11
+      if strsize(p_label) > LABEL_MAX_LENGTH
         serial.fstr0(@"Label too long (max 11 characters)\r\n")
-        return
+        labelOk := false
 
-    ' Must stop dual driver so format utility can use SPI
-    if (flashMounted)
-      dfs.unmount(dfs.DEV_FLASH)
-      flashMounted := false
-    if (sdMounted)
-      dfs.unmount(dfs.DEV_SD)
-      sdMounted := false
-    stop_driver()
+    if labelOk
+      ' Must stop dual driver so format utility can use SPI
+      if (flashMounted)
+        dfs.unmount(dfs.DEV_FLASH)
+        flashMounted := false
+      if (sdMounted)
+        dfs.unmount(dfs.DEV_SD)
+        sdMounted := false
+      stop_driver()
 
-    ' Launch format in utility cog
-    if (p_label)
-      ok := fmtUtil.startFormatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, p_label)
-    else
-      ok := fmtUtil.startFormat(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+      ' Launch format in utility cog
+      if (p_label)
+        ok := fmtUtil.startFormatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, p_label)
+      else
+        ok := fmtUtil.startFormat(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 
-    if (not ok)
-      serial.fstr0(@"ERROR: Could not start format cog\r\n")
-      return
+      if (ok <> 0)
+        serial.fstr0(@"ERROR: Could not start format cog\r\n")
+      else
+        ' Pump FIFO output to terminal
+        repeat
+          pStr := fmtUtil.getOutput()
+          if pStr
+            serial.str(pStr)
+            serial.fstr0(@"\r\n")
+          elseif fmtUtil.isDone()
+            repeat while (pStr := fmtUtil.getOutput())
+              serial.str(pStr)
+              serial.fstr0(@"\r\n")
+            quit
 
-    ' Pump FIFO output to terminal
-    repeat
-      pStr := fmtUtil.getOutput()
-      if pStr
-        serial.str(pStr)
+        ok := fmtUtil.getResult()
+        fmtUtil.stopCog()
+
+        if (ok == 0)
+          serial.fstr0(@"SD format complete.\r\n")
+        else
+          serial.fstr0(@"SD format FAILED.\r\n")
+
+        ' Offer to re-mount
         serial.fstr0(@"\r\n")
-      elseif fmtUtil.isDone()
-        repeat while (pStr := fmtUtil.getOutput())
-          serial.str(pStr)
-          serial.fstr0(@"\r\n")
-        quit
-
-    ok := fmtUtil.getResult()
-    fmtUtil.stopCog()
-
-    if (ok)
-      serial.fstr0(@"SD format complete.\r\n")
-    else
-      serial.fstr0(@"SD format FAILED.\r\n")
-
-    ' Offer to re-mount
-    serial.fstr0(@"\r\n")
-    if (confirmYN(@"Mount devices"))
-      start_driver()
-      mount_sd()
-      mount_flash()
-    return
-
-  serial.fstr1(@"Unknown device '%s'. Use 'sd' or 'flash'.\r\n", p_arg)
+        if (confirmYN(@"Mount devices"))
+          start_driver()
+          mount_sd()
+          mount_flash()
 
 
 PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb, status
@@ -621,27 +704,20 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb, status
 
   if (ntokens <> 1)
     bad_syntax()
-    return
+  elseif (activeDev == ACTIVE_FLASH)
+    if (check_flash_mount())
+      serial.fstr1(@"Flash version: %d\r\n", dfs.version(dfs.DEV_FLASH))
+      serial.fstr0(@"Flash filesystem mounted\r\n")
+  elseif (check_sd_mount())
+    ' SD stats
+    total_sectors := dfs.cardSizeSectors()
+    total_mb := total_sectors / SECTORS_PER_MB
+    free_sectors := dfs.freeSpace(dfs.DEV_SD)
+    free_mb := free_sectors / SECTORS_PER_MB
 
-  if (activeDev == ACTIVE_FLASH)
-    if (not check_flash_mount())
-      return
-    serial.fstr1(@"Flash version: %d\r\n", dfs.version(dfs.DEV_FLASH))
-    serial.fstr0(@"Flash filesystem mounted\r\n")
-    return
-
-  ' SD stats
-  if (not check_sd_mount())
-    return
-
-  total_sectors := dfs.cardSizeSectors()
-  total_mb := total_sectors / 2048
-  free_sectors := dfs.freeSpace(dfs.DEV_SD)
-  free_mb := free_sectors / 2048
-
-  serial.fstr2(@"Total:  %d sectors (%d MB)\r\n", total_sectors, total_mb)
-  serial.fstr2(@"Free:   %d sectors (%d MB)\r\n", free_sectors, free_mb)
-  serial.fstr1(@"Label:  %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
+    serial.fstr2(@"Total:  %d sectors (%d MB)\r\n", total_sectors, total_mb)
+    serial.fstr2(@"Free:   %d sectors (%d MB)\r\n", free_sectors, free_mb)
+    serial.fstr1(@"Label:  %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
 
 
 PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
@@ -650,97 +726,88 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
 
   if (ntokens > 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     do_flash_dir()
-    return
-
-  ' SD directory listing
-  if (not check_sd_mount())
-    return
-
-  ' Use argument as path, or "." for current directory
-  if (ntokens == 2)
-    p_path := token(1)
-    if (strsize(@cwd) == 1)
-      serial.fstr2(@"\r\n Directory of %s%s\r\n\r\n", @cwd, p_path)
+  elseif (check_sd_mount())
+    ' SD directory listing
+    ' Use argument as path, or "." for current directory
+    if (ntokens == 2)
+      p_path := token(1)
+      if (strsize(@cwd) == 1)
+        serial.fstr2(@"\r\n Directory of %s%s\r\n\r\n", @cwd, p_path)
+      else
+        serial.fstr2(@"\r\n Directory of %s/%s\r\n\r\n", @cwd, p_path)
     else
-      serial.fstr2(@"\r\n Directory of %s/%s\r\n\r\n", @cwd, p_path)
-  else
-    p_path := @"."
-    serial.fstr1(@"\r\n Directory of %s\r\n\r\n", @cwd)
-  serial.fstr0(@"  Attr      Size  Name\r\n")
-  serial.fstr0(@"  ----  --------  --------------------------------\r\n")
+      p_path := @"."
+      serial.fstr1(@"\r\n Directory of %s\r\n\r\n", @cwd)
+    serial.fstr0(@"  Attr      Size  Name\r\n")
+    serial.fstr0(@"  ----  --------  --------------------------------\r\n")
 
-  dh := dfs.openDirectory(dfs.DEV_SD, p_path)
-  if (dh < 0)
-    serial.fstr1(@"  Error opening directory: %d\r\n", dh)
-    return
-
-  count := 0
-  total_size := 0
-
-  repeat
-    status := dfs.readDirectoryHandle(dh)
-    if (status == 0)
-      quit
-
-    p_name := dfs.fileName()
-    if (byte[p_name] == 0)
-      next
-
-    attrib := dfs.attributes()
-    size := dfs.fileSize()
-
-    ' Format attributes
-    serial.fstr0(@"  ")
-    serial.tx((attrib & $10) ? "D" : "-")
-    serial.tx((attrib & $01) ? "R" : "-")
-    serial.tx((attrib & $02) ? "H" : "-")
-    serial.tx((attrib & $04) ? "S" : "-")
-
-    if (attrib & $10)
-      serial.fstr1(@"    <DIR>  %s\r\n", p_name)
+    dh := dfs.openDirectory(dfs.DEV_SD, p_path)
+    if (dh < 0)
+      serial.fstr1(@"  Error opening directory: %d\r\n", dh)
     else
-      serial.fstr2(@"  %8d  %s\r\n", size, p_name)
-      total_size += size
+      count := 0
+      total_size := 0
 
-    count++
+      repeat
+        status := dfs.readDirectoryHandle(dh)
+        if (status == 0)
+          quit
 
-  dfs.closeDirectoryHandle(dh)
+        p_name := dfs.fileName()
+        if (byte[p_name] == 0)
+          next
 
-  serial.fstr0(@"\r\n")
-  serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
+        attrib := dfs.attributes()
+        size := dfs.fileSize()
+
+        ' Format attributes
+        serial.fstr0(@"  ")
+        serial.tx((attrib & ATTR_DIRECTORY) ? "D" : "-")
+        serial.tx((attrib & ATTR_READ_ONLY) ? "R" : "-")
+        serial.tx((attrib & ATTR_HIDDEN) ? "H" : "-")
+        serial.tx((attrib & ATTR_SYSTEM) ? "S" : "-")
+
+        if (attrib & ATTR_DIRECTORY)
+          serial.fstr1(@"    <DIR>  %s\r\n", p_name)
+        else
+          serial.fstr2(@"  %8d  %s\r\n", size, p_name)
+          total_size += size
+
+        count++
+
+      dfs.closeDirectoryHandle(dh)
+
+      serial.fstr0(@"\r\n")
+      serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
 
 
 PRI do_flash_dir() | count, total_size, status
 
 ' List Flash filesystem contents using directory() iteration
 
-  if (not check_flash_mount())
-    return
+  if (check_flash_mount())
+    serial.fstr0(@"\r\n Flash Files\r\n\r\n")
+    serial.fstr0(@"      Size  Name\r\n")
+    serial.fstr0(@"  --------  --------------------------------\r\n")
 
-  serial.fstr0(@"\r\n Flash Files\r\n\r\n")
-  serial.fstr0(@"      Size  Name\r\n")
-  serial.fstr0(@"  --------  --------------------------------\r\n")
+    count := 0
+    total_size := 0
+    flDirBlockId := 0
 
-  count := 0
-  total_size := 0
-  flDirBlockId := 0
+    repeat
+      status := dfs.directory(dfs.DEV_FLASH, @flDirBlockId, @flDirName, @flDirSize)
+      if status <> dfs.SUCCESS
+        quit
+      if flDirName[0] == 0
+        quit
+      serial.fstr2(@"  %8d  %s\r\n", flDirSize, @flDirName)
+      count++
+      total_size += flDirSize
 
-  repeat
-    status := dfs.directory(dfs.DEV_FLASH, @flDirBlockId, @flDirName, @flDirSize)
-    if status <> dfs.SUCCESS
-      quit
-    if flDirName[0] == 0
-      quit
-    serial.fstr2(@"  %8d  %s\r\n", flDirSize, @flDirName)
-    count++
-    total_size += flDirSize
-
-  serial.fstr0(@"\r\n")
-  serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
+    serial.fstr0(@"\r\n")
+    serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
 
 
 PUB do_cd() | p_path
@@ -749,31 +816,21 @@ PUB do_cd() | p_path
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
-    return
+  elseif (check_sd_mount())
+    p_path := token(1)
 
-  if (not check_sd_mount())
-    return
-
-  p_path := token(1)
-
-  ' Handle special cases
-  if (strcomp(p_path, @"/") or strcomp(p_path, @"\\"))
-    dfs.changeDirectory(dfs.DEV_SD, @"/")
-    bytemove(@cwd, @"/", 2)
-    return
-
-  if (strcomp(p_path, @".."))
-    go_up_directory()
-    return
-
-  if (dfs.changeDirectory(dfs.DEV_SD, p_path) == dfs.SUCCESS)
-    update_cwd(p_path)
-  else
-    serial.fstr1(@"Directory not found: %s\r\n", p_path)
+    ' Handle special cases
+    if (strcomp(p_path, @"/") or strcomp(p_path, @"\\"))
+      dfs.changeDirectory(dfs.DEV_SD, @"/")
+      bytemove(@cwd, @"/", 2)
+    elseif (strcomp(p_path, @".."))
+      go_up_directory()
+    elseif (dfs.changeDirectory(dfs.DEV_SD, p_path) == dfs.SUCCESS)
+      update_cwd(p_path)
+    else
+      serial.fstr1(@"Directory not found: %s\r\n", p_path)
 
 
 PUB do_pwd()
@@ -782,16 +839,10 @@ PUB do_pwd()
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
-    return
-
-  if (not check_sd_mount())
-    return
-
-  serial.fstr1(@"%s\r\n", @cwd)
+  elseif (check_sd_mount())
+    serial.fstr1(@"%s\r\n", @cwd)
 
 
 PUB do_mkdir() | p_name, p_leaf, has_path, status
@@ -800,28 +851,20 @@ PUB do_mkdir() | p_name, p_leaf, has_path, status
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
-    return
+  elseif (check_sd_mount())
+    p_name := token(1)
+    p_leaf, has_path := navigate_to_parent(p_name)
+    if p_leaf <> 0
+      status := dfs.newDirectory(dfs.DEV_SD, p_leaf)
+      if (status == dfs.SUCCESS)
+        serial.fstr1(@"Created: %s\r\n", p_leaf)
+      else
+        serial.fstr1(@"Failed to create: %s\r\n", p_leaf)
 
-  if (not check_sd_mount())
-    return
-
-  p_name := token(1)
-  p_leaf, has_path := navigate_to_parent(p_name)
-  if p_leaf == 0
-    return
-
-  status := dfs.newDirectory(dfs.DEV_SD, p_leaf)
-  if (status == dfs.SUCCESS)
-    serial.fstr1(@"Created: %s\r\n", p_leaf)
-  else
-    serial.fstr1(@"Failed to create: %s\r\n", p_leaf)
-
-  if has_path
-    nav_back(p_name)
+    if has_path
+      nav_back(p_name)
 
 
 PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, c, i
@@ -830,87 +873,73 @@ PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, c, i
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     do_flash_type()
-    return
+  elseif (check_sd_mount())
+    p_name := token(1)
+    p_leaf, has_path := navigate_to_parent(p_name)
+    if p_leaf <> 0
+      handle := dfs.openFileRead(dfs.DEV_SD, p_leaf)
+      if (handle < 0)
+        serial.fstr1(@"File not found: %s\r\n", p_leaf)
+      else
+        serial.fstr0(@"\r\n")
+        total := 0
 
-  if (not check_sd_mount())
-    return
+        repeat
+          bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
+          if (bytes_read <= 0)
+            quit
 
-  p_name := token(1)
-  p_leaf, has_path := navigate_to_parent(p_name)
-  if p_leaf == 0
-    return
+          repeat i from 0 to bytes_read - 1
+            c := buffer[i]
+            if (c == ASCII_CR) or (c == ASCII_LF)
+              serial.tx(c)
+            elseif (c >= ASCII_SPACE and c < ASCII_DEL)
+              serial.tx(c)
+            else
+              serial.tx(".")
 
-  handle := dfs.openFileRead(dfs.DEV_SD, p_leaf)
-  if (handle < 0)
-    serial.fstr1(@"File not found: %s\r\n", p_leaf)
+          total += bytes_read
+
+        dfs.closeFileHandle(handle)
+        serial.fstr1(@"\r\n\r\n[%d bytes]\r\n", total)
+
     if has_path
       nav_back(p_name)
-    return
-
-  serial.fstr0(@"\r\n")
-  total := 0
-
-  repeat
-    bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
-    if (bytes_read <= 0)
-      quit
-
-    repeat i from 0 to bytes_read - 1
-      c := buffer[i]
-      if (c == 13) or (c == 10)
-        serial.tx(c)
-      elseif (c >= 32 and c < 127)
-        serial.tx(c)
-      else
-        serial.tx(".")
-
-    total += bytes_read
-
-  dfs.closeFileHandle(handle)
-  serial.fstr1(@"\r\n\r\n[%d bytes]\r\n", total)
-
-  if has_path
-    nav_back(p_name)
 
 
 PRI do_flash_type() | p_name, handle, bytes_read, total, c, i
 
 ' Display contents of Flash text file
 
-  if (not check_flash_mount())
-    return
+  if (check_flash_mount())
+    p_name := token(1)
+    handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_READ)
+    if (handle < 0)
+      serial.fstr1(@"File not found: %s\r\n", p_name)
+    else
+      serial.fstr0(@"\r\n")
+      total := 0
 
-  p_name := token(1)
-  handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_READ)
-  if (handle < 0)
-    serial.fstr1(@"File not found: %s\r\n", p_name)
-    return
+      repeat
+        bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
+        if (bytes_read <= 0)
+          quit
 
-  serial.fstr0(@"\r\n")
-  total := 0
+        repeat i from 0 to bytes_read - 1
+          c := buffer[i]
+          if (c == ASCII_CR) or (c == ASCII_LF)
+            serial.tx(c)
+          elseif (c >= ASCII_SPACE and c < ASCII_DEL)
+            serial.tx(c)
+          else
+            serial.tx(".")
 
-  repeat
-    bytes_read := dfs.readHandle(handle, @buffer, BUFFER_SIZE - 1)
-    if (bytes_read <= 0)
-      quit
+        total += bytes_read
 
-    repeat i from 0 to bytes_read - 1
-      c := buffer[i]
-      if (c == 13) or (c == 10)
-        serial.tx(c)
-      elseif (c >= 32 and c < 127)
-        serial.tx(c)
-      else
-        serial.tx(".")
-
-    total += bytes_read
-
-  dfs.closeFileHandle(handle)
-  serial.fstr1(@"\r\n\r\n[%d bytes]\r\n", total)
+      dfs.closeFileHandle(handle)
+      serial.fstr1(@"\r\n\r\n[%d bytes]\r\n", total)
 
 
 PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, i, c
@@ -919,117 +948,103 @@ PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, i, c
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     do_flash_hexdump()
-    return
+  elseif (check_sd_mount())
+    p_name := token(1)
+    p_leaf, has_path := navigate_to_parent(p_name)
+    if p_leaf <> 0
+      handle := dfs.openFileRead(dfs.DEV_SD, p_leaf)
+      if (handle < 0)
+        serial.fstr1(@"File not found: %s\r\n", p_leaf)
+      else
+        serial.fstr0(@"\r\n")
+        offset := 0
 
-  if (not check_sd_mount())
-    return
+        repeat
+          bytes_read := dfs.readHandle(handle, @buffer, HEXDUMP_LINE_BYTES)
+          if (bytes_read <= 0)
+            quit
 
-  p_name := token(1)
-  p_leaf, has_path := navigate_to_parent(p_name)
-  if p_leaf == 0
-    return
+          serial.fstr1(@"%.8x  ", offset)
 
-  handle := dfs.openFileRead(dfs.DEV_SD, p_leaf)
-  if (handle < 0)
-    serial.fstr1(@"File not found: %s\r\n", p_leaf)
+          repeat i from 0 to HEXDUMP_LINE_BYTES - 1
+            if (i < bytes_read)
+              serial.fstr1(@"%.2x ", buffer[i])
+            else
+              serial.fstr0(@"   ")
+            if (i == HEXDUMP_MID_SEP)
+              serial.tx(" ")
+
+          serial.fstr0(@" |")
+
+          repeat i from 0 to bytes_read - 1
+            c := buffer[i]
+            if (c >= ASCII_SPACE and c < ASCII_DEL)
+              serial.tx(c)
+            else
+              serial.tx(".")
+
+          serial.fstr0(@"|\r\n")
+          offset += bytes_read
+
+          if (offset >= HEXDUMP_MAX_DISPLAY)
+            serial.fstr0(@"... (truncated at 512 bytes)\r\n")
+            quit
+
+        dfs.closeFileHandle(handle)
+        serial.fstr1(@"\r\n[%d bytes shown]\r\n", offset)
+
     if has_path
       nav_back(p_name)
-    return
-
-  serial.fstr0(@"\r\n")
-  offset := 0
-
-  repeat
-    bytes_read := dfs.readHandle(handle, @buffer, 16)
-    if (bytes_read <= 0)
-      quit
-
-    serial.fstr1(@"%.8x  ", offset)
-
-    repeat i from 0 to 15
-      if (i < bytes_read)
-        serial.fstr1(@"%.2x ", buffer[i])
-      else
-        serial.fstr0(@"   ")
-      if (i == 7)
-        serial.tx(" ")
-
-    serial.fstr0(@" |")
-
-    repeat i from 0 to bytes_read - 1
-      c := buffer[i]
-      if (c >= 32 and c < 127)
-        serial.tx(c)
-      else
-        serial.tx(".")
-
-    serial.fstr0(@"|\r\n")
-    offset += bytes_read
-
-    if (offset >= 512)
-      serial.fstr0(@"... (truncated at 512 bytes)\r\n")
-      quit
-
-  dfs.closeFileHandle(handle)
-  serial.fstr1(@"\r\n[%d bytes shown]\r\n", offset)
-
-  if has_path
-    nav_back(p_name)
 
 
 PRI do_flash_hexdump() | p_name, handle, bytes_read, offset, i, c
 
 ' Display Flash file contents in hex format
 
-  if (not check_flash_mount())
-    return
+  if (check_flash_mount())
+    p_name := token(1)
+    handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_READ)
+    if (handle < 0)
+      serial.fstr1(@"File not found: %s\r\n", p_name)
+    else
+      serial.fstr0(@"\r\n")
+      offset := 0
 
-  p_name := token(1)
-  handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_READ)
-  if (handle < 0)
-    serial.fstr1(@"File not found: %s\r\n", p_name)
-    return
+      repeat
+        bytes_read := dfs.readHandle(handle, @buffer, HEXDUMP_LINE_BYTES)
+        if (bytes_read <= 0)
+          quit
 
-  serial.fstr0(@"\r\n")
-  offset := 0
+        serial.fstr1(@"%.8x  ", offset)
 
-  repeat
-    bytes_read := dfs.readHandle(handle, @buffer, 16)
-    if (bytes_read <= 0)
-      quit
+        repeat i from 0 to HEXDUMP_LINE_BYTES - 1
+          if (i < bytes_read)
+            serial.fstr1(@"%.2x ", buffer[i])
+          else
+            serial.fstr0(@"   ")
+          if (i == HEXDUMP_MID_SEP)
+            serial.tx(" ")
 
-    serial.fstr1(@"%.8x  ", offset)
+        serial.fstr0(@" |")
 
-    repeat i from 0 to 15
-      if (i < bytes_read)
-        serial.fstr1(@"%.2x ", buffer[i])
-      else
-        serial.fstr0(@"   ")
-      if (i == 7)
-        serial.tx(" ")
+        repeat i from 0 to bytes_read - 1
+          c := buffer[i]
+          if (c >= ASCII_SPACE and c < ASCII_DEL)
+            serial.tx(c)
+          else
+            serial.tx(".")
 
-    serial.fstr0(@" |")
+        serial.fstr0(@"|\r\n")
+        offset += bytes_read
 
-    repeat i from 0 to bytes_read - 1
-      c := buffer[i]
-      if (c >= 32 and c < 127)
-        serial.tx(c)
-      else
-        serial.tx(".")
+        if (offset >= HEXDUMP_MAX_DISPLAY)
+          serial.fstr0(@"... (truncated at 512 bytes)\r\n")
+          quit
 
-    serial.fstr0(@"|\r\n")
-    offset += bytes_read
-
-    if (offset >= 512)
-      serial.fstr0(@"... (truncated at 512 bytes)\r\n")
-      quit
-
-  dfs.closeFileHandle(handle)
-  serial.fstr1(@"\r\n[%d bytes shown]\r\n", offset)
+      dfs.closeFileHandle(handle)
+      serial.fstr1(@"\r\n[%d bytes shown]\r\n", offset)
 
 
 PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, status
@@ -1038,41 +1053,32 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, status
 
   if (ntokens <> 3)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
-    if (not check_flash_mount())
-      return
+  elseif (activeDev == ACTIVE_FLASH)
+    if (check_flash_mount())
+      p_old := token(1)
+      p_new := token(2)
+      status := dfs.rename(dfs.DEV_FLASH, p_old, p_new)
+      if (status == dfs.SUCCESS)
+        serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old, p_new)
+      else
+        serial.fstr1(@"Failed to rename: %s\r\n", p_old)
+  elseif (check_sd_mount())
+    ' SD rename
     p_old := token(1)
     p_new := token(2)
-    status := dfs.rename(dfs.DEV_FLASH, p_old, p_new)
-    if (status == dfs.SUCCESS)
-      serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old, p_new)
-    else
-      serial.fstr1(@"Failed to rename: %s\r\n", p_old)
-    return
 
-  ' SD rename
-  if (not check_sd_mount())
-    return
+    p_old_leaf, has_path := navigate_to_parent(p_old)
+    if p_old_leaf <> 0
+      p_new_leaf := path_leaf(p_new)
 
-  p_old := token(1)
-  p_new := token(2)
+      status := dfs.rename(dfs.DEV_SD, p_old_leaf, p_new_leaf)
+      if (status == dfs.SUCCESS)
+        serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old_leaf, p_new_leaf)
+      else
+        serial.fstr1(@"Failed to rename: %s\r\n", p_old_leaf)
 
-  p_old_leaf, has_path := navigate_to_parent(p_old)
-  if p_old_leaf == 0
-    return
-
-  p_new_leaf := path_leaf(p_new)
-
-  status := dfs.rename(dfs.DEV_SD, p_old_leaf, p_new_leaf)
-  if (status == dfs.SUCCESS)
-    serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old_leaf, p_new_leaf)
-  else
-    serial.fstr1(@"Failed to rename: %s\r\n", p_old_leaf)
-
-  if has_path
-    nav_back(p_old)
+    if has_path
+      nav_back(p_old)
 
 
 PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, status
@@ -1081,43 +1087,35 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, status
 
   if (ntokens <> 3)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Flash uses flat namespace. Use 'ren' to rename.\r\n")
-    return
+  elseif (check_sd_mount())
+    p_src := token(1)
+    p_dst := token(2)
 
-  if (not check_sd_mount())
-    return
+    p_src_leaf, has_path := navigate_to_parent(p_src)
+    if p_src_leaf <> 0
+      ' Check if dest is a directory
+      dh := dfs.openDirectory(dfs.DEV_SD, p_dst)
+      if dh >= 0
+        dfs.closeDirectoryHandle(dh)
+        status := dfs.moveFile(dfs.DEV_SD, p_src_leaf, p_dst)
+        if (status == dfs.SUCCESS)
+          serial.fstr2(@"Moved '%s' to %s/\r\n", p_src_leaf, p_dst)
+        else
+          serial.fstr1(@"Failed to move: %s\r\n", p_src_leaf)
+      else
+        status := dfs.rename(dfs.DEV_SD, p_src_leaf, path_leaf(p_dst))
+        if (status == dfs.SUCCESS)
+          serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_src_leaf, path_leaf(p_dst))
+        else
+          serial.fstr1(@"Failed to rename: %s\r\n", p_src_leaf)
 
-  p_src := token(1)
-  p_dst := token(2)
-
-  p_src_leaf, has_path := navigate_to_parent(p_src)
-  if p_src_leaf == 0
-    return
-
-  ' Check if dest is a directory
-  dh := dfs.openDirectory(dfs.DEV_SD, p_dst)
-  if dh >= 0
-    dfs.closeDirectoryHandle(dh)
-    status := dfs.moveFile(dfs.DEV_SD, p_src_leaf, p_dst)
-    if (status == dfs.SUCCESS)
-      serial.fstr2(@"Moved '%s' to %s/\r\n", p_src_leaf, p_dst)
-    else
-      serial.fstr1(@"Failed to move: %s\r\n", p_src_leaf)
-  else
-    status := dfs.rename(dfs.DEV_SD, p_src_leaf, path_leaf(p_dst))
-    if (status == dfs.SUCCESS)
-      serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_src_leaf, path_leaf(p_dst))
-    else
-      serial.fstr1(@"Failed to rename: %s\r\n", p_src_leaf)
-
-  if has_path
-    nav_back(p_src)
+    if has_path
+      nav_back(p_src)
 
 
-PUB do_copy() | p_src, p_dst, srcDev, dstDev, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total, status, is_cross
+PUB do_copy() | p_src, p_dst, srcDev, dstDev, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total, status, is_cross, mountsOk
 
 '' Copy file. Supports same-device and cross-device copy.
 '' Cross-device syntax: copy sd:FILE flash:FILE
@@ -1125,129 +1123,122 @@ PUB do_copy() | p_src, p_dst, srcDev, dstDev, p_src_leaf, p_dst_leaf, src_has_pa
 
   if (ntokens <> 3)
     bad_syntax()
-    return
+  else
+    p_src := token(1)
+    p_dst := token(2)
 
-  p_src := token(1)
-  p_dst := token(2)
+    ' Parse optional device prefix (sd: or flash:)
+    srcDev, p_src := parse_device_prefix(p_src)
+    dstDev, p_dst := parse_device_prefix(p_dst)
 
-  ' Parse optional device prefix (sd: or flash:)
-  srcDev, p_src := parse_device_prefix(p_src)
-  dstDev, p_dst := parse_device_prefix(p_dst)
+    ' Determine if cross-device copy
+    is_cross := (srcDev <> dstDev) and (srcDev <> -1 or dstDev <> -1)
 
-  ' Determine if cross-device copy
-  is_cross := (srcDev <> dstDev) and (srcDev <> -1 or dstDev <> -1)
+    ' If no device prefix, use active device for both
+    if (srcDev == -1)
+      srcDev := activeDev
+    if (dstDev == -1)
+      dstDev := activeDev
 
-  ' If no device prefix, use active device for both
-  if (srcDev == -1)
-    srcDev := activeDev
-  if (dstDev == -1)
-    dstDev := activeDev
+    ' Convert ACTIVE_* to dfs.DEV_*
+    if (srcDev == ACTIVE_SD)
+      srcDev := dfs.DEV_SD
+    elseif (srcDev == ACTIVE_FLASH)
+      srcDev := dfs.DEV_FLASH
+    if (dstDev == ACTIVE_SD)
+      dstDev := dfs.DEV_SD
+    elseif (dstDev == ACTIVE_FLASH)
+      dstDev := dfs.DEV_FLASH
 
-  ' Convert ACTIVE_* to dfs.DEV_*
-  if (srcDev == ACTIVE_SD)
-    srcDev := dfs.DEV_SD
-  elseif (srcDev == ACTIVE_FLASH)
-    srcDev := dfs.DEV_FLASH
-  if (dstDev == ACTIVE_SD)
-    dstDev := dfs.DEV_SD
-  elseif (dstDev == ACTIVE_FLASH)
-    dstDev := dfs.DEV_FLASH
+    ' Check mounts
+    mountsOk := true
+    if (srcDev == dfs.DEV_SD or dstDev == dfs.DEV_SD)
+      if (not check_sd_mount())
+        mountsOk := false
+    if mountsOk
+      if (srcDev == dfs.DEV_FLASH or dstDev == dfs.DEV_FLASH)
+        if (not check_flash_mount())
+          mountsOk := false
 
-  ' Check mounts
-  if (srcDev == dfs.DEV_SD or dstDev == dfs.DEV_SD)
-    if (not check_sd_mount())
-      return
-  if (srcDev == dfs.DEV_FLASH or dstDev == dfs.DEV_FLASH)
-    if (not check_flash_mount())
-      return
-
-  ' Cross-device copy: use dfs.copyFile()
-  if (srcDev <> dstDev)
-    status := dfs.copyFile(srcDev, p_src, dstDev, p_dst)
-    if (status == dfs.SUCCESS)
-      serial.fstr2(@"Copied %s -> %s (cross-device)\r\n", p_src, p_dst)
-    else
-      serial.fstr1(@"Copy failed, error: %d\r\n", status)
-    return
-
-  ' Same-device SD copy
-  if (srcDev == dfs.DEV_SD)
-    do_sd_copy(p_src, p_dst)
-    return
-
-  ' Same-device Flash copy (open read, open write, copy bytes)
-  do_flash_copy(p_src, p_dst)
+    if mountsOk
+      ' Cross-device copy: use dfs.copyFile()
+      if (srcDev <> dstDev)
+        status := dfs.copyFile(srcDev, p_src, dstDev, p_dst)
+        if (status == dfs.SUCCESS)
+          serial.fstr2(@"Copied %s -> %s (cross-device)\r\n", p_src, p_dst)
+        else
+          serial.fstr1(@"Copy failed, error: %d\r\n", status)
+      elseif (srcDev == dfs.DEV_SD)
+        ' Same-device SD copy
+        do_sd_copy(p_src, p_dst)
+      else
+        ' Same-device Flash copy (open read, open write, copy bytes)
+        do_flash_copy(p_src, p_dst)
 
 
-PRI do_sd_copy(p_src, p_dst) | p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total
+PRI do_sd_copy(p_src, p_dst) | p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total, ok
 
 ' Same-device SD copy
 
+  h_src := -1
+  ok := false
   if (strcomp(p_src, p_dst))
     serial.fstr0(@"Cannot copy file to itself\r\n")
-    return
+  else
+    p_src_leaf, src_has_path := navigate_to_parent(p_src)
+    if p_src_leaf <> 0
+      h_src := dfs.openFileRead(dfs.DEV_SD, p_src_leaf)
+      if (h_src < 0)
+        serial.fstr1(@"Source file not found: %s\r\n", p_src_leaf)
+      else
+        ok := true
 
-  p_src_leaf, src_has_path := navigate_to_parent(p_src)
-  if p_src_leaf == 0
-    return
-
-  h_src := dfs.openFileRead(dfs.DEV_SD, p_src_leaf)
-  if (h_src < 0)
-    serial.fstr1(@"Source file not found: %s\r\n", p_src_leaf)
     if src_has_path
       nav_back(p_src)
-    return
 
-  if src_has_path
-    nav_back(p_src)
+  if ok
+    ok := false
+    p_dst_leaf, dst_has_path := navigate_to_parent(p_dst)
+    if p_dst_leaf <> 0
+      ' Check if dest leaf is a directory
+      dst_is_dir := false
+      dh := dfs.openDirectory(dfs.DEV_SD, p_dst_leaf)
+      if dh >= 0
+        dfs.closeDirectoryHandle(dh)
+        if dfs.changeDirectory(dfs.DEV_SD, p_dst_leaf) <> dfs.SUCCESS
+          serial.fstr1(@"Cannot enter directory: %s\r\n", p_dst_leaf)
+        else
+          dst_is_dir := true
+          p_dst_leaf := p_src_leaf
 
-  p_dst_leaf, dst_has_path := navigate_to_parent(p_dst)
-  if p_dst_leaf == 0
-    dfs.closeFileHandle(h_src)
-    return
+      if dst_is_dir or dh < 0
+        h_dst := dfs.createFileNew(dfs.DEV_SD, p_dst_leaf)
+        if (h_dst < 0)
+          serial.fstr1(@"Cannot create destination: %s\r\n", p_dst_leaf)
+        else
+          ok := true
 
-  ' Check if dest leaf is a directory
-  dst_is_dir := false
-  dh := dfs.openDirectory(dfs.DEV_SD, p_dst_leaf)
-  if dh >= 0
-    dfs.closeDirectoryHandle(dh)
-    if dfs.changeDirectory(dfs.DEV_SD, p_dst_leaf) <> dfs.SUCCESS
-      dfs.closeFileHandle(h_src)
-      serial.fstr1(@"Cannot enter directory: %s\r\n", p_dst_leaf)
-      if dst_has_path
-        nav_back(p_dst)
-      return
-    dst_is_dir := true
-    p_dst_leaf := p_src_leaf
+      if dst_is_dir
+        dfs.changeDirectory(dfs.DEV_SD, @"..")
 
-  h_dst := dfs.createFileNew(dfs.DEV_SD, p_dst_leaf)
-  if (h_dst < 0)
-    dfs.closeFileHandle(h_src)
-    serial.fstr1(@"Cannot create destination: %s\r\n", p_dst_leaf)
-    if dst_is_dir
-      dfs.changeDirectory(dfs.DEV_SD, @"..")
     if dst_has_path
       nav_back(p_dst)
-    return
 
-  if dst_is_dir
-    dfs.changeDirectory(dfs.DEV_SD, @"..")
-  if dst_has_path
-    nav_back(p_dst)
+  if ok
+    ' Copy data
+    total := 0
+    repeat
+      bytes_read := dfs.readHandle(h_src, @buffer, BUFFER_SIZE)
+      if (bytes_read <= 0)
+        quit
+      dfs.writeHandle(h_dst, @buffer, bytes_read)
+      total += bytes_read
 
-  ' Copy data
-  total := 0
-  repeat
-    bytes_read := dfs.readHandle(h_src, @buffer, BUFFER_SIZE)
-    if (bytes_read <= 0)
-      quit
-    dfs.writeHandle(h_dst, @buffer, bytes_read)
-    total += bytes_read
+    dfs.closeFileHandle(h_dst)
+    serial.fstr2(@"Copied %d bytes to %s\r\n", total, p_dst_leaf)
 
-  dfs.closeFileHandle(h_src)
-  dfs.closeFileHandle(h_dst)
-
-  serial.fstr2(@"Copied %d bytes to %s\r\n", total, p_dst_leaf)
+  if h_src >= 0
+    dfs.closeFileHandle(h_src)
 
 
 PRI do_flash_copy(p_src, p_dst) | h_src, h_dst, bytes_read, total
@@ -1256,31 +1247,27 @@ PRI do_flash_copy(p_src, p_dst) | h_src, h_dst, bytes_read, total
 
   if (strcomp(p_src, p_dst))
     serial.fstr0(@"Cannot copy file to itself\r\n")
-    return
+  else
+    h_src := dfs.open(dfs.DEV_FLASH, p_src, dfs.FILEMODE_READ)
+    if (h_src < 0)
+      serial.fstr1(@"Source file not found: %s\r\n", p_src)
+    else
+      h_dst := dfs.open(dfs.DEV_FLASH, p_dst, dfs.FILEMODE_WRITE)
+      if (h_dst < 0)
+        serial.fstr1(@"Cannot create destination: %s\r\n", p_dst)
+      else
+        total := 0
+        repeat
+          bytes_read := dfs.readHandle(h_src, @buffer, BUFFER_SIZE)
+          if (bytes_read <= 0)
+            quit
+          dfs.writeHandle(h_dst, @buffer, bytes_read)
+          total += bytes_read
 
-  h_src := dfs.open(dfs.DEV_FLASH, p_src, dfs.FILEMODE_READ)
-  if (h_src < 0)
-    serial.fstr1(@"Source file not found: %s\r\n", p_src)
-    return
+        dfs.closeFileHandle(h_dst)
+        serial.fstr2(@"Copied %d bytes to %s\r\n", total, p_dst)
 
-  h_dst := dfs.open(dfs.DEV_FLASH, p_dst, dfs.FILEMODE_WRITE)
-  if (h_dst < 0)
-    dfs.closeFileHandle(h_src)
-    serial.fstr1(@"Cannot create destination: %s\r\n", p_dst)
-    return
-
-  total := 0
-  repeat
-    bytes_read := dfs.readHandle(h_src, @buffer, BUFFER_SIZE)
-    if (bytes_read <= 0)
-      quit
-    dfs.writeHandle(h_dst, @buffer, bytes_read)
-    total += bytes_read
-
-  dfs.closeFileHandle(h_src)
-  dfs.closeFileHandle(h_dst)
-
-  serial.fstr2(@"Copied %d bytes to %s\r\n", total, p_dst)
+      dfs.closeFileHandle(h_src)
 
 
 PRI parse_device_prefix(p_str) : dev, p_name | i
@@ -1296,7 +1283,7 @@ PRI parse_device_prefix(p_str) : dev, p_name | i
 
   ' Look for ":"
   i := 0
-  repeat while byte[p_str + i] <> 0 and i < 8
+  repeat while byte[p_str + i] <> 0 and i < DEV_PREFIX_MAX_SCAN
     if byte[p_str + i] == ":"
       ' Found prefix
       byte[p_str + i] := 0
@@ -1307,7 +1294,7 @@ PRI parse_device_prefix(p_str) : dev, p_name | i
         dev := ACTIVE_FLASH
       byte[p_str + i] := ":"                                     ' restore for display
       p_name := p_str + i + 1
-      return
+      quit
     i++
 
 
@@ -1317,36 +1304,27 @@ PUB do_delete() | p_name, p_leaf, has_path, status
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
-    if (not check_flash_mount())
-      return
+  elseif (activeDev == ACTIVE_FLASH)
+    if (check_flash_mount())
+      p_name := token(1)
+      status := dfs.deleteFile(dfs.DEV_FLASH, p_name)
+      if (status == dfs.SUCCESS)
+        serial.fstr1(@"Deleted: %s\r\n", p_name)
+      else
+        serial.fstr1(@"Failed to delete: %s\r\n", p_name)
+  elseif (check_sd_mount())
+    ' SD delete
     p_name := token(1)
-    status := dfs.deleteFile(dfs.DEV_FLASH, p_name)
-    if (status == dfs.SUCCESS)
-      serial.fstr1(@"Deleted: %s\r\n", p_name)
-    else
-      serial.fstr1(@"Failed to delete: %s\r\n", p_name)
-    return
+    p_leaf, has_path := navigate_to_parent(p_name)
+    if p_leaf <> 0
+      status := dfs.deleteFile(dfs.DEV_SD, p_leaf)
+      if (status == dfs.SUCCESS)
+        serial.fstr1(@"Deleted: %s\r\n", p_leaf)
+      else
+        serial.fstr1(@"Failed to delete: %s\r\n", p_leaf)
 
-  ' SD delete
-  if (not check_sd_mount())
-    return
-
-  p_name := token(1)
-  p_leaf, has_path := navigate_to_parent(p_name)
-  if p_leaf == 0
-    return
-
-  status := dfs.deleteFile(dfs.DEV_SD, p_leaf)
-  if (status == dfs.SUCCESS)
-    serial.fstr1(@"Deleted: %s\r\n", p_leaf)
-  else
-    serial.fstr1(@"Failed to delete: %s\r\n", p_leaf)
-
-  if has_path
-    nav_back(p_name)
+    if has_path
+      nav_back(p_name)
 
 
 PUB do_rmdir() | p_name, p_leaf, has_path, dh, status, p_entry, is_empty
@@ -1355,55 +1333,41 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, status, p_entry, is_empty
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
-    return
+  elseif (check_sd_mount())
+    p_name := token(1)
+    p_leaf, has_path := navigate_to_parent(p_name)
+    if p_leaf <> 0
+      dh := dfs.openDirectory(dfs.DEV_SD, p_leaf)
+      if (dh < 0)
+        serial.fstr1(@"Not a directory: %s\r\n", p_leaf)
+      else
+        ' Check if empty
+        is_empty := true
+        repeat
+          status := dfs.readDirectoryHandle(dh)
+          if (status == 0)
+            quit
+          p_entry := dfs.fileName()
+          if (strcomp(p_entry, @".") or strcomp(p_entry, @".."))
+            next
+          is_empty := false
+          quit
 
-  if (not check_sd_mount())
-    return
+        dfs.closeDirectoryHandle(dh)
 
-  p_name := token(1)
-  p_leaf, has_path := navigate_to_parent(p_name)
-  if p_leaf == 0
-    return
+        if (not is_empty)
+          serial.fstr1(@"Directory not empty: %s\r\n", p_leaf)
+        else
+          status := dfs.deleteFile(dfs.DEV_SD, p_leaf)
+          if (status == dfs.SUCCESS)
+            serial.fstr1(@"Removed: %s\r\n", p_leaf)
+          else
+            serial.fstr1(@"Failed to remove: %s\r\n", p_leaf)
 
-  dh := dfs.openDirectory(dfs.DEV_SD, p_leaf)
-  if (dh < 0)
-    serial.fstr1(@"Not a directory: %s\r\n", p_leaf)
     if has_path
       nav_back(p_name)
-    return
-
-  ' Check if empty
-  is_empty := true
-  repeat
-    status := dfs.readDirectoryHandle(dh)
-    if (status == 0)
-      quit
-    p_entry := dfs.fileName()
-    if (strcomp(p_entry, @".") or strcomp(p_entry, @".."))
-      next
-    is_empty := false
-    quit
-
-  dfs.closeDirectoryHandle(dh)
-
-  if (not is_empty)
-    serial.fstr1(@"Directory not empty: %s\r\n", p_leaf)
-    if has_path
-      nav_back(p_name)
-    return
-
-  status := dfs.deleteFile(dfs.DEV_SD, p_leaf)
-  if (status == dfs.SUCCESS)
-    serial.fstr1(@"Removed: %s\r\n", p_leaf)
-  else
-    serial.fstr1(@"Failed to remove: %s\r\n", p_leaf)
-
-  if has_path
-    nav_back(p_name)
 
 
 PUB do_demo() | handle, i
@@ -1412,29 +1376,22 @@ PUB do_demo() | handle, i
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
-    if (not check_flash_mount())
-      return
-    serial.fstr0(@"Creating Flash demo files...\r\n")
-    write_flash_demo_file(@"hello.txt", @demo_hello)
-    write_flash_demo_file(@"readme.txt", @demo_readme)
-    serial.fstr0(@"Flash demo files created.\r\n")
-    return
-
-  ' SD demo
-  if (not check_sd_mount())
-    return
-
-  serial.fstr0(@"Creating SD demo files...\r\n")
-  write_sd_demo_file(@"HELLO.TXT", @demo_hello)
-  write_sd_demo_file(@"README.TXT", @demo_readme)
-  write_sd_demo_file(@"NUMBERS.TXT", @demo_numbers)
-  serial.fstr0(@"SD demo files created.\r\n")
+  elseif (activeDev == ACTIVE_FLASH)
+    if (check_flash_mount())
+      serial.fstr0(@"Creating Flash demo files...\r\n")
+      write_flash_demo_file(@"hello.txt", @demo_hello)
+      write_flash_demo_file(@"readme.txt", @demo_readme)
+      serial.fstr0(@"Flash demo files created.\r\n")
+  elseif (check_sd_mount())
+    ' SD demo
+    serial.fstr0(@"Creating SD demo files...\r\n")
+    write_sd_demo_file(@"HELLO.TXT", @demo_hello)
+    write_sd_demo_file(@"README.TXT", @demo_readme)
+    write_sd_demo_file(@"NUMBERS.TXT", @demo_numbers)
+    serial.fstr0(@"SD demo files created.\r\n")
 
 
-PUB do_card_info() | wasMounted, ...
+PUB do_card_info() | wasMounted, cardOk, ...
                      ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
                      pnm[2], p_mfr, p_type, p_spec, p_fs, ...
                      oemBuf[3], partStart, i, nLen
@@ -1443,74 +1400,73 @@ PUB do_card_info() | wasMounted, ...
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Card info is SD-only. Use 'dev sd' first.\r\n")
-    return
-
-  wasMounted := sdMounted
-
-  ' If not mounted, initialize card for raw access
-  if (not sdMounted)
-    if not driverStarted
-      start_driver()
-    serial.fstr0(@"Initializing card...\r\n")
-    if (dfs.initCardOnly() <> dfs.SUCCESS)
-      serial.fstr0(@"ERROR: Cannot initialize card\r\n")
-      return
-
-  serial.fstr0(@"card ready...\r\n")
-  dfs.readCIDRaw(@cid)
-  dfs.readSCRRaw(@scr)
-  ocr := dfs.getOCR()
-  sizeMB := dfs.cardSizeSectors() / 2048
-  spiHz := dfs.getSPIFrequency()
-
-  bytemove(@pnm, @cid.pnm, 5)
-  BYTE[@pnm + 5] := 0
-
-  psn := (cid.psn[0] << 24) | (cid.psn[1] << 16) | (cid.psn[2] << 8) | cid.psn[3]
-
-  mdtYear := 2000 + ((cid.mdt[0] & $0F) << 4) + ((cid.mdt[1] >> 4) & $0F)
-  mdtMonth := cid.mdt[1] & $0F
-
-  p_mfr := lookupMID(cid.mid)
-  p_type := getCardType(ocr, sizeMB)
-  p_spec := getSDSpecVersion(@scr)
-  p_fs := detectFilesystem()
-
-  dfs.readSectorRaw(0, @buf2)
-  if WORD[@buf2 + $1FE] == MBR_SIGNATURE
-    pPart := @buf2 + $1BE
-    partStart := partLbaStart(pPart)
-    if partStart > 0
-      dfs.readSectorRaw(partStart, @buf2)
-      bytemove(@oemBuf, @buf2 + 3, 8)
-      BYTE[@oemBuf + 8] := 0
-      i := 7
-      repeat while i >= 0
-        if BYTE[@oemBuf + i] <> " "
-          quit
-        BYTE[@oemBuf + i] := 0
-        i--
-    else
-      bytemove(@oemBuf, @"n/a", 4)
   else
-    bytemove(@oemBuf, @"n/a", 4)
+    wasMounted := sdMounted
+    cardOk := true
 
-  if sizeMB < 1024
-    nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dMB [%s] %s", p_mfr, @pnm, p_type, sizeMB, p_fs, p_spec)
-  else
-    nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dGB [%s] %s", p_mfr, @pnm, p_type, sizeMB / 1024, p_fs, p_spec)
-  fmt.sFormatStr5(@BYTE[@buf2][nLen], SECTOR_SIZE - nLen, @" rev%d.%d SN:%.8x %d/%.2d\r\n", cid.prv >> 4, cid.prv & $0F, psn, mdtYear, mdtMonth)
-  serial.str(@buf2)
+    ' If not mounted, initialize card for raw access
+    if (not sdMounted)
+      if not driverStarted
+        start_driver()
+      serial.fstr0(@"Initializing card...\r\n")
+      if (dfs.initCardOnly() <> dfs.SUCCESS)
+        serial.fstr0(@"ERROR: Cannot initialize card\r\n")
+        cardOk := false
 
-  fmt.sFormatStr3(@buf2, SECTOR_SIZE, @"SPI %d.%d MHz  [%s]\r\n", spiHz / 1_000_000, (spiHz / 100_000) // 10, @oemBuf)
-  serial.str(@buf2)
+    if cardOk
+      serial.fstr0(@"card ready...\r\n")
+      dfs.readCIDRaw(@cid)
+      dfs.readSCRRaw(@scr)
+      ocr := dfs.getOCR()
+      sizeMB := dfs.cardSizeSectors() / SECTORS_PER_MB
+      spiHz := dfs.getSPIFrequency()
 
-  if (not wasMounted)
-    stop_driver()
+      bytemove(@pnm, @cid.pnm, PNM_LENGTH)
+      BYTE[@pnm + PNM_LENGTH] := 0
+
+      psn := (cid.psn[0] << PSN_BYTE0_SHIFT) | (cid.psn[1] << PSN_BYTE1_SHIFT) | (cid.psn[2] << PSN_BYTE2_SHIFT) | cid.psn[3]
+
+      mdtYear := FAT_YEAR_BASE + ((cid.mdt[0] & NIBBLE_MASK) << 4) + ((cid.mdt[1] >> 4) & NIBBLE_MASK)
+      mdtMonth := cid.mdt[1] & NIBBLE_MASK
+
+      p_mfr := lookupMID(cid.mid)
+      p_type := getCardType(ocr, sizeMB)
+      p_spec := getSDSpecVersion(@scr)
+      p_fs := detectFilesystem()
+
+      dfs.readSectorRaw(0, @buf2)
+      if WORD[@buf2 + MBR_SIG_OFFSET] == MBR_SIGNATURE
+        pPart := @buf2 + MBR_PART1_OFFSET
+        partStart := partLbaStart(pPart)
+        if partStart > 0
+          dfs.readSectorRaw(partStart, @buf2)
+          bytemove(@oemBuf, @buf2 + VBR_OEM_OFFSET, VBR_OEM_LENGTH)
+          BYTE[@oemBuf + VBR_OEM_LENGTH] := 0
+          i := VBR_OEM_LENGTH - 1
+          repeat while i >= 0
+            if BYTE[@oemBuf + i] <> " "
+              quit
+            BYTE[@oemBuf + i] := 0
+            i--
+        else
+          bytemove(@oemBuf, @"n/a", 4)
+      else
+        bytemove(@oemBuf, @"n/a", 4)
+
+      if sizeMB < MB_PER_GB
+        nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dMB [%s] %s", p_mfr, @pnm, p_type, sizeMB, p_fs, p_spec)
+      else
+        nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dGB [%s] %s", p_mfr, @pnm, p_type, sizeMB / MB_PER_GB, p_fs, p_spec)
+      fmt.sFormatStr5(@BYTE[@buf2][nLen], SECTOR_SIZE - nLen, @" rev%d.%d SN:%.8x %d/%.2d\r\n", cid.prv >> 4, cid.prv & NIBBLE_MASK, psn, mdtYear, mdtMonth)
+      serial.str(@buf2)
+
+      fmt.sFormatStr3(@buf2, SECTOR_SIZE, @"SPI %d.%d MHz  [%s]\r\n", spiHz / HZ_PER_MHZ, (spiHz / HZ_PER_100KHZ) // DECIMAL_BASE, @oemBuf)
+      serial.str(@buf2)
+
+    if (not wasMounted)
+      stop_driver()
 
 
 PUB do_audit() | pStr, status, used, free_ct, file_count, iter_count, iter_bytes, fsize
@@ -1521,46 +1477,42 @@ PUB do_audit() | pStr, status, used, free_ct, file_count, iter_count, iter_bytes
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     do_flash_audit()
-    return
+  else
+    ' --- SD audit via external utility ---
 
-  ' --- SD audit via external utility ---
+    ' Must stop dual driver so library can use SPI
+    if (flashMounted)
+      dfs.unmount(dfs.DEV_FLASH)
+      flashMounted := false
+    if (sdMounted)
+      dfs.unmount(dfs.DEV_SD)
+      sdMounted := false
+      serial.fstr0(@"Unmounted for audit.\r\n")
+    stop_driver()
 
-  ' Must stop dual driver so library can use SPI
-  if (flashMounted)
-    dfs.unmount(dfs.DEV_FLASH)
-    flashMounted := false
-  if (sdMounted)
-    dfs.unmount(dfs.DEV_SD)
-    sdMounted := false
-    serial.fstr0(@"Unmounted for audit.\r\n")
-  stop_driver()
+    if (fsckUtil.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> 0)
+      serial.fstr0(@"ERROR: Could not start audit cog\r\n")
+    else
+      repeat
+        pStr := fsckUtil.getOutput()
+        if pStr
+          serial.str(pStr)
+          serial.fstr0(@"\r\n")
+        elseif fsckUtil.isDone()
+          repeat while (pStr := fsckUtil.getOutput())
+            serial.str(pStr)
+            serial.fstr0(@"\r\n")
+          quit
 
-  if (not fsckUtil.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
-    serial.fstr0(@"ERROR: Could not start audit cog\r\n")
-    return
+      fsckUtil.stop()
 
-  repeat
-    pStr := fsckUtil.getOutput()
-    if pStr
-      serial.str(pStr)
       serial.fstr0(@"\r\n")
-    elseif fsckUtil.isDone()
-      repeat while (pStr := fsckUtil.getOutput())
-        serial.str(pStr)
-        serial.fstr0(@"\r\n")
-      quit
-
-  fsckUtil.stop()
-
-  serial.fstr0(@"\r\n")
-  if (confirmYN(@"Re-mount devices"))
-    start_driver()
-    mount_sd()
-    mount_flash()
+      if (confirmYN(@"Re-mount devices"))
+        start_driver()
+        mount_sd()
+        mount_flash()
 
 
 PRI do_flash_audit() | status, used, free_ct, file_count, iter_count, iter_bytes, fsize
@@ -1577,62 +1529,63 @@ PRI do_flash_audit() | status, used, free_ct, file_count, iter_count, iter_bytes
   ' --- Phase 1: Non-destructive health check ---
   serial.fstr0(@"Phase 1: canMount() health check...\r\n")
   status := dfs.canMount(dfs.DEV_FLASH)
-  if status == dfs.SUCCESS
-    serial.fstr0(@"  canMount: PASS\r\n")
-  else
+  if status <> dfs.SUCCESS
     serial.fstr1(@"  canMount: FAIL (status=%d)\r\n", status)
     serial.fstr0(@"  Flash may need format.\r\n")
-    return
-
-  ' --- Phase 2: Mount and read statistics ---
-  serial.fstr0(@"\r\nPhase 2: Mount and statistics...\r\n")
-  if not flashMounted
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-      serial.fstr1(@"  Mount FAILED (status=%d)\r\n", status)
-      return
-    flashMounted := true
-  serial.fstr0(@"  Mount: PASS\r\n")
-
-  used, free_ct, file_count := dfs.stats(dfs.DEV_FLASH)
-  serial.fstr1(@"  Used blocks:  %d\r\n", used)
-  serial.fstr1(@"  Free blocks:  %d\r\n", free_ct)
-  serial.fstr1(@"  File count:   %d\r\n", file_count)
-  serial.fstr1(@"  Total blocks: %d\r\n", used + free_ct)
-
-  ' --- Phase 3: Verify file iteration matches stats ---
-  serial.fstr0(@"\r\nPhase 3: File iteration verification...\r\n")
-  iter_count := 0
-  iter_bytes := 0
-  flDirBlockId := 0
-  repeat
-    dfs.directory(dfs.DEV_FLASH, @flDirBlockId, @flDirName, @fsize)
-    if flDirName[0] == 0
-      quit
-    iter_count++
-    iter_bytes += fsize
-    if iter_count <= 20
-      serial.fstr2(@"  [%d] %s", iter_count, @flDirName)
-      serial.fstr1(@" (%d bytes)\r\n", fsize)
-    elseif iter_count == 21
-      serial.fstr0(@"  ... (truncated)\r\n")
-  serial.fstr1(@"  Iterated files: %d\r\n", iter_count)
-  serial.fstr1(@"  Total bytes:    %d\r\n", iter_bytes)
-
-  if iter_count == file_count
-    serial.fstr0(@"  File count: MATCH\r\n")
   else
-    serial.fstr2(@"  File count: MISMATCH (stats=%d iter=%d)\r\n", file_count, iter_count)
+    serial.fstr0(@"  canMount: PASS\r\n")
 
-  ' --- Summary ---
-  serial.fstr0(@"\r\n")
-  if iter_count == file_count
-    serial.fstr0(@"AUDIT PASSED - Flash filesystem is healthy\r\n")
-  else
-    serial.fstr0(@"AUDIT WARNING - File count mismatch\r\n")
+    ' --- Phase 2: Mount and read statistics ---
+    serial.fstr0(@"\r\nPhase 2: Mount and statistics...\r\n")
+    if not flashMounted
+      status := dfs.mount(dfs.DEV_FLASH)
+      if status <> dfs.SUCCESS
+        serial.fstr1(@"  Mount FAILED (status=%d)\r\n", status)
+      else
+        flashMounted := true
+
+    if flashMounted
+      serial.fstr0(@"  Mount: PASS\r\n")
+
+      used, free_ct, file_count := dfs.stats(dfs.DEV_FLASH)
+      serial.fstr1(@"  Used blocks:  %d\r\n", used)
+      serial.fstr1(@"  Free blocks:  %d\r\n", free_ct)
+      serial.fstr1(@"  File count:   %d\r\n", file_count)
+      serial.fstr1(@"  Total blocks: %d\r\n", used + free_ct)
+
+      ' --- Phase 3: Verify file iteration matches stats ---
+      serial.fstr0(@"\r\nPhase 3: File iteration verification...\r\n")
+      iter_count := 0
+      iter_bytes := 0
+      flDirBlockId := 0
+      repeat
+        dfs.directory(dfs.DEV_FLASH, @flDirBlockId, @flDirName, @fsize)
+        if flDirName[0] == 0
+          quit
+        iter_count++
+        iter_bytes += fsize
+        if iter_count <= FLASH_AUDIT_MAX_SHOW
+          serial.fstr2(@"  [%d] %s", iter_count, @flDirName)
+          serial.fstr1(@" (%d bytes)\r\n", fsize)
+        elseif iter_count == FLASH_AUDIT_MAX_SHOW + 1
+          serial.fstr0(@"  ... (truncated)\r\n")
+      serial.fstr1(@"  Iterated files: %d\r\n", iter_count)
+      serial.fstr1(@"  Total bytes:    %d\r\n", iter_bytes)
+
+      if iter_count == file_count
+        serial.fstr0(@"  File count: MATCH\r\n")
+      else
+        serial.fstr2(@"  File count: MISMATCH (stats=%d iter=%d)\r\n", file_count, iter_count)
+
+      ' --- Summary ---
+      serial.fstr0(@"\r\n")
+      if iter_count == file_count
+        serial.fstr0(@"AUDIT PASSED - Flash filesystem is healthy\r\n")
+      else
+        serial.fstr0(@"AUDIT WARNING - File count mismatch\r\n")
 
 
-PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after, free_after, files_after
+PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after, free_after, files_after, doFsck
 
 '' Check and repair filesystem.
 '' SD: delegates to isp_fsck_utility (requires driver stop/restart).
@@ -1640,48 +1593,48 @@ PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     do_flash_fsck()
-    return
+  else
+    ' --- SD fsck via external utility ---
 
-  ' --- SD fsck via external utility ---
+    ' Must stop dual driver for write access
+    doFsck := true
+    if (flashMounted)
+      dfs.unmount(dfs.DEV_FLASH)
+      flashMounted := false
+    if (sdMounted)
+      if (not confirmYN(@"FSCK requires unmount. Unmount now"))
+        doFsck := false
+      else
+        dfs.unmount(dfs.DEV_SD)
+        sdMounted := false
+        serial.fstr0(@"Unmounted.\r\n")
 
-  ' Must stop dual driver for write access
-  if (flashMounted)
-    dfs.unmount(dfs.DEV_FLASH)
-    flashMounted := false
-  if (sdMounted)
-    if (not confirmYN(@"FSCK requires unmount. Unmount now"))
-      return
-    dfs.unmount(dfs.DEV_SD)
-    sdMounted := false
-    serial.fstr0(@"Unmounted.\r\n")
-  stop_driver()
+    if doFsck
+      stop_driver()
 
-  if (not fsckUtil.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
-    serial.fstr0(@"ERROR: Could not start FSCK cog\r\n")
-    return
+      if (fsckUtil.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> 0)
+        serial.fstr0(@"ERROR: Could not start FSCK cog\r\n")
+      else
+        repeat
+          pStr := fsckUtil.getOutput()
+          if pStr
+            serial.str(pStr)
+            serial.fstr0(@"\r\n")
+          elseif fsckUtil.isDone()
+            repeat while (pStr := fsckUtil.getOutput())
+              serial.str(pStr)
+              serial.fstr0(@"\r\n")
+            quit
 
-  repeat
-    pStr := fsckUtil.getOutput()
-    if pStr
-      serial.str(pStr)
-      serial.fstr0(@"\r\n")
-    elseif fsckUtil.isDone()
-      repeat while (pStr := fsckUtil.getOutput())
-        serial.str(pStr)
+        fsckUtil.stop()
+
         serial.fstr0(@"\r\n")
-      quit
-
-  fsckUtil.stop()
-
-  serial.fstr0(@"\r\n")
-  if (confirmYN(@"Re-mount devices"))
-    start_driver()
-    mount_sd()
-    mount_flash()
+        if (confirmYN(@"Re-mount devices"))
+          start_driver()
+          mount_sd()
+          mount_flash()
 
 
 PRI do_flash_fsck() | status, used_before, free_before, files_before, used_after, free_after, files_after
@@ -1717,111 +1670,107 @@ PRI do_flash_fsck() | status, used_before, free_before, files_before, used_after
       serial.fstr0(@"\r\nFSCK COMPLETE - No repairs needed\r\n")
     else
       serial.fstr1(@"  Mount failed despite canMount pass (status=%d)\r\n", status)
-    return
-
-  ' --- Phase 2: Issues detected -- repair via remount ---
-  serial.fstr1(@"  Health check: ISSUES DETECTED (status=%d)\r\n", status)
-  serial.fstr0(@"\r\n")
-
-  if (not confirmYN(@"Repair by remounting (resolves duplicates, orphans, bad CRC)"))
-    return
-
-  serial.fstr0(@"Phase 2: Repairing via mount...\r\n")
-  status := dfs.mount(dfs.DEV_FLASH)
-  if status == dfs.SUCCESS
-    flashMounted := true
-    serial.fstr0(@"  Mount/repair: SUCCESS\r\n")
-    used_after, free_after, files_after := dfs.stats(dfs.DEV_FLASH)
-    serial.fstr0(@"\r\n  Post-repair statistics:\r\n")
-    serial.fstr1(@"  Used blocks:  %d\r\n", used_after)
-    serial.fstr1(@"  Free blocks:  %d\r\n", free_after)
-    serial.fstr1(@"  File count:   %d\r\n", files_after)
-    serial.fstr0(@"\r\nFSCK COMPLETE - Repairs applied\r\n")
   else
-    serial.fstr1(@"  Mount/repair FAILED (status=%d)\r\n", status)
-    serial.fstr0(@"  Flash may need format to recover.\r\n")
+    ' --- Phase 2: Issues detected -- repair via remount ---
+    serial.fstr1(@"  Health check: ISSUES DETECTED (status=%d)\r\n", status)
+    serial.fstr0(@"\r\n")
+
+    if (confirmYN(@"Repair by remounting (resolves duplicates, orphans, bad CRC)"))
+      serial.fstr0(@"Phase 2: Repairing via mount...\r\n")
+      status := dfs.mount(dfs.DEV_FLASH)
+      if status == dfs.SUCCESS
+        flashMounted := true
+        serial.fstr0(@"  Mount/repair: SUCCESS\r\n")
+        used_after, free_after, files_after := dfs.stats(dfs.DEV_FLASH)
+        serial.fstr0(@"\r\n  Post-repair statistics:\r\n")
+        serial.fstr1(@"  Used blocks:  %d\r\n", used_after)
+        serial.fstr1(@"  Free blocks:  %d\r\n", free_after)
+        serial.fstr1(@"  File count:   %d\r\n", files_after)
+        serial.fstr0(@"\r\nFSCK COMPLETE - Repairs applied\r\n")
+      else
+        serial.fstr1(@"  Mount/repair FAILED (status=%d)\r\n", status)
+        serial.fstr0(@"  Flash may need format to recover.\r\n")
 
 
-PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, readResult, msPerTick
+PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, i, rate, readResult, msPerTick
 
 '' Read-only throughput benchmark (SD only)
 
   if (ntokens <> 1)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Benchmark is SD-only. Use 'dev sd' first.\r\n")
-    return
+  else
+    wasMounted := sdMounted
+    cardOk := true
 
-  wasMounted := sdMounted
+    if (not sdMounted)
+      if not driverStarted
+        start_driver()
+      serial.fstr0(@"Initializing card...\r\n")
+      if (dfs.initCardOnly() <> dfs.SUCCESS)
+        serial.fstr0(@"ERROR: Cannot initialize card\r\n")
+        cardOk := false
 
-  if (not sdMounted)
-    if not driverStarted
-      start_driver()
-    serial.fstr0(@"Initializing card...\r\n")
-    if (dfs.initCardOnly() <> dfs.SUCCESS)
-      serial.fstr0(@"ERROR: Cannot initialize card\r\n")
-      return
+    if cardOk
+      serial.fstr0(@"\r\n=== Read-Only Throughput Benchmark ===\r\n")
+      serial.fstr2(@"Card: %d MB, SPI: %d Hz\r\n", dfs.cardSizeSectors() / SECTORS_PER_MB, dfs.getSPIFrequency())
+      serial.fstr1(@"Test area: sectors %d+\r\n\r\n", BENCH_SECTOR_BASE)
 
-  serial.fstr0(@"\r\n=== Read-Only Throughput Benchmark ===\r\n")
-  serial.fstr2(@"Card: %d MB, SPI: %d Hz\r\n", dfs.cardSizeSectors() / 2048, dfs.getSPIFrequency())
-  serial.fstr1(@"Test area: sectors %d+\r\n\r\n", BENCH_SECTOR_BASE)
+      msPerTick := clkfreq / MS_PER_SEC
 
-  msPerTick := clkfreq / 1000
+      ' Single-sector test (100 reads)
+      serial.fstr0(@"Single-sector (100 reads)... ")
+      sector := BENCH_SECTOR_BASE
+      tStart := getct()
+      repeat BENCH_SINGLE_READS
+        dfs.readSectorRaw(sector, @buffer)
+        sector++
+      tElapsed := getct() - tStart
 
-  ' Single-sector test (100 reads)
-  serial.fstr0(@"Single-sector (100 reads)... ")
-  sector := BENCH_SECTOR_BASE
-  tStart := getct()
-  repeat 100
-    dfs.readSectorRaw(sector, @buffer)
-    sector++
-  tElapsed := getct() - tStart
+      rate := (BENCH_SINGLE_READS * SECTOR_SIZE * msPerTick) / tElapsed
+      serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
-  rate := (100 * 512 * msPerTick) / tElapsed
-  serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
+      ' Multi-sector x8
+      serial.fstr0(@"Multi-sector x8 (100 reads)... ")
+      sector := BENCH_SECTOR_BASE
+      tStart := getct()
+      repeat BENCH_X8_READS
+        readResult := dfs.readSectorsRaw(sector, BENCH_X8_SECTORS, @benchBuf)
+        sector += BENCH_X8_SECTORS
+      tElapsed := getct() - tStart
 
-  ' Multi-sector x8
-  serial.fstr0(@"Multi-sector x8 (100 reads)... ")
-  sector := BENCH_SECTOR_BASE
-  tStart := getct()
-  repeat 100
-    readResult := dfs.readSectorsRaw(sector, 8, @benchBuf)
-    sector += 8
-  tElapsed := getct() - tStart
+      rate := (BENCH_X8_READS * BENCH_X8_SECTORS * SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
+      serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
-  rate := (100 * 8 * 512 * (msPerTick / 10)) / (tElapsed / 10)
-  serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
+      ' Multi-sector x32
+      serial.fstr0(@"Multi-sector x32 (25 reads)... ")
+      sector := BENCH_SECTOR_BASE
+      tStart := getct()
+      repeat BENCH_X32_READS
+        readResult := dfs.readSectorsRaw(sector, BENCH_X32_SECTORS, @benchBuf)
+        sector += BENCH_X32_SECTORS
+      tElapsed := getct() - tStart
 
-  ' Multi-sector x32
-  serial.fstr0(@"Multi-sector x32 (25 reads)... ")
-  sector := BENCH_SECTOR_BASE
-  tStart := getct()
-  repeat 25
-    readResult := dfs.readSectorsRaw(sector, 32, @benchBuf)
-    sector += 32
-  tElapsed := getct() - tStart
+      rate := (BENCH_X32_READS * BENCH_X32_SECTORS * SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
+      serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
-  rate := (25 * 32 * 512 * (msPerTick / 10)) / (tElapsed / 10)
-  serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
+      ' Multi-sector x64
+      serial.fstr0(@"Multi-sector x64 (16 reads)... ")
+      sector := BENCH_SECTOR_BASE
+      tStart := getct()
+      repeat BENCH_X64_READS
+        readResult := dfs.readSectorsRaw(sector, BENCH_X64_SECTORS, @benchBuf)
+        sector += BENCH_X64_SECTORS
+      tElapsed := getct() - tStart
 
-  ' Multi-sector x64
-  serial.fstr0(@"Multi-sector x64 (16 reads)... ")
-  sector := BENCH_SECTOR_BASE
-  tStart := getct()
-  repeat 16
-    readResult := dfs.readSectorsRaw(sector, 64, @benchBuf)
-    sector += 64
-  tElapsed := getct() - tStart
+      rate := (BENCH_X64_READS * BENCH_X64_SECTORS * SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
+      serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
-  rate := (16 * 64 * 512 * (msPerTick / 10)) / (tElapsed / 10)
-  serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
+      serial.fstr0(@"\r\nBenchmark complete.\r\n")
 
-  serial.fstr0(@"\r\nBenchmark complete.\r\n")
-
-  if (not wasMounted)
-    stop_driver()
+    if (not wasMounted)
+      stop_driver()
 
 
 PUB do_touch() | p_name, p_leaf, has_path, handle
@@ -1830,38 +1779,29 @@ PUB do_touch() | p_name, p_leaf, has_path, handle
 
   if (ntokens <> 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
-    if (not check_flash_mount())
-      return
+  elseif (activeDev == ACTIVE_FLASH)
+    if (check_flash_mount())
+      p_name := token(1)
+      handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_WRITE)
+      if (handle >= 0)
+        dfs.closeFileHandle(handle)
+        serial.fstr1(@"Created: %s\r\n", p_name)
+      else
+        serial.fstr1(@"Failed to create: %s\r\n", p_name)
+  elseif (check_sd_mount())
+    ' SD touch
     p_name := token(1)
-    handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_WRITE)
-    if (handle >= 0)
-      dfs.closeFileHandle(handle)
-      serial.fstr1(@"Created: %s\r\n", p_name)
-    else
-      serial.fstr1(@"Failed to create: %s\r\n", p_name)
-    return
+    p_leaf, has_path := navigate_to_parent(p_name)
+    if p_leaf <> 0
+      handle := dfs.createFileNew(dfs.DEV_SD, p_leaf)
+      if (handle >= 0)
+        dfs.closeFileHandle(handle)
+        serial.fstr1(@"Created: %s\r\n", p_leaf)
+      else
+        serial.fstr1(@"Failed to create: %s\r\n", p_leaf)
 
-  ' SD touch
-  if (not check_sd_mount())
-    return
-
-  p_name := token(1)
-  p_leaf, has_path := navigate_to_parent(p_name)
-  if p_leaf == 0
-    return
-
-  handle := dfs.createFileNew(dfs.DEV_SD, p_leaf)
-  if (handle >= 0)
-    dfs.closeFileHandle(handle)
-    serial.fstr1(@"Created: %s\r\n", p_leaf)
-  else
-    serial.fstr1(@"Failed to create: %s\r\n", p_leaf)
-
-  if has_path
-    nav_back(p_name)
+    if has_path
+      nav_back(p_name)
 
 
 PUB do_label() | p_label
@@ -1870,26 +1810,19 @@ PUB do_label() | p_label
 
   if (ntokens > 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Volume labels are SD-only. Use 'dev sd' first.\r\n")
-    return
-
-  if (not check_sd_mount())
-    return
-
-  if (ntokens == 1)
-    serial.fstr1(@"Volume label: %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
-  else
-    p_label := token(1)
-    if strsize(p_label) > 11
-      serial.fstr0(@"Label too long (max 11 characters)\r\n")
-      return
-    if dfs.setVolumeLabel(dfs.DEV_SD, p_label) == dfs.SUCCESS
-      serial.fstr1(@"Volume label set to: %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
+  elseif (check_sd_mount())
+    if (ntokens == 1)
+      serial.fstr1(@"Volume label: %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
     else
-      serial.fstr0(@"Failed to set volume label\r\n")
+      p_label := token(1)
+      if strsize(p_label) > LABEL_MAX_LENGTH
+        serial.fstr0(@"Label too long (max 11 characters)\r\n")
+      elseif dfs.setVolumeLabel(dfs.DEV_SD, p_label) == dfs.SUCCESS
+        serial.fstr1(@"Volume label set to: %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
+      else
+        serial.fstr0(@"Failed to set volume label\r\n")
 
 
 PUB do_alias()
@@ -1919,23 +1852,17 @@ PUB do_tree() | p_path
 
   if (ntokens > 2)
     bad_syntax()
-    return
-
-  if (activeDev == ACTIVE_FLASH)
+  elseif (activeDev == ACTIVE_FLASH)
     serial.fstr0(@"Flash uses flat namespace. Use 'dir' for file list.\r\n")
-    return
+  elseif (check_sd_mount())
+    if (ntokens == 2)
+      p_path := token(1)
+    else
+      p_path := @"."
 
-  if (not check_sd_mount())
-    return
-
-  if (ntokens == 2)
-    p_path := token(1)
-  else
-    p_path := @"."
-
-  serial.fstr0(@"\r\n")
-  tree_walk(p_path, 0)
-  serial.fstr0(@"\r\n")
+    serial.fstr0(@"\r\n")
+    tree_walk(p_path, 0)
+    serial.fstr0(@"\r\n")
 
 
 PUB not_implemented()
@@ -1952,18 +1879,18 @@ PRI start_driver() : status
 ' Initialize driver and track state
 
   if (driverStarted)
-    return 0
-  status := start_driver()
-  if status >= 0
-    driverStarted := true
-  return status
+    status := 0
+  else
+    status := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status >= 0
+      driverStarted := true
 
 
 PRI stop_driver()
 
 ' Stop driver and track state
 
-  stop_driver()
+  dfs.stop()
   driverStarted := false
 
 
@@ -1977,10 +1904,9 @@ PRI write_sd_demo_file(p_name, p_content) | handle, len
   handle := dfs.createFileNew(dfs.DEV_SD, p_name)
   if (handle < 0)
     serial.fstr0(@"    ERROR: Could not create file\r\n")
-    return
-
-  dfs.writeHandle(handle, p_content, len)
-  dfs.closeFileHandle(handle)
+  else
+    dfs.writeHandle(handle, p_content, len)
+    dfs.closeFileHandle(handle)
 
 
 PRI write_flash_demo_file(p_name, p_content) | handle, len
@@ -1993,10 +1919,9 @@ PRI write_flash_demo_file(p_name, p_content) | handle, len
   handle := dfs.open(dfs.DEV_FLASH, p_name, dfs.FILEMODE_WRITE)
   if (handle < 0)
     serial.fstr0(@"    ERROR: Could not create file\r\n")
-    return
-
-  dfs.writeHandle(handle, p_content, len)
-  dfs.closeFileHandle(handle)
+  else
+    dfs.writeHandle(handle, p_content, len)
+    dfs.closeFileHandle(handle)
 
 
 PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
@@ -2013,17 +1938,15 @@ PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
   if slash_pos < 0
     p_leaf := p_path
     has_path := false
-    return
+  else
+    p_leaf := p_path + slash_pos + 1
+    byte[p_path + slash_pos] := 0
 
-  p_leaf := p_path + slash_pos + 1
-  byte[p_path + slash_pos] := 0
-
-  if dfs.changeDirectory(dfs.DEV_SD, p_path) <> dfs.SUCCESS
-    serial.fstr1(@"Directory not found: %s\r\n", p_path)
-    p_leaf := 0
-    return
-
-  has_path := true
+    if dfs.changeDirectory(dfs.DEV_SD, p_path) <> dfs.SUCCESS
+      serial.fstr1(@"Directory not found: %s\r\n", p_path)
+      p_leaf := 0
+    else
+      has_path := true
 
 
 PRI path_leaf(p_path) : p_leaf | slash_pos, i
@@ -2061,55 +1984,53 @@ PRI tree_walk(p_path, depth) | dh, status, p_name, attrib, i, name_buf[4]
 
 ' Recursively display directory tree (SD only).
 
-  if depth > 8
+  if depth > TREE_MAX_DEPTH
     tree_indent(depth)
     serial.fstr0(@"... (max depth)\r\n")
-    return
-
-  dh := dfs.openDirectory(dfs.DEV_SD, p_path)
-  if dh < 0
-    if depth == 0
-      serial.fstr1(@"Cannot open: %s\r\n", p_path)
-    return
-
-  if depth == 0
-    if strcomp(p_path, @".")
-      serial.fstr1(@"%s\r\n", @cwd)
+  else
+    dh := dfs.openDirectory(dfs.DEV_SD, p_path)
+    if dh < 0
+      if depth == 0
+        serial.fstr1(@"Cannot open: %s\r\n", p_path)
     else
-      serial.fstr1(@"%s\r\n", p_path)
+      if depth == 0
+        if strcomp(p_path, @".")
+          serial.fstr1(@"%s\r\n", @cwd)
+        else
+          serial.fstr1(@"%s\r\n", p_path)
 
-  repeat
-    status := dfs.readDirectoryHandle(dh)
-    if status == 0
-      quit
+      repeat
+        status := dfs.readDirectoryHandle(dh)
+        if status == 0
+          quit
 
-    p_name := dfs.fileName()
-    if byte[p_name] == 0
-      next
+        p_name := dfs.fileName()
+        if byte[p_name] == 0
+          next
 
-    if strcomp(p_name, @".") or strcomp(p_name, @"..")
-      next
+        if strcomp(p_name, @".") or strcomp(p_name, @"..")
+          next
 
-    attrib := dfs.attributes()
+        attrib := dfs.attributes()
 
-    if attrib & $10
-      tree_indent(depth + 1)
-      serial.fstr1(@"%s/\r\n", p_name)
-      bytefill(@name_buf, 0, 16)
-      bytemove(@name_buf, p_name, strsize(p_name) <# 15)
+        if attrib & ATTR_DIRECTORY
+          tree_indent(depth + 1)
+          serial.fstr1(@"%s/\r\n", p_name)
+          bytefill(@name_buf, 0, TREE_NAME_BUF_SIZE)
+          bytemove(@name_buf, p_name, strsize(p_name) <# TREE_NAME_MAX_COPY)
+          dfs.closeDirectoryHandle(dh)
+          if dfs.changeDirectory(dfs.DEV_SD, @name_buf) == dfs.SUCCESS
+            tree_walk(@".", depth + 1)
+            dfs.changeDirectory(dfs.DEV_SD, @"..")
+          dh := dfs.openDirectory(dfs.DEV_SD, p_path)
+          if dh < 0
+            quit
+          tree_skip_to(dh, @name_buf)
+        else
+          tree_indent(depth + 1)
+          serial.fstr1(@"%s\r\n", p_name)
+
       dfs.closeDirectoryHandle(dh)
-      if dfs.changeDirectory(dfs.DEV_SD, @name_buf) == dfs.SUCCESS
-        tree_walk(@".", depth + 1)
-        dfs.changeDirectory(dfs.DEV_SD, @"..")
-      dh := dfs.openDirectory(dfs.DEV_SD, p_path)
-      if dh < 0
-        return
-      tree_skip_to(dh, @name_buf)
-    else
-      tree_indent(depth + 1)
-      serial.fstr1(@"%s\r\n", p_name)
-
-  dfs.closeDirectoryHandle(dh)
 
 
 PRI tree_indent(depth) | i
@@ -2120,25 +2041,27 @@ PRI tree_indent(depth) | i
     serial.fstr0(@"  ")
 
 
-PRI tree_skip_to(dh, p_past_name) | status, p_name
+PRI tree_skip_to(dh, p_past_name) | status, p_name, done
 
 ' Advance directory handle past the named entry.
 
-  repeat
+  done := false
+  repeat while not done
     status := dfs.readDirectoryHandle(dh)
     if status == 0
-      return
-    p_name := dfs.fileName()
-    if strcomp(p_name, p_past_name)
-      return
+      done := true
+    else
+      p_name := dfs.fileName()
+      if strcomp(p_name, p_past_name)
+        done := true
 
 
 PRI show_sd_summary() | total_mb, size_gb
 
 ' Show brief card summary after mount
 
-  total_mb := dfs.cardSizeSectors() / 2048
-  size_gb := (total_mb + 953) / 954
+  total_mb := dfs.cardSizeSectors() / SECTORS_PER_MB
+  size_gb := (total_mb + GB_ROUND_ADD) / GB_ROUND_DIV
 
   serial.fstr1(@"  Volume: %s\r\n", dfs.volumeLabel(dfs.DEV_SD))
   serial.fstr2(@"  Size: %d MB (%dGB)\r\n", total_mb, size_gb)
@@ -2168,24 +2091,22 @@ PRI go_up_directory() | i, len
 ' Navigate up one directory level (SD)
 
   len := strsize(@cwd)
-  if (len <= 1)
-    return
-
-  i := len - 1
-  if (cwd[i] == "/")
-    i--
-
-  repeat while i > 0
+  if (len > 1)
+    i := len - 1
     if (cwd[i] == "/")
-      quit
-    i--
+      i--
 
-  if (i == 0)
-    bytemove(@cwd, @"/", 2)
-  else
-    cwd[i + 1] := 0
+    repeat while i > 0
+      if (cwd[i] == "/")
+        quit
+      i--
 
-  dfs.changeDirectory(dfs.DEV_SD, @"..")
+    if (i == 0)
+      bytemove(@cwd, @"/", 2)
+    else
+      cwd[i + 1] := 0
+
+    dfs.changeDirectory(dfs.DEV_SD, @"..")
 
 
 PRI update_cwd(p_path) | len, cwd_len
@@ -2195,13 +2116,11 @@ PRI update_cwd(p_path) | len, cwd_len
   cwd_len := strsize(@cwd)
   len := strsize(p_path)
 
-  if (cwd_len + len + 2 >= MAX_PATH)
-    return
+  if (cwd_len + len + 2 < MAX_PATH)
+    if (cwd[cwd_len - 1] <> "/")
+      cwd[cwd_len++] := "/"
 
-  if (cwd[cwd_len - 1] <> "/")
-    cwd[cwd_len++] := "/"
-
-  bytemove(@cwd + cwd_len, p_path, len + 1)
+    bytemove(@cwd + cwd_len, p_path, len + 1)
 
 
 PRI bad_syntax()
@@ -2220,14 +2139,14 @@ PRI partType(^dfs.mbr_partition_t p) : value
 '
 ' @param p - Pointer to MBR partition entry struct
 ' @returns value - Partition type code
-  return p.partType
+  value := p.partType
 
 PRI partLbaStart(^dfs.mbr_partition_t p) : value
 ' Get LBA start sector from MBR partition entry.
 '
 ' @param p - Pointer to MBR partition entry struct
 ' @returns value - First sector of partition (LBA)
-  return p.lbaStart
+  value := p.lbaStart
 
 ' VBR accessor
 
@@ -2237,7 +2156,7 @@ PRI vbrOemNameByte(^dfs.vbr_t p, idx) : value
 ' @param p - Pointer to VBR struct
 ' @param idx - Byte index within OEM name (0-7)
 ' @returns value - OEM name byte at index
-  return p.oemName[idx]
+  value := p.oemName[idx]
 
 
 CON { shared utility methods }
@@ -2248,9 +2167,9 @@ PRI confirmYN(p_prompt) : confirmed | c
 ' Prompt user for y/n confirmation with 10-second timeout
 
   serial.fstr1(@"%s (y/N)? \r", p_prompt)
-  c := serial.rxtime(10_000)
+  c := serial.rxtime(CONFIRM_TIMEOUT_MS)
   serial.tx(serial.CRSR_X)
-  serial.tx(strsize(p_prompt) + 8)
+  serial.tx(strsize(p_prompt) + CONFIRM_SUFFIX_LEN)
   if (c == "y" or c == "Y")
     serial.fstr0(@"yes\r\n")
     confirmed := true
@@ -2266,12 +2185,14 @@ PRI lookupMID(mid) : p_name | p, entryMID
   p := @midTable
   repeat
     entryMID := WORD[p]
-    if entryMID == $00
-      BYTE[@midFmtBuf + 5] := hexDigit(mid >> 4)
-      BYTE[@midFmtBuf + 6] := hexDigit(mid & $0F)
-      return @midFmtBuf
-    if entryMID == mid
-      return @@WORD[p + 2]
+    if entryMID == 0
+      BYTE[@midFmtBuf + MID_HEX_OFFSET] := hexDigit(mid >> 4)
+      BYTE[@midFmtBuf + MID_HEX_OFFSET + 1] := hexDigit(mid & NIBBLE_MASK)
+      p_name := @midFmtBuf
+      quit
+    elseif entryMID == mid
+      p_name := @@WORD[p + 2]
+      quit
     p += 4
 
 
@@ -2279,50 +2200,52 @@ PRI hexDigit(nibble) : ch
 
 ' Convert 0-15 to ASCII hex digit
 
-  if nibble < 10
-    return "0" + nibble
-  return "A" + nibble - 10
+  if nibble < HEX_ALPHA_BASE
+    ch := "0" + nibble
+  else
+    ch := "A" + nibble - HEX_ALPHA_BASE
 
 
 PRI getCardType(ocr, sizeMB) : p_type
 
 ' Determine card type from OCR CCS bit and capacity.
 
-  if (ocr & (1 << 30)) == 0
-    return @ctSDSC
-  if sizeMB > 32768
-    return @ctSDXC
-  return @ctSDHC
+  if (ocr & (1 << OCR_CCS_BIT)) == 0
+    p_type := @ctSDSC
+  elseif sizeMB > SDSC_MAX_MB
+    p_type := @ctSDXC
+  else
+    p_type := @ctSDHC
 
 
 PRI getSDSpecVersion(^dfs.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
 
 ' Decode SD spec version from SCR register struct.
 
-  sdSpec := p_scr.sdSpec & $0F
+  sdSpec := p_scr.sdSpec & NIBBLE_MASK
   spec3 := (p_scr.sdSpec3Ext >> 7) & 1
   spec4 := (p_scr.sdSpec3Ext >> 2) & 1
-  specX := ((p_scr.sdSpec3Ext & $03) << 2) | ((p_scr.sdSpecXLo >> 6) & $03)
+  specX := ((p_scr.sdSpec3Ext & TWO_BIT_MASK) << 2) | ((p_scr.sdSpecXLo >> 6) & TWO_BIT_MASK)
 
+  p_version := @"SD ??"
   if sdSpec < 2
-    return @"SD 1.x"
-  if spec3 == 0
-    return @"SD 2.0"
-  if spec4 == 0
-    return @"SD 3.x"
-  if specX == 0
-    return @"SD 4.x"
-  if specX == 1
-    return @"SD 5.x"
-  if specX == 2
-    return @"SD 6.x"
-  if specX == 3
-    return @"SD 7.x"
-  if specX == 4
-    return @"SD 8.x"
-  if specX == 5
-    return @"SD 9.x"
-  return @"SD ??"
+    p_version := @"SD 1.x"
+  elseif spec3 == 0
+    p_version := @"SD 2.0"
+  elseif spec4 == 0
+    p_version := @"SD 3.x"
+  elseif specX == 0
+    p_version := @"SD 4.x"
+  elseif specX == 1
+    p_version := @"SD 5.x"
+  elseif specX == 2
+    p_version := @"SD 6.x"
+  elseif specX == 3
+    p_version := @"SD 7.x"
+  elseif specX == 4
+    p_version := @"SD 8.x"
+  elseif specX == 5
+    p_version := @"SD 9.x"
 
 
 PRI detectFilesystem() : p_fsName | pType
@@ -2331,39 +2254,36 @@ PRI detectFilesystem() : p_fsName | pType
 
   dfs.readSectorRaw(0, @buf2)
 
-  if WORD[@buf2 + $1FE] <> MBR_SIGNATURE
-    return @fsUnknown
+  p_fsName := @fsUnknown
+  if WORD[@buf2 + MBR_SIG_OFFSET] == MBR_SIGNATURE
+    pPart := @buf2 + MBR_PART1_OFFSET
+    pType := partType(pPart)
 
-  pPart := @buf2 + $1BE
-  pType := partType(pPart)
-
-  case pType
-    $00 : return @fsEmpty
-    $01 : return @fsFAT12
-    $04, $06, $0E : return @fsFAT16
-    $0B, $0C : return @fsFAT32
-    $07 : return resolveType07()
-    $83 : return @fsLinux
-    $EE : return @fsGPT
-    other : return @fsUnknown
+    case pType
+      PART_TYPE_EMPTY : p_fsName := @fsEmpty
+      PART_TYPE_FAT12 : p_fsName := @fsFAT12
+      PART_TYPE_FAT16_SM, PART_TYPE_FAT16_LG, PART_TYPE_FAT16_LBA : p_fsName := @fsFAT16
+      PART_TYPE_FAT32_CHS, PART_TYPE_FAT32_LBA : p_fsName := @fsFAT32
+      PART_TYPE_NTFS_EXFAT : p_fsName := resolveType07()
+      PART_TYPE_LINUX : p_fsName := @fsLinux
+      PART_TYPE_GPT : p_fsName := @fsGPT
 
 
 PRI resolveType07() : p_fsName | partStart
 
 ' Distinguish exFAT from NTFS for partition type $07.
 
+  p_fsName := @fsUnknown
   partStart := partLbaStart(pPart)
-  if partStart == 0
-    return @fsUnknown
+  if partStart <> 0
+    dfs.readSectorRaw(partStart, @buf2)
+    pVBR := @buf2
 
-  dfs.readSectorRaw(partStart, @buf2)
-  pVBR := @buf2
-
-  if vbrOemNameByte(pVBR, 0) == "E" AND vbrOemNameByte(pVBR, 1) == "X" AND ...
-     vbrOemNameByte(pVBR, 2) == "F" AND vbrOemNameByte(pVBR, 3) == "A" AND vbrOemNameByte(pVBR, 4) == "T"
-    return @fsExFAT
-
-  return @fsNTFS
+    if vbrOemNameByte(pVBR, 0) == "E" AND vbrOemNameByte(pVBR, 1) == "X" AND ...
+       vbrOemNameByte(pVBR, 2) == "F" AND vbrOemNameByte(pVBR, 3) == "A" AND vbrOemNameByte(pVBR, 4) == "T"
+      p_fsName := @fsExFAT
+    else
+      p_fsName := @fsNTFS
 
 
 PRI lcstr(p_str) : p_lcstr | c
@@ -2375,7 +2295,7 @@ PRI lcstr(p_str) : p_lcstr | c
   repeat strsize(p_str)
     c := byte[p_str]
     if (c >= "A") && (c <= "Z")
-      byte[p_str] := c + 32
+      byte[p_str] := c + CASE_OFFSET
     ++p_str
 
 
@@ -2399,32 +2319,31 @@ PRI parse() : count | p
   longfill(@tkPtrs, 0, CLI_MAX_TKNS)
   ntokens := 0
 
-  if (cliIdx == 0)
-    return 0
+  if (cliIdx <> 0)
+    p := @cliBuf
 
-  p := @cliBuf
-
-  repeat while (ntokens < CLI_MAX_TKNS)
-    repeat while (byte[p] == " ") or (byte[p] == 9)
-      p++
-    if (byte[p] == 0)
-      quit
-    tkPtrs[ntokens++] := p
-    repeat while (byte[p] <> 0)
-      if (byte[p] == " ") or (byte[p] == 9)
-        byte[p++] := 0
+    repeat while (ntokens < CLI_MAX_TKNS)
+      repeat while (byte[p] == " ") or (byte[p] == ASCII_TAB)
+        p++
+      if (byte[p] == 0)
         quit
-      p++
+      tkPtrs[ntokens++] := p
+      repeat while (byte[p] <> 0)
+        if (byte[p] == " ") or (byte[p] == ASCII_TAB)
+          byte[p++] := 0
+          quit
+        p++
 
-  return ntokens
+  count := ntokens
 
 
 PRI token(idx) : p_str
 
 ' Returns pointer to parsed token at index
 
+  p_str := 0
   if (idx >= 0) and (idx < CLI_MAX_TKNS)
-    return tkPtrs[idx]
+    p_str := tkPtrs[idx]
 
 
 PRI idCommand(pCmdStr) : eCmdId | nIdx, pEntry, pStr

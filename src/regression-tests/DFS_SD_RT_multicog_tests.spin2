@@ -32,6 +32,7 @@ CON
      NUM_WORKER_COGS = 3             ' Number of concurrent test workers
      STACK_SIZE      = 128           ' Stack size per worker cog (longs)
      ITERATIONS      = 10            ' Number of iterations per stress test
+     WORKER_BUF_SIZE = 64            ' Read buffer size per worker cog (bytes)
 
      ' Worker status codes
      STATUS_IDLE      = 0
@@ -55,7 +56,7 @@ testContent     BYTE    "Multi-cog test content 12345", 0
 worker_stacks   LONG    0[NUM_WORKER_COGS * STACK_SIZE]
 
 ' Read buffers for worker cogs (separate from stacks!)
-worker_buffers  BYTE    0[NUM_WORKER_COGS * 64]   ' 64 bytes per worker
+worker_buffers  BYTE    0[NUM_WORKER_COGS * WORKER_BUF_SIZE]
 worker_buffers_guard BYTE 0[16]
 
 ' Worker status and results (shared between cogs)
@@ -116,180 +117,178 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
 
     if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card - aborting multi-cog tests!")
-        debug("END_SESSION")
-        return
+    else
+        ' Create test files for worker cogs to read
+        createTestFiles()
 
-    ' Create test files for worker cogs to read
-    createTestFiles()
+        ' ----------------------------------
+        ' TEST GROUP: Multi-Cog Singleton Verification
+        ' ----------------------------------
+        utils.startTestGroup(@"Multi-Cog Singleton - All cogs see same driver")
 
-    ' ----------------------------------
-    ' TEST GROUP: Multi-Cog Singleton Verification
-    ' ----------------------------------
-    utils.startTestGroup(@"Multi-Cog Singleton - All cogs see same driver")
+        utils.startTest(@"Launch worker cogs to call init()")
+        test_phase := 1   ' Singleton test phase
+        sync_barrier := 0
+        utils.initGuard(@worker_buffers_guard)
 
-    utils.startTest(@"Launch worker cogs to call init()")
-    test_phase := 1   ' Singleton test phase
-    sync_barrier := 0
-    utils.initGuard(@worker_buffers_guard)
+        ' Launch worker cogs
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            worker_status[i] := STATUS_RUNNING
+            launched_cogs[i] := cogspin(NEWCOG, worker_singleton_test(i), @worker_stacks[i * STACK_SIZE])
+            if launched_cogs[i] == -1
+                debug("  FAIL: Could not launch worker cog ", udec_(i))
+                worker_status[i] := STATUS_FAIL
 
-    ' Launch worker cogs
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_RUNNING
-        launched_cogs[i] := cogspin(NEWCOG, worker_singleton_test(i), @worker_stacks[i * STACK_SIZE])
-        if launched_cogs[i] == -1
-            debug("  FAIL: Could not launch worker cog ", udec_(i))
-            worker_status[i] := STATUS_FAIL
+        ' Release workers
+        sync_barrier := 1
+        utils.recordPass()  ' Workers launched successfully
 
-    ' Release workers
-    sync_barrier := 1
-    utils.recordPass()  ' Workers launched successfully
+        ' Wait for all workers to complete
+        waitForWorkers()
+        utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
 
-    ' Wait for all workers to complete
-    waitForWorkers()
-    utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
+        ' Verify all workers got the same cog ID
+        utils.startTest(@"All workers see same cog ID (singleton)")
+        allSame := true
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            if worker_cogid[i] <> firstCogId
+                allSame := false
+                debug("  Worker ", udec_(i), " got cog ID ", sdec_(worker_cogid[i]), " (expected ", udec_(firstCogId), ")")
+        utils.evaluateBool(allSame, @"All workers see same cog ID", true)
 
-    ' Verify all workers got the same cog ID
-    utils.startTest(@"All workers see same cog ID (singleton)")
-    allSame := true
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if worker_cogid[i] <> firstCogId
-            allSame := false
-            debug("  Worker ", udec_(i), " got cog ID ", sdec_(worker_cogid[i]), " (expected ", udec_(firstCogId), ")")
-    utils.evaluateBool(allSame, @"All workers see same cog ID", true)
+        utils.startTest(@"All workers report success")
+        totalErrors := 0
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            if worker_status[i] <> STATUS_PASS
+                totalErrors++
+                debug("  Worker ", udec_(i), " status: ", sdec_(worker_status[i]))
+        utils.evaluateSingleValue(totalErrors, @"Worker failures", 0)
 
-    utils.startTest(@"All workers report success")
-    totalErrors := 0
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if worker_status[i] <> STATUS_PASS
-            totalErrors++
-            debug("  Worker ", udec_(i), " status: ", sdec_(worker_status[i]))
-    utils.evaluateSingleValue(totalErrors, @"Worker failures", 0)
+        ' Stop worker cogs
+        stopWorkerCogs()
 
-    ' Stop worker cogs
-    stopWorkerCogs()
+        ' ----------------------------------
+        ' TEST GROUP: Concurrent Read Operations
+        ' ----------------------------------
+        utils.startTestGroup(@"Concurrent Read Operations")
 
-    ' ----------------------------------
-    ' TEST GROUP: Concurrent Read Operations
-    ' ----------------------------------
-    utils.startTestGroup(@"Concurrent Read Operations")
+        utils.startTest(@"Launch workers for concurrent file reads")
+        test_phase := 2   ' Concurrent read phase
+        sync_barrier := 0
+        utils.initGuard(@worker_buffers_guard)
 
-    utils.startTest(@"Launch workers for concurrent file reads")
-    test_phase := 2   ' Concurrent read phase
-    sync_barrier := 0
-    utils.initGuard(@worker_buffers_guard)
+        ' Reset worker status
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            worker_status[i] := STATUS_RUNNING
+            worker_result[i] := 0
+            worker_errors[i] := 0
 
-    ' Reset worker status
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_RUNNING
-        worker_result[i] := 0
-        worker_errors[i] := 0
+        ' Launch worker cogs
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            launched_cogs[i] := cogspin(NEWCOG, worker_read_test(i), @worker_stacks[i * STACK_SIZE])
+            if launched_cogs[i] == -1
+                debug("  FAIL: Could not launch worker cog ", udec_(i))
+                worker_status[i] := STATUS_FAIL
 
-    ' Launch worker cogs
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        launched_cogs[i] := cogspin(NEWCOG, worker_read_test(i), @worker_stacks[i * STACK_SIZE])
-        if launched_cogs[i] == -1
-            debug("  FAIL: Could not launch worker cog ", udec_(i))
-            worker_status[i] := STATUS_FAIL
+        ' Release workers
+        sync_barrier := 1
+        utils.recordPass()  ' Workers launched successfully
 
-    ' Release workers
-    sync_barrier := 1
-    utils.recordPass()  ' Workers launched successfully
+        ' Wait for all workers to complete
+        waitForWorkers()
+        utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
 
-    ' Wait for all workers to complete
-    waitForWorkers()
-    utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
+        ' NOTE: Due to driver limitation (one open file at a time), interleaved
+        ' open/read/close operations may fail when another cog's openFile() resets
+        ' file state. We verify that operations COMPLETE (no deadlock/crash) and
+        ' that at least ONE worker succeeds (proves the lock mechanism works).
+        utils.startTest(@"Concurrent operations completed (lock mechanism works)")
+        totalErrors := 0
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            if worker_status[i] == STATUS_PASS
+                debug("  Worker ", udec_(i), ": read ", udec_(worker_result[i]), " bytes OK")
+            else
+                debug("  Worker ", udec_(i), ": status=", sdec_(worker_status[i]), " (expected due to shared file state)")
+                totalErrors++
+        ' At least one worker should succeed to prove lock serialization works
+        utils.evaluateRange(totalErrors, @"Failed workers (0-2 acceptable)", 0, NUM_WORKER_COGS - 1)
 
-    ' NOTE: Due to driver limitation (one open file at a time), interleaved
-    ' open/read/close operations may fail when another cog's openFile() resets
-    ' file state. We verify that operations COMPLETE (no deadlock/crash) and
-    ' that at least ONE worker succeeds (proves the lock mechanism works).
-    utils.startTest(@"Concurrent operations completed (lock mechanism works)")
-    totalErrors := 0
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if worker_status[i] == STATUS_PASS
-            debug("  Worker ", udec_(i), ": read ", udec_(worker_result[i]), " bytes OK")
-        else
-            debug("  Worker ", udec_(i), ": status=", sdec_(worker_status[i]), " (expected due to shared file state)")
-            totalErrors++
-    ' At least one worker should succeed to prove lock serialization works
-    utils.evaluateRange(totalErrors, @"Failed workers (0-2 acceptable)", 0, NUM_WORKER_COGS - 1)
+        ' Stop worker cogs
+        stopWorkerCogs()
 
-    ' Stop worker cogs
-    stopWorkerCogs()
+        ' ----------------------------------
+        ' TEST GROUP: Stress Test - Rapid Sequential Access
+        ' ----------------------------------
+        utils.startTestGroup(@"Stress Test - Rapid Sequential Access")
 
-    ' ----------------------------------
-    ' TEST GROUP: Stress Test - Rapid Sequential Access
-    ' ----------------------------------
-    utils.startTestGroup(@"Stress Test - Rapid Sequential Access")
+        utils.startTest(@"Launch workers for stress test")
+        test_phase := 3   ' Stress test phase
+        sync_barrier := 0
+        utils.initGuard(@worker_buffers_guard)
 
-    utils.startTest(@"Launch workers for stress test")
-    test_phase := 3   ' Stress test phase
-    sync_barrier := 0
-    utils.initGuard(@worker_buffers_guard)
+        ' Reset worker status
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            worker_status[i] := STATUS_RUNNING
+            worker_result[i] := 0
+            worker_errors[i] := 0
 
-    ' Reset worker status
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_RUNNING
-        worker_result[i] := 0
-        worker_errors[i] := 0
+        ' Launch worker cogs
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            launched_cogs[i] := cogspin(NEWCOG, worker_stress_test(i), @worker_stacks[i * STACK_SIZE])
+            if launched_cogs[i] == -1
+                debug("  FAIL: Could not launch worker cog ", udec_(i))
+                worker_status[i] := STATUS_FAIL
 
-    ' Launch worker cogs
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        launched_cogs[i] := cogspin(NEWCOG, worker_stress_test(i), @worker_stacks[i * STACK_SIZE])
-        if launched_cogs[i] == -1
-            debug("  FAIL: Could not launch worker cog ", udec_(i))
-            worker_status[i] := STATUS_FAIL
+        ' Release workers
+        sync_barrier := 1
+        utils.recordPass()  ' Workers launched successfully
 
-    ' Release workers
-    sync_barrier := 1
-    utils.recordPass()  ' Workers launched successfully
+        ' Wait for all workers to complete
+        waitForWorkers()
+        utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
 
-    ' Wait for all workers to complete
-    waitForWorkers()
-    utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
+        ' NOTE: Stress test verifies lock mechanism under load. Due to single-file
+        ' limitation, some operations fail when interleaved, but this proves the
+        ' lock prevents crashes and operations complete safely.
+        utils.startTest(@"Stress test completed (no crashes, lock works under load)")
+        totalErrors := 0
+        repeat i from 0 to NUM_WORKER_COGS - 1
+            debug("  Worker ", udec_(i), ": ", udec_(worker_result[i]), " iterations, ", udec_(worker_errors[i]), " errors")
+            if worker_result[i] < ITERATIONS
+                totalErrors++   ' Worker didn't complete all iterations
+        ' All workers should complete all iterations (even if some ops fail)
+        utils.evaluateSingleValue(totalErrors, @"Workers that didn't complete", 0)
 
-    ' NOTE: Stress test verifies lock mechanism under load. Due to single-file
-    ' limitation, some operations fail when interleaved, but this proves the
-    ' lock prevents crashes and operations complete safely.
-    utils.startTest(@"Stress test completed (no crashes, lock works under load)")
-    totalErrors := 0
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        debug("  Worker ", udec_(i), ": ", udec_(worker_result[i]), " iterations, ", udec_(worker_errors[i]), " errors")
-        if worker_result[i] < ITERATIONS
-            totalErrors++   ' Worker didn't complete all iterations
-    ' All workers should complete all iterations (even if some ops fail)
-    utils.evaluateSingleValue(totalErrors, @"Workers that didn't complete", 0)
+        ' Stop worker cogs
+        stopWorkerCogs()
 
-    ' Stop worker cogs
-    stopWorkerCogs()
+        ' ----------------------------------
+        ' TEST GROUP: Per-Cog Error Storage
+        ' ----------------------------------
+        utils.startTestGroup(@"Per-Cog Error Storage")
 
-    ' ----------------------------------
-    ' TEST GROUP: Per-Cog Error Storage
-    ' ----------------------------------
-    utils.startTestGroup(@"Per-Cog Error Storage")
+        utils.startTest(@"error() returns value for calling cog")
+        ' This tests that error() uses COGID() correctly
+        result := dfs.error()  ' Should return 0 (SUCCESS) or last error
+        debug("  Main cog error(): ", sdec_(result))
+        utils.recordPass()
 
-    utils.startTest(@"error() returns value for calling cog")
-    ' This tests that error() uses COGID() correctly
-    result := dfs.error()  ' Should return 0 (SUCCESS) or last error
-    debug("  Main cog error(): ", sdec_(result))
-    utils.recordPass()
+        ' ----------------------------------
+        ' TEST GROUP: Cleanup
+        ' ----------------------------------
+        utils.startTestGroup(@"Cleanup")
 
-    ' ----------------------------------
-    ' TEST GROUP: Cleanup
-    ' ----------------------------------
-    utils.startTestGroup(@"Cleanup")
+        ' Clean up test files
+        cleanupTestFiles()
 
-    ' Clean up test files
-    cleanupTestFiles()
+        utils.startTest(@"unmount() succeeds")
+        result := dfs.unmount(dfs.DEV_SD)
+        utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
 
-    utils.startTest(@"unmount() succeeds")
-    result := dfs.unmount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
-
-    utils.startTest(@"stop() releases resources")
-    dfs.stop()
-    debug("  stop(): completed")
-    utils.recordPass()
+        utils.startTest(@"stop() releases resources")
+        dfs.stop()
+        debug("  stop(): completed")
+        utils.recordPass()
 
     ' ----------------------------------
     ' Summary
@@ -338,17 +337,16 @@ PRI worker_read_test(worker_id) | handle, bytesRead
     if handle < 0
         worker_errors[worker_id]++
         worker_status[worker_id] := STATUS_FAIL
-        return
-
-    bytesRead := readFileToBuffer(worker_id, handle)
-    worker_result[worker_id] := bytesRead
-
-    dfs.closeFileHandle(handle)
-
-    if bytesRead > 0 and worker_errors[worker_id] == 0
-        worker_status[worker_id] := STATUS_PASS
     else
-        worker_status[worker_id] := STATUS_FAIL
+        bytesRead := readFileToBuffer(worker_id, handle)
+        worker_result[worker_id] := bytesRead
+
+        dfs.closeFileHandle(handle)
+
+        if bytesRead > 0 and worker_errors[worker_id] == 0
+            worker_status[worker_id] := STATUS_PASS
+        else
+            worker_status[worker_id] := STATUS_FAIL
 
 PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
     '' Worker cog: Rapid open/read/close cycles
@@ -365,7 +363,7 @@ PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
             worker_errors[worker_id]++
         else
             ' Read into worker's dedicated buffer (NOT stack!)
-            bytesRead := dfs.readHandle(handle, @worker_buffers[worker_id * 64], expectedLen)
+            bytesRead := dfs.readHandle(handle, @worker_buffers[worker_id * WORKER_BUF_SIZE], expectedLen)
             if bytesRead <> expectedLen
                 worker_errors[worker_id]++
 
@@ -415,9 +413,9 @@ PRI readFileToBuffer(worker_id, handle) : bytesRead | size, toRead
     '' Read file into worker's dedicated buffer (NOT the stack!)
 
     size := dfs.fileSizeHandle(handle)
-    toRead := size <# 64  ' Limit to 64 bytes to fit in worker buffer
+    toRead := size <# WORKER_BUF_SIZE  ' Limit to buffer size
 
-    bytesRead := dfs.readHandle(handle, @worker_buffers[worker_id * 64], toRead)
+    bytesRead := dfs.readHandle(handle, @worker_buffers[worker_id * WORKER_BUF_SIZE], toRead)
 
     if bytesRead <> toRead
         worker_errors[worker_id]++

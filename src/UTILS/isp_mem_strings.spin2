@@ -20,6 +20,26 @@ CON { number-to-string buffer sizes }
   NBUF_SIZE =  48
   PBUF_SIZE = 128
 
+CON { format radix codes (non-obvious aliases) }
+
+  FMT_UNSIGNED_DEC = 11         ' unsigned decimal format code
+  FMT_FIXED_POINT  = 12         ' fixed-point decimal format code
+  FMT_FLOAT        = 99         ' floating-point format code
+
+CON { max digits per 32-bit long by radix }
+
+  MAX_DIGITS_BIN   = 32         ' binary: 32 bits
+  MAX_DIGITS_QUAT  = 16         ' quaternary (base-4): 16 digits
+  MAX_DIGITS_OCT   = 11         ' octal: 11 digits
+  MAX_DIGITS_DEC   = 10         ' decimal: 10 digits
+  MAX_DIGITS_HEX   =  8         ' hexadecimal: 8 digits
+
+CON { ASCII codes }
+
+  ASCII_QUOTE      = 34         ' double-quote character
+  MAX_BYTE_VALUE   = 255        ' maximum single-byte value
+  DPDEC_SCRATCH_SZ = 12         ' scratch buffer for decimal-point insertion
+
 DAT { number-to-string buffers (shared singleton) }
 
   nbuf    byte  0[NBUF_SIZE]
@@ -231,65 +251,64 @@ PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, c, asc, fld, digi
 '' @local pBffr - working buffer pointer
 '' @local pBffrEnd - boundary pointer (one past last writable position)
 
-  if maxLen < 1
-    return 0
-
-  idx := 0                                                     ' value index
-  pBffr := pUserBuff
-  pBffrEnd := pUserBuff + maxLen - 1                           ' reserve 1 byte for null terminator
-  repeat
-    c := byte[p_str++]
-    if (c == 0)
-      quit
-
-    elseif (c == "\")
+  nPlaced := 0                                                 ' default: nothing placed
+  if maxLen >= 1
+    idx := 0                                                   ' value index
+    pBffr := pUserBuff
+    pBffrEnd := pUserBuff + maxLen - 1                         ' reserve 1 byte for null terminator
+    repeat
       c := byte[p_str++]
-      if (c == "\")
-        sTx("\", pBffr++, pBffrEnd)
+      if (c == 0)
+        quit
+
+      elseif (c == "\")
+        c := byte[p_str++]
+        if (c == "\")
+          sTx("\", pBffr++, pBffrEnd)
+        elseif (c == "%")
+          sTx("%", pBffr++, pBffrEnd)
+        elseif (c == "q")
+          sTx(ASCII_QUOTE, pBffr++, pBffrEnd)
+        elseif (c == "b")
+          sTx(BKSP, pBffr++, pBffrEnd)
+        elseif (c == "t")
+          sTx(TAB, pBffr++, pBffrEnd)
+        elseif (c == "n")
+          sTx(LF, pBffr++, pBffrEnd)
+        elseif (c == "r")
+          sTx(CR, pBffr++, pBffrEnd)
+        elseif ((c >= "0") and (c <= "9"))
+          --p_str
+          p_str, asc, _ := get_nargs(p_str)
+          if ((asc >= 0) and (asc <= MAX_BYTE_VALUE))
+            sTx(asc, pBffr++, pBffrEnd)
+
       elseif (c == "%")
-        sTx("%", pBffr++, pBffrEnd)
-      elseif (c == "q")
-        sTx(34, pBffr++, pBffrEnd)
-      elseif (c == "b")
-        sTx(BKSP, pBffr++, pBffrEnd)
-      elseif (c == "t")
-        sTx(TAB, pBffr++, pBffrEnd)
-      elseif (c == "n")
-        sTx(LF, pBffr++, pBffrEnd)
-      elseif (c == "r")
-        sTx(CR, pBffr++, pBffrEnd)
-      elseif ((c >= "0") and (c <= "9"))
-        --p_str
-        p_str, asc, _ := get_nargs(p_str)
-        if ((asc >= 0) and (asc <= 255))
-          sTx(asc, pBffr++, pBffrEnd)
+        p_str, fld, digits := get_nargs(p_str)
+        c := byte[p_str++]
+        if (c == "f")
+          pBffr := sStr(fmt_number(long[p_args][idx++], FMT_FLOAT, digits, fld, " "), pBffr, pBffrEnd)
+        elseif (c == "d")
+          pBffr := sStr(fmt_number(long[p_args][idx++], 10, digits, fld, " "), pBffr, pBffrEnd)
+        elseif (c == "x")
+          pBffr := sStr(fmt_number(long[p_args][idx++], 16, digits, fld, " "), pBffr, pBffrEnd)
+        elseif (c == "o")
+          pBffr := sStr(fmt_number(long[p_args][idx++], 08, digits, fld, " "), pBffr, pBffrEnd)
+        elseif (c == "q")
+          pBffr := sStr(fmt_number(long[p_args][idx++], 04, digits, fld, " "), pBffr, pBffrEnd)
+        elseif (c == "b")
+          pBffr := sStr(fmt_number(long[p_args][idx++], 02, digits, fld, " "), pBffr, pBffrEnd)
+        elseif (c == "s")
+          pBffr := sStr(padstr(long[p_args][idx++], fld, " "), pBffr, pBffrEnd)
+        elseif (c == "c")
+          pBffr := sTxn(long[p_args][idx++], (abs fld) #> 1, pBffr, pBffrEnd)
 
-    elseif (c == "%")
-      p_str, fld, digits := get_nargs(p_str)
-      c := byte[p_str++]
-      if (c == "f")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 99, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "d")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 10, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "x")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 16, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "o")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 08, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "q")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 04, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "b")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 02, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "s")
-        pBffr := sStr(padstr(long[p_args][idx++], fld, " "), pBffr, pBffrEnd)
-      elseif (c == "c")
-        pBffr := sTxn(long[p_args][idx++], (abs fld) #> 1, pBffr, pBffrEnd)
+      else
+        sTx(c, pBffr++, pBffrEnd)
 
-    else
-      sTx(c, pBffr++, pBffrEnd)
-
-  pBffr := pBffr <# pBffrEnd                                  ' clamp to buffer boundary
-  byte[pBffr] := 0                                             ' place terminator
-  nPlaced := pBffr - pUserBuff
+    pBffr := pBffr <# pBffrEnd                                ' clamp to buffer boundary
+    byte[pBffr] := 0                                           ' place terminator
+    nPlaced := pBffr - pUserBuff
 
 CON { --- Internal Methods --- }
 
@@ -340,6 +359,8 @@ PRI get_nargs(p_str) : p_str1, val1, val2 | c, sign
 ' @local c - current character
 ' @local sign - sign flag for first value
 
+  val1 := 0
+  val2 := 0
   c := byte[p_str]                                              ' check for negative on first value
   if (c == "-")
     sign := -1
@@ -378,8 +399,8 @@ PUB fmt_number(value, radix, digits, width, pad) : p_str
 
   case radix
     "d", "D", 10 : p_str := padstr(dec(value, digits),      width, pad)
-    "u", "U", 11 : p_str := padstr(usdec(value, digits),    width, pad)
-    "f", "F", 12, 99 : p_str := padstr(dpdec(value, digits),    width, pad)
+    "u", "U", FMT_UNSIGNED_DEC : p_str := padstr(usdec(value, digits),    width, pad)
+    "f", "F", FMT_FIXED_POINT, FMT_FLOAT : p_str := padstr(dpdec(value, digits),    width, pad)
     "b", "B", 02 : p_str := padstr(itoa(value,  2, digits), width, pad)
     "q", "Q", 04 : p_str := padstr(itoa(value,  4, digits), width, pad)
     "o", "O", 08 : p_str := padstr(itoa(value,  8, digits), width, pad)
@@ -387,53 +408,54 @@ PUB fmt_number(value, radix, digits, width, pad) : p_str
     other        : p_str := string("?")
 
 
-PUB itoa(value, radix, digits) : p_str | sign, len, d
+PUB itoa(value, radix, digits) : p_str | sign, len, d, validRadix
 '' Convert signed integer to string
 '' -- supports radix 10, 2, 4, 8, and 16
 '' -- digits is 0 (auto size) to limit for long using radix
 
   p_str := @nbuf                                                ' point to buffer
+  validRadix := true
 
   case radix                                                    ' limit printable digits
-    02    : digits := 0 #> digits <# 32
-    04    : digits := 0 #> digits <# 16
-    08    : digits := 0 #> digits <# 11
-    10    : digits := 0 #> digits <# 10
-    16    : digits := 0 #> digits <#  8
+    02    : digits := 0 #> digits <# MAX_DIGITS_BIN
+    04    : digits := 0 #> digits <# MAX_DIGITS_QUAT
+    08    : digits := 0 #> digits <# MAX_DIGITS_OCT
+    10    : digits := 0 #> digits <# MAX_DIGITS_DEC
+    16    : digits := 0 #> digits <# MAX_DIGITS_HEX
     other :
-      return
+      validRadix := false
 
-  if ((radix == 10) && (value < 0))                             ' deal with negative decimals
-    if (value == negx)
-      sign := 2
-      value := posx
+  if validRadix
+    if ((radix == 10) && (value < 0))                           ' deal with negative decimals
+      if (value == negx)
+        sign := 2
+        value := posx
+      else
+        sign := 1
+        value := -value
     else
-      sign := 1
-      value := -value
-  else
-    sign := 0
+      sign := 0
 
-  len := 0
+    len := 0
 
-  repeat
-    d := value +// radix                                        ' get digit (1s column)
-    byte[p_str++] := (d < 10) ? d + "0" : d - 10 + "A"          ' convert to ASCII
-    value +/= radix                                             ' remove digit
-    if (digits)                                                 ' length limited?
-      if (++len == digits)                                      '  check size
-        quit
-    else
-      if (value == 0)                                           ' done?
-        quit
+    repeat
+      d := value +// radix                                      ' get digit (1s column)
+      byte[p_str++] := (d < 10) ? d + "0" : d - 10 + "A"        ' convert to ASCII
+      value +/= radix                                           ' remove digit
+      if (digits)                                               ' length limited?
+        if (++len == digits)                                    '  check size
+          quit
+      else
+        if (value == 0)                                         ' done?
+          quit
 
-  if (sign)
-    byte[p_str++] := "-"                                        ' add sign if needed
-    if (sign == 2)
-      nbuf[0] := "8"                                            ' fix negx if needed
+    if (sign)
+      byte[p_str++] := "-"                                      ' add sign if needed
+      if (sign == 2)
+        nbuf[0] := "8"                                          ' fix negx if needed
 
-  byte[p_str] := 0                                              ' terminate string
-
-  return revstr(@nbuf)                                          ' fix order (reverse)
+    byte[p_str] := 0                                            ' terminate string
+    p_str := revstr(@nbuf)                                      ' fix order (reverse)
 
 
 PUB dpdec(value, dp) : p_str | len, byte scratch[12]
@@ -443,28 +465,26 @@ PUB dpdec(value, dp) : p_str | len, byte scratch[12]
 
   p_str := itoa(value, 10, 0)
 
-  if (dp <= 0)                                                  ' abort if no decimal point
-    return p_str
+  if (dp > 0)                                                   ' only add decimal point if needed
+    len := strsize(p_str)                                       ' digits
+    bytefill(@scratch, 0, DPDEC_SCRATCH_SZ)                      ' clear scratch buffer
 
-  len := strsize(p_str)                                         ' digits
-  bytefill(@scratch, 0, 12)                                     ' clear scratch buffer
+    if (value < 0)                                              ' ignore "-" if present
+      ++p_str
+      --len
 
-  if (value < 0)                                                ' ignore "-" if present
-    ++p_str
-    --len
+    if (len < (dp+1))                                           ' insert 0s?
+      bytemove(@scratch, p_str, len)                            ' move digits to scratch buffer
+      bytefill(p_str, "0", dp+2-len)                            ' pad string with 0s
+      bytemove(p_str+dp+2-len, @scratch, len+1)                 ' move digits back
+      byte[p_str+1] := "."                                      ' insert dpoint
+    else
+      bytemove(@scratch, p_str+len-dp, dp)                      ' move decimal part to buffer
+      byte[p_str+len-dp] := "."                                 ' insert dpoint
+      bytemove(p_str+len-dp+1, @scratch, dp+1)                  ' move decimal part back
 
-  if (len < (dp+1))                                             ' insert 0s?
-    bytemove(@scratch, p_str, len)                              ' move digits to scratch buffer
-    bytefill(p_str, "0", dp+2-len)                              ' pad string with 0s
-    bytemove(p_str+dp+2-len, @scratch, len+1)                   ' move digits back
-    byte[p_str+1] := "."                                        ' insert dpoint
-  else
-    bytemove(@scratch, p_str+len-dp, dp)                        ' move decimal part to buffer
-    byte[p_str+len-dp] := "."                                   ' insert dpoint
-    bytemove(p_str+len-dp+1, @scratch, dp+1)                    ' move decimal part back
-
-  if (value < 0)                                                ' fix pointer for negative #s
-    --p_str
+    if (value < 0)                                              ' fix pointer for negative #s
+      --p_str
 
 
 PUB padstr(p_str, width, padchar) : p_pad | len
@@ -515,10 +535,10 @@ PRI usdec(value, digits) : p_str | len
 ' Convert unsigned decimal value to string
 ' -- digits is 0 (auto size) to 10
 
-  digits := 0 #> digits <# 10                                   ' limit printable digits
+  digits := 0 #> digits <# MAX_DIGITS_DEC                       ' limit printable digits
 
-  byte[@nbuf + 10] := 0                                         ' null-terminate past max unsigned dec digits
-  p_str := @nbuf + 9                                            ' point to end of udec string
+  byte[@nbuf + MAX_DIGITS_DEC] := 0                             ' null-terminate past max unsigned dec digits
+  p_str := @nbuf + MAX_DIGITS_DEC - 1                           ' point to end of udec string
 
   len := 0
 

@@ -26,6 +26,8 @@ CON
     'SD_MISO = 18
     'SD_SCK  = 21
 
+    SUCCESS = 0                     ' Successful operation (matches dfs.SUCCESS)
+
 ' Enable full driver features (inherited through isp_format_utility)
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
@@ -54,7 +56,7 @@ PUB go() | result
     debug("Formatting card with label 'P2-BENCH'...")
     result := fmt.formatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, @label)
 
-    if result
+    if result == SUCCESS
         debug(" ")
         debug("FORMAT SUCCESSFUL!")
     else

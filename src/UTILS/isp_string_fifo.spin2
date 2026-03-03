@@ -149,14 +149,13 @@ PUB getOutput() : pStr | pSlot
 ''
 '' @returns pStr - pointer to string in slot (valid until next getOutput call on that slot wraps around), or 0 if empty
 
-    if head == tail
-        return 0
+    pStr := 0                                                   ' default: empty
+    if head <> tail
+        pSlot := @slots + (tail * SLOT_SIZE)
+        pStr := pSlot
 
-    pSlot := @slots + (tail * SLOT_SIZE)
-    pStr := pSlot
-
-    ' advance tail (release slot for producer)
-    tail := (tail + 1) & (NUM_SLOTS - 1)
+        ' advance tail (release slot for producer)
+        tail := (tail + 1) & (NUM_SLOTS - 1)
 
 
 CON { license }

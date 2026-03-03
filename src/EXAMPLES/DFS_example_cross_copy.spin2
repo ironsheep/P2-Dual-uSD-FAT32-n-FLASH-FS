@@ -57,95 +57,88 @@ PUB go() | status, handle, bytes_read, bMatch, i
     debug(" ")
 
     ' --- Initialize and mount both ---
+    status := dfs.SUCCESS                                       ' assume success
     if dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("ERROR: Driver init failed")
-        return
+        status := dfs.E_IO_ERROR
+    if status == dfs.SUCCESS
+        status := dfs.mount(dfs.DEV_SD)
+        if status <> dfs.SUCCESS
+            debug("SD mount FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            debug("Flash mount FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        debug("Both devices mounted")
 
-    status := dfs.mount(dfs.DEV_SD)
-    if status <> dfs.SUCCESS
-        debug("SD mount FAILED: ", sdec_(status))
-        dfs.stop()
-        return
-
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-        debug("Flash mount FAILED: ", sdec_(status))
-        dfs.unmount(dfs.DEV_SD)
-        dfs.stop()
-        return
-    debug("Both devices mounted")
-
-    ' --- Step 1: Create source file on SD ---
-    debug(" ")
-    debug("Creating source file on SD...")
-    dfs.deleteFile(dfs.DEV_SD, @sdOriginal)
-    handle := dfs.createFileNew(dfs.DEV_SD, @sdOriginal)
-    if handle < 0
-        debug("  ERROR: ", sdec_(handle))
-        cleanup()
-        return
-    dfs.writeHandle(handle, @testData, strsize(@testData))
-    dfs.closeFileHandle(handle)
-    debug("  Created ", zstr_(@sdOriginal), " (", udec_(strsize(@testData)), " bytes)")
-
-    ' --- Step 2: Copy SD -> Flash ---
-    debug("Copying SD -> Flash...")
-    dfs.deleteFile(dfs.DEV_FLASH, @flCopy)
-    status := dfs.copyFile(dfs.DEV_SD, @sdOriginal, dfs.DEV_FLASH, @flCopy)
-    if status <> dfs.SUCCESS
-        debug("  FAILED: ", sdec_(status))
-        cleanup()
-        return
-    debug("  Copied to Flash: ", zstr_(@flCopy))
-
-    ' --- Step 3: Copy Flash -> SD (round-trip) ---
-    debug("Copying Flash -> SD (round-trip)...")
-    dfs.deleteFile(dfs.DEV_SD, @sdRoundTrip)
-    status := dfs.copyFile(dfs.DEV_FLASH, @flCopy, dfs.DEV_SD, @sdRoundTrip)
-    if status <> dfs.SUCCESS
-        debug("  FAILED: ", sdec_(status))
-        cleanup()
-        return
-    debug("  Copied to SD: ", zstr_(@sdRoundTrip))
-
-    ' --- Step 4: Verify original and round-trip match ---
-    debug(" ")
-    debug("Verifying round-trip integrity...")
-
-    ' Read original from SD
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdOriginal)
-    if handle >= 0
-        bytefill(@buf1, 0, BUFFER_SIZE)
-        bytes_read := dfs.readHandle(handle, @buf1, BUFFER_SIZE)
+        ' --- Step 1: Create source file on SD ---
+        debug(" ")
+        debug("Creating source file on SD...")
+        dfs.deleteFile(dfs.DEV_SD, @sdOriginal)
+        handle := dfs.createFileNew(dfs.DEV_SD, @sdOriginal)
+        if handle < 0
+            debug("  ERROR: ", sdec_(handle))
+            status := handle
+    if status == dfs.SUCCESS
+        dfs.writeHandle(handle, @testData, strsize(@testData))
         dfs.closeFileHandle(handle)
-    else
-        debug("  ERROR reading original: ", sdec_(handle))
-        cleanup()
-        return
+        debug("  Created ", zstr_(@sdOriginal), " (", udec_(strsize(@testData)), " bytes)")
 
-    ' Read round-trip copy from SD
-    handle := dfs.openFileRead(dfs.DEV_SD, @sdRoundTrip)
-    if handle >= 0
-        bytefill(@buf2, 0, BUFFER_SIZE)
-        bytes_read := dfs.readHandle(handle, @buf2, BUFFER_SIZE)
-        dfs.closeFileHandle(handle)
-    else
-        debug("  ERROR reading round-trip: ", sdec_(handle))
-        cleanup()
-        return
+        ' --- Step 2: Copy SD -> Flash ---
+        debug("Copying SD -> Flash...")
+        dfs.deleteFile(dfs.DEV_FLASH, @flCopy)
+        status := dfs.copyFile(dfs.DEV_SD, @sdOriginal, dfs.DEV_FLASH, @flCopy)
+        if status <> dfs.SUCCESS
+            debug("  FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        debug("  Copied to Flash: ", zstr_(@flCopy))
 
-    ' Compare byte-by-byte
-    bMatch := true
-    repeat i from 0 to strsize(@testData) - 1
-        if buf1[i] <> buf2[i]
-            bMatch := false
-            debug("  MISMATCH at byte ", udec_(i), ": ", uhex_(buf1[i]), " vs ", uhex_(buf2[i]))
-            quit
+        ' --- Step 3: Copy Flash -> SD (round-trip) ---
+        debug("Copying Flash -> SD (round-trip)...")
+        dfs.deleteFile(dfs.DEV_SD, @sdRoundTrip)
+        status := dfs.copyFile(dfs.DEV_FLASH, @flCopy, dfs.DEV_SD, @sdRoundTrip)
+        if status <> dfs.SUCCESS
+            debug("  FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        debug("  Copied to SD: ", zstr_(@sdRoundTrip))
 
-    if bMatch
-        debug("  PASS: Round-trip data matches original!")
-    else
-        debug("  FAIL: Data mismatch after round-trip copy")
+        ' --- Step 4: Verify original and round-trip match ---
+        debug(" ")
+        debug("Verifying round-trip integrity...")
+
+        ' Read original from SD
+        handle := dfs.openFileRead(dfs.DEV_SD, @sdOriginal)
+        if handle >= 0
+            bytefill(@buf1, 0, BUFFER_SIZE)
+            bytes_read := dfs.readHandle(handle, @buf1, BUFFER_SIZE)
+            dfs.closeFileHandle(handle)
+        else
+            debug("  ERROR reading original: ", sdec_(handle))
+            status := handle
+    if status == dfs.SUCCESS
+        ' Read round-trip copy from SD
+        handle := dfs.openFileRead(dfs.DEV_SD, @sdRoundTrip)
+        if handle >= 0
+            bytefill(@buf2, 0, BUFFER_SIZE)
+            bytes_read := dfs.readHandle(handle, @buf2, BUFFER_SIZE)
+            dfs.closeFileHandle(handle)
+        else
+            debug("  ERROR reading round-trip: ", sdec_(handle))
+            status := handle
+    if status == dfs.SUCCESS
+        ' Compare byte-by-byte
+        bMatch := true
+        repeat i from 0 to strsize(@testData) - 1
+            if buf1[i] <> buf2[i]
+                bMatch := false
+                debug("  MISMATCH at byte ", udec_(i), ": ", uhex_(buf1[i]), " vs ", uhex_(buf2[i]))
+                quit
+
+        if bMatch
+            debug("  PASS: Round-trip data matches original!")
+        else
+            debug("  FAIL: Data mismatch after round-trip copy")
 
     ' --- Step 5: Clean up ---
     debug(" ")

@@ -51,53 +51,51 @@ PUB go() | nbrLongs, workerCog
     status := dfs.format(dfs.DEV_FLASH)
     if status <> dfs.SUCCESS
         utils.showError(@"format()", status)
-        return
+    else
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            utils.showError(@"mount()", status)
+        else
+            utils.ShowStats()                   ' should have empty filesystem
+            utils.showFiles()
 
-    status := dfs.mount(dfs.DEV_FLASH)
-    if status <> dfs.SUCCESS
-        utils.showError(@"mount()", status)
-        return
+            utils.showChipAndDriverVersion()
 
-    utils.ShowStats()                   ' should have empty filesystem
-    utils.showFiles()
+            utils.startTest(@"BAD: Read when file doesn't exist")
+            handle := dfs.open(dfs.DEV_FLASH, @testfile, dfs.FILEMODE_READ)
+            utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
 
-    utils.showChipAndDriverVersion()
+            ' fill head block with longs (only block file)
+            utils.startTestGroup(@"Head block only - filled with longs")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK
+            writeAddressedLongs(@testfile, nbrLongs, 0, 0)
+            verifyAddressedLongs(@testfile, nbrLongs)
 
-    utils.startTest(@"BAD: Read when file doesn't exist")
-    handle := dfs.open(dfs.DEV_FLASH, @testfile, dfs.FILEMODE_READ)
-    utils.evaluateResultNegError(handle, dfs.E_FILE_NOT_FOUND)
+            ' fill head block + 2 longs with longs (2 block file)
+            utils.startTestGroup(@"Head block + body block - head full, body has 2 longs")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + 2
+            writeAddressedLongs(@testfile2, nbrLongs, 1, 1)
+            verifyAddressedLongs(@testfile2, nbrLongs)
 
-    ' fill head block with longs (only block file)
-    utils.startTestGroup(@"Head block only - filled with longs")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK
-    writeAddressedLongs(@testfile, nbrLongs, 0, 0)
-    verifyAddressedLongs(@testfile, nbrLongs)
+            ' fill head block + body block + 2 longs with longs (3 block file)
+            utils.startTestGroup(@"Head block + 2x body block - head full, body full, 2nd body has 2 longs")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK + 2
+            writeAddressedLongs(@testfile3, nbrLongs, 2, 3)
+            verifyAddressedLongs(@testfile3, nbrLongs)
 
-    ' fill head block + 2 longs with longs (2 block file)
-    utils.startTestGroup(@"Head block + body block - head full, body has 2 longs")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + 2
-    writeAddressedLongs(@testfile2, nbrLongs, 1, 1)
-    verifyAddressedLongs(@testfile2, nbrLongs)
+             ' fill head block + 2x body block with longs (full 3 block file)
+            utils.startTestGroup(@"Head block + 2x body block - all blocks full")
+            nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + (dfs.LONGS_IN_BODY_BLOCK * 2)
+            writeAddressedLongs(@testfile4, nbrLongs, 3, 6)
+            verifyAddressedLongs(@testfile4, nbrLongs)
 
-    ' fill head block + body block + 2 longs with longs (3 block file)
-    utils.startTestGroup(@"Head block + 2x body block - head full, body full, 2nd body has 2 longs")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + dfs.LONGS_IN_BODY_BLOCK + 2
-    writeAddressedLongs(@testfile3, nbrLongs, 2, 3)
-    verifyAddressedLongs(@testfile3, nbrLongs)
+            utils.startTestGroup(@"Seek position-relative tests")
+            verifyRelativeSeekLongs(@testfile4, nbrLongs)
 
-     ' fill head block + 2x body block with longs (full 3 block file)
-    utils.startTestGroup(@"Head block + 2x body block - all blocks full")
-    nbrLongs := dfs.LONGS_IN_HEAD_BLOCK + (dfs.LONGS_IN_BODY_BLOCK * 2)
-    writeAddressedLongs(@testfile4, nbrLongs, 3, 6)
-    verifyAddressedLongs(@testfile4, nbrLongs)
+            utils.startTestGroup(@"New file_size for handle and max seek tests")
+            verifyMaxSeek(@testfile4)
 
-    utils.startTestGroup(@"Seek position-relative tests")
-    verifyRelativeSeekLongs(@testfile4, nbrLongs)
-
-    utils.startTestGroup(@"New file_size for handle and max seek tests")
-    verifyMaxSeek(@testfile4)
-
-    utils.showFiles()
+            utils.showFiles()
 
     utils.ShowTestEndCounts()
 
@@ -153,7 +151,7 @@ pri writeAddressedLongs(pFilename, count, startingFileCount, startingBlockCount)
         dumpSize -= dfs.LONGS_IN_HEAD_BLOCK * 4
     ' show whole block if head block
     if expectedFileSize ==dfs.LONGS_IN_HEAD_BLOCK * 4
-        dumpSize := 4096
+        dumpSize := dfs.BLOCK_SIZE
 
     '  get filesystem stats and verify against expectation
     fileSizeBlocks := utils.blockCountForFileSize(expectedFileSize)

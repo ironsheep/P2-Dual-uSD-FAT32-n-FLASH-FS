@@ -219,7 +219,7 @@ PUB go() | workerCog
     utils.startTest(@"open() OK")
     handle := dfs.open(dfs.DEV_FLASH, @testfile, dfs.FILEMODE_APPEND)
     status := dfs.error()
-    utils.evaluateSubStatus(handle, @"open()", 0)
+    utils.evaluateSubValue(handle, @"open()", 0)
     utils.evaluateSubStatus(status, @"open()", dfs.SUCCESS)
 
     utils.startTest(@"open_circular() OK")

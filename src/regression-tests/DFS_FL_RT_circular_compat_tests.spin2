@@ -280,7 +280,7 @@ PUB testCopyFile(pOldFilename, pNewFilename) | rdHandle, wrHandle, rdStatus, wrS
 
     utils.startTest(@"Ensure old exists")
     status := dfs.exists(dfs.DEV_FLASH, pOldFilename)
-    utils.evaluateSingleValue(status, @"exists()", true)
+    utils.evaluateBool(status, @"exists()", true)
 
     ' remove existing file if it exists
     if dfs.exists(dfs.DEV_FLASH, pNewFilename)
@@ -290,7 +290,7 @@ PUB testCopyFile(pOldFilename, pNewFilename) | rdHandle, wrHandle, rdStatus, wrS
 
     utils.startTest(@"Ensure new doesn't exist")
     status := dfs.exists(dfs.DEV_FLASH, pNewFilename)
-    utils.evaluateSingleValue(status, @"exists()", false)
+    utils.evaluateBool(status, @"exists()", false)
 
     utils.startTest(@"Open File for read")
     rdHandle := dfs.open(dfs.DEV_FLASH, pOldFilename, dfs.FILEMODE_READ)

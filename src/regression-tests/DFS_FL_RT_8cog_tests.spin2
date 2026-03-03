@@ -41,8 +41,10 @@ CON
     RECORD_LEN = 88 ' just for fun, tiny but even number of longs
     RECORD_DATA_LEN = RECORD_LEN - 12
 
+    MAX_P2_COGS = 8                              ' total cogs on P2
     NUM_WORKER_COGS = 6                        ' spawned cogs (cog 1 is driver worker)
     NUM_TOTAL_COGS = NUM_WORKER_COGS + 1       ' 7 active cogs (main + 6 spawned)
+    NUM_FILE_TYPES = 5                         ' number of test file type cases (0..4)
 
     STACK_SIZE_PER_COG = 256
 
@@ -67,7 +69,7 @@ bufferLock      LONG    -1
 
 stack           LONG    0[STACK_SIZE_PER_COG * NUM_WORKER_COGS]
 
-fileCountAr     BYTE    0[8]
+fileCountAr     BYTE    0[MAX_P2_COGS]
 
 fileNbr         BYTE    0
 
@@ -105,7 +107,7 @@ PUB go() | cogIdx, totalFiles, status, workerCog
     ' Poll until all cogs have written their files (or 60 second timeout)
     repeat 600                          ' 600 * 100ms = 60 seconds max
         totalFiles := 0
-        repeat cogIdx from 0 to 7
+        repeat cogIdx from 0 to MAX_P2_COGS - 1
             totalFiles += BYTE[@fileCountAr][cogIdx]
         if totalFiles >= NUM_TOTAL_COGS * 2
             quit
@@ -114,7 +116,7 @@ PUB go() | cogIdx, totalFiles, status, workerCog
 
     debug("*  after waiting on COGs to finish writing")
     totalFiles := 0
-    repeat cogIdx from 0 to 7
+    repeat cogIdx from 0 to MAX_P2_COGS - 1
         totalFiles += BYTE[@fileCountAr][cogIdx]
     utils.startTest(@"Check Cogs wrote All files")
     utils.evaluateSingleValue(totalFiles, @"file written count", NUM_TOTAL_COGS * 2)
@@ -149,12 +151,12 @@ pri genTwoFiles(pByteFileCountAr) | myId, fileType, delayMS, fType1, fType2, sta
     ' Spawned cogs use the already-mounted driver directly.
 
     utils.startTestGroup(@"Cog write file #1")
-    fType1 := (GETRND() +// 5)
+    fType1 := (GETRND() +// NUM_FILE_TYPES)
     writeAndVerifyATestFile(fType1, myId)
     BYTE[pByteFileCountAr][myId]++
 
     utils.startTestGroup(@"Cog write file #2")
-    fType2 := (GETRND() +// 5)
+    fType2 := (GETRND() +// NUM_FILE_TYPES)
     writeAndVerifyATestFile(fType2, myId)
     BYTE[pByteFileCountAr][myId]++
 
@@ -210,35 +212,34 @@ pri testWriteBytes(pFilename, count) | blocksUsed, handle, status, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    utils.startTest(@"Write N BYTEs")
-    utils.setCheckCountPerTest(1)
-    testValue := 0
-    repeat count
-        testValue++
-        status := dfs.wr_byte(handle, testValue)
-        if status <> dfs.SUCCESS
-            quit ' quit on first failure
-        utils.evaluateSubStatus(status, @"wr_byte()", dfs.SUCCESS)
+      utils.startTest(@"Write N BYTEs")
+      utils.setCheckCountPerTest(1)
+      testValue := 0
+      repeat count
+          testValue++
+          status := dfs.wr_byte(handle, testValue)
+          if status <> dfs.SUCCESS
+              quit ' quit on first failure
+          utils.evaluateSubStatus(status, @"wr_byte()", dfs.SUCCESS)
 
-    utils.startTest(@"ensure all bytes written")
-    utils.evaluateSingleValue(testValue, @"wr_byte()", count)
+      utils.startTest(@"ensure all bytes written")
+      utils.evaluateSingleValue(testValue, @"wr_byte()", count)
 
-    utils.startTest(@"ensure no errors on writes")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on writes")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  close file
-    utils.startTest(@"Close written file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close written file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    utils.showFileDetails(pFilename)
+      utils.showFileDetails(pFilename)
 
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    utils.evaluateFileStats(pFilename, 1, count)
+      '  get single file stats and verify against expectation
+      utils.startTest(@"Ensure expected file stats")
+      utils.evaluateFileStats(pFilename, 1, count)
 
 
 pri testVerifyBytes(pFilename, count) | handle, status, expectedValue, testValue
@@ -250,32 +251,31 @@ pri testVerifyBytes(pFilename, count) | handle, status, expectedValue, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    utils.startTest(@"read expected N BYTEs")
-    utils.setCheckCountPerTest(1)
-    expectedValue := 0
-    repeat count
-        expectedValue++
-        testValue := dfs.rd_byte(handle)
-        if testValue < 0
-            status := testValue
-            quit
-        utils.evaluateSubValue(testValue, @"rd_byte()", expectedValue)
+      utils.startTest(@"read expected N BYTEs")
+      utils.setCheckCountPerTest(1)
+      expectedValue := 0
+      repeat count
+          expectedValue++
+          testValue := dfs.rd_byte(handle)
+          if testValue < 0
+              status := testValue
+              quit
+          utils.evaluateSubValue(testValue, @"rd_byte()", expectedValue)
 
-    utils.startTest(@"ensure no errors on read BYTEs")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on read BYTEs")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  read past end of file to verify read returns error
-    utils.startTest(@"BAD: read one more BYTE than written")
-    status := dfs.rd_byte(handle)
-    utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
+      '  read past end of file to verify read returns error
+      utils.startTest(@"BAD: read one more BYTE than written")
+      status := dfs.rd_byte(handle)
+      utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
 
-    '  close file
-    utils.startTest(@"Close read file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close read file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
 pri testWriteWords(pFilename, count) | handle, status, testValue
@@ -289,30 +289,29 @@ pri testWriteWords(pFilename, count) | handle, status, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    utils.startTest(@"Write N WORDs")
-    utils.setCheckCountPerTest(1)
-    testValue := 0
-    repeat count
-        testValue++
-        status := dfs.wr_word(handle, testValue)
-        utils.evaluateSubStatus(status, @"wr_word()", dfs.SUCCESS)
+      utils.startTest(@"Write N WORDs")
+      utils.setCheckCountPerTest(1)
+      testValue := 0
+      repeat count
+          testValue++
+          status := dfs.wr_word(handle, testValue)
+          utils.evaluateSubStatus(status, @"wr_word()", dfs.SUCCESS)
 
-    utils.startTest(@"ensure no errors on writes")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on writes")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  close file
-    utils.startTest(@"Close written file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close written file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    utils.showFileDetails(pFilename)
+      utils.showFileDetails(pFilename)
 
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    utils.evaluateFileStats(pFilename, 1, count * 2)
+      '  get single file stats and verify against expectation
+      utils.startTest(@"Ensure expected file stats")
+      utils.evaluateFileStats(pFilename, 1, count * 2)
 
 
 pri testVerifyWords(pFilename, count) | handle, status, expectedValue, testValue
@@ -325,32 +324,31 @@ pri testVerifyWords(pFilename, count) | handle, status, expectedValue, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    utils.startTest(@"read expected N WORDs")
-    utils.setCheckCountPerTest(1)
-    expectedValue := 0
-    repeat count
-        expectedValue++
-        testValue := dfs.rd_word(handle)
-        if testValue < 0
-            status := testValue
-            quit
-        utils.evaluateSubValue(testValue, @"rd_word()", expectedValue)
+      utils.startTest(@"read expected N WORDs")
+      utils.setCheckCountPerTest(1)
+      expectedValue := 0
+      repeat count
+          expectedValue++
+          testValue := dfs.rd_word(handle)
+          if testValue < 0
+              status := testValue
+              quit
+          utils.evaluateSubValue(testValue, @"rd_word()", expectedValue)
 
-    utils.startTest(@"ensure no errors on read WORDs")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on read WORDs")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  read past end of file to verify read returns error
-    utils.startTest(@"BAD: read one more WORD than written")
-    status := dfs.rd_word(handle)
-    utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
+      '  read past end of file to verify read returns error
+      utils.startTest(@"BAD: read one more WORD than written")
+      status := dfs.rd_word(handle)
+      utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
 
-    '  close file
-    utils.startTest(@"Close read file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close read file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
 pri testWriteLongs(pFilename, count) | handle, status, testValue, blocksUsed
@@ -364,33 +362,32 @@ pri testWriteLongs(pFilename, count) | handle, status, testValue, blocksUsed
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    utils.startTest(@"Write N LONGs")
-    utils.setCheckCountPerTest(1)
-    testValue := 0
-    repeat count
-        testValue++
-        status := dfs.wr_long(handle, testValue)
-        utils.evaluateSubStatus(status, @"wr_long()", dfs.SUCCESS)
+      utils.startTest(@"Write N LONGs")
+      utils.setCheckCountPerTest(1)
+      testValue := 0
+      repeat count
+          testValue++
+          status := dfs.wr_long(handle, testValue)
+          utils.evaluateSubStatus(status, @"wr_long()", dfs.SUCCESS)
 
-    utils.startTest(@"ensure no errors on writes")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on writes")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  close file
-    utils.startTest(@"Close written file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close written file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    utils.showFileDetails(pFilename)
+      utils.showFileDetails(pFilename)
 
-    '  get filesystem stats and verify against expectation
-    blocksUsed := utils.blockCountForFileSize(count * 4)
+      '  get filesystem stats and verify against expectation
+      blocksUsed := utils.blockCountForFileSize(count * 4)
 
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    utils.evaluateFileStats(pFilename, blocksUsed, count * 4)
+      '  get single file stats and verify against expectation
+      utils.startTest(@"Ensure expected file stats")
+      utils.evaluateFileStats(pFilename, blocksUsed, count * 4)
 
 
 pri testVerifyLongs(pFilename, count) | handle, status, expectedValue, testValue
@@ -403,33 +400,32 @@ pri testVerifyLongs(pFilename, count) | handle, status, expectedValue, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    utils.startTest(@"read expected LONGs")
-    utils.setCheckCountPerTest(1)
-    expectedValue := 0
-    repeat count
-        expectedValue++
-        testValue := dfs.rd_long(handle)
-        status := dfs.error()
-        if status <> dfs.SUCCESS
-            quit
-        utils.evaluateSubValue(testValue, @"rd_long()", expectedValue)
+      utils.startTest(@"read expected LONGs")
+      utils.setCheckCountPerTest(1)
+      expectedValue := 0
+      repeat count
+          expectedValue++
+          testValue := dfs.rd_long(handle)
+          status := dfs.error()
+          if status <> dfs.SUCCESS
+              quit
+          utils.evaluateSubValue(testValue, @"rd_long()", expectedValue)
 
-    utils.startTest(@"ensure no errors on read LONGs")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on read LONGs")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  read past end of file to verify read returns error
-    utils.startTest(@"BAD: read one more LONG than written")
-    testValue := dfs.rd_long(handle)
-    status := dfs.error()
-    utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
+      '  read past end of file to verify read returns error
+      utils.startTest(@"BAD: read one more LONG than written")
+      testValue := dfs.rd_long(handle)
+      status := dfs.error()
+      utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
 
-    '  close file
-    utils.startTest(@"Close read file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close read file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
 con { string test constants }
@@ -482,35 +478,34 @@ pri testWriteStrings(pFilename, count) | handle, status, strIdx, maxStringIdx, p
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    maxStringIdx := (count - 1 < MAX_STRINGS_WRITTEN - 1) ? count - 1 : MAX_STRINGS_WRITTEN - 1
-    utils.startTest(@"Write 10 STRINGs")
-    utils.setCheckCountPerTest(1)
-    expectedFileSize := 0
-    repeat readWriteIdx from 0 to maxStringIdx
-        strIdx := (GETRND() +// stringIdCt)
-        pString := WORD[@stringIdTable][strIdx] ' get ptr to string
-        BYTE[@idxStringWritten][cogid() * MAX_STRINGS_WRITTEN + readWriteIdx] := strIdx
-        expectedFileSize += strsize(pString) + 1
-        status := dfs.wr_str(handle, pString)
-        utils.evaluateSubStatus(status, @"wr_str()", dfs.SUCCESS)
+      maxStringIdx := (count - 1 < MAX_STRINGS_WRITTEN - 1) ? count - 1 : MAX_STRINGS_WRITTEN - 1
+      utils.startTest(@"Write 10 STRINGs")
+      utils.setCheckCountPerTest(1)
+      expectedFileSize := 0
+      repeat readWriteIdx from 0 to maxStringIdx
+          strIdx := (GETRND() +// stringIdCt)
+          pString := WORD[@stringIdTable][strIdx] ' get ptr to string
+          BYTE[@idxStringWritten][cogid() * MAX_STRINGS_WRITTEN + readWriteIdx] := strIdx
+          expectedFileSize += strsize(pString) + 1
+          status := dfs.wr_str(handle, pString)
+          utils.evaluateSubStatus(status, @"wr_str()", dfs.SUCCESS)
 
-    utils.startTest(@"ensure no errors on writes")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on writes")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  close file
-    utils.startTest(@"Close written file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close written file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    utils.showFileDetails(pFilename)
-    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+      utils.showFileDetails(pFilename)
+      expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
 
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
+      '  get single file stats and verify against expectation
+      utils.startTest(@"Ensure expected file stats")
+      utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
 
 
 pri testVerifyStrings(pFilename, count) | handle, status, maxStringIdx, readWriteIdx, strIdx, pString, rdLength, expectedLength, compareResult
@@ -523,40 +518,39 @@ pri testVerifyStrings(pFilename, count) | handle, status, maxStringIdx, readWrit
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    maxStringIdx := (count - 1 < MAX_STRINGS_WRITTEN - 1) ? count - 1 : MAX_STRINGS_WRITTEN - 1
-    utils.startTest(@"read expected N STRINGs")
-    utils.setCheckCountPerTest(2)
-    repeat readWriteIdx from 0 to maxStringIdx
-         strIdx := BYTE[@idxStringWritten][cogid() * MAX_STRINGS_WRITTEN + readWriteIdx]
-        pString := WORD[@stringIdTable][strIdx] ' get ptr to string
-        ' the read call doesn't count terminator in length
-        expectedLength := strsize(pString)
-        rdLength := dfs.rd_str(handle, @testStrBuffer + (cogid() * MAX_STRING_SIZE), MAX_STRING_SIZE)
-        if rdLength < 0
-            status := rdLength
-            quit
-        ' ensure length is same as expected
-        utils.evaluateSubValue(rdLength, @"rd_str()", expectedLength)
-        ' ensure string is same as expected
-        compareResult := strcomp(@testStrBuffer + (cogid() * MAX_STRING_SIZE), pString)
-        utils.evaluateSubValue(compareResult, @"rd_str()", true)
+      maxStringIdx := (count - 1 < MAX_STRINGS_WRITTEN - 1) ? count - 1 : MAX_STRINGS_WRITTEN - 1
+      utils.startTest(@"read expected N STRINGs")
+      utils.setCheckCountPerTest(2)
+      repeat readWriteIdx from 0 to maxStringIdx
+           strIdx := BYTE[@idxStringWritten][cogid() * MAX_STRINGS_WRITTEN + readWriteIdx]
+          pString := WORD[@stringIdTable][strIdx] ' get ptr to string
+          ' the read call doesn't count terminator in length
+          expectedLength := strsize(pString)
+          rdLength := dfs.rd_str(handle, @testStrBuffer + (cogid() * MAX_STRING_SIZE), MAX_STRING_SIZE)
+          if rdLength < 0
+              status := rdLength
+              quit
+          ' ensure length is same as expected
+          utils.evaluateSubValue(rdLength, @"rd_str()", expectedLength)
+          ' ensure string is same as expected
+          compareResult := strcomp(@testStrBuffer + (cogid() * MAX_STRING_SIZE), pString)
+          utils.evaluateSubValue(compareResult, @"rd_str()", true)
 
-    utils.startTest(@"ensure no errors on read STRINGs")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on read STRINGs")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  read past end of file to verify read returns error
-    utils.startTest(@"BAD: read one more STRING than written")
-    dfs.rd_str(handle, @testStrBuffer + (cogid() * MAX_STRING_SIZE), MAX_STRING_SIZE)
-    status := dfs.error()
-    utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
+      '  read past end of file to verify read returns error
+      utils.startTest(@"BAD: read one more STRING than written")
+      dfs.rd_str(handle, @testStrBuffer + (cogid() * MAX_STRING_SIZE), MAX_STRING_SIZE)
+      status := dfs.error()
+      utils.evaluateResultNegError(status, dfs.E_END_OF_FILE)
 
-    '  close file
-    utils.startTest(@"Close read file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close read file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
 pri testWriteRecords(pFilename, recordCount) | handle, status, testValue, writeLength, recordNbr, expectedFileSize, expectedFileBlocks, sizeUnused, allocatedFileSize
@@ -571,56 +565,55 @@ pri testWriteRecords(pFilename, recordCount) | handle, status, testValue, writeL
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    repeat while locktry(bufferLock) == 0                                             'lock for exlusive use
+      repeat while locktry(bufferLock) == 0                                             'lock for exlusive use
 
-    utils.startTest(@"Write N Records")
-    utils.setCheckCountPerTest(2)
-    status := dfs.SUCCESS
-    repeat recordNbr from 1 to recordCount
-        testValue := cogid() << 8 + ($40 + recordNbr)                    ' A, B, C, etc.
-        recordId := recordNbr
-        wordfill(@recordData, testValue, RECORD_DATA_LEN/2)
-        recordCRC := utils.record_crc(@record, RECORD_LEN)
-        writeLength := dfs.writeHandle(handle, @record, RECORD_LEN)
-        utils.evaluateSubValue(writeLength, @"write()", RECORD_LEN)
-        status := dfs.error()
-        utils.evaluateSubStatus(status, @"write()", dfs.SUCCESS)
+      utils.startTest(@"Write N Records")
+      utils.setCheckCountPerTest(2)
+      status := dfs.SUCCESS
+      repeat recordNbr from 1 to recordCount
+          testValue := cogid() << 8 + ($40 + recordNbr)                    ' A, B, C, etc.
+          recordId := recordNbr
+          wordfill(@recordData, testValue, RECORD_DATA_LEN/2)
+          recordCRC := utils.record_crc(@record, RECORD_LEN)
+          writeLength := dfs.writeHandle(handle, @record, RECORD_LEN)
+          utils.evaluateSubValue(writeLength, @"write()", RECORD_LEN)
+          status := dfs.error()
+          utils.evaluateSubStatus(status, @"write()", dfs.SUCCESS)
 
-    utils.startTest(@"ensure no errors on Record writes")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on Record writes")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  close file
-    utils.startTest(@"Close written file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close written file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    lockrel(bufferLock)                                                               ' release the lock, we're done with it
+      lockrel(bufferLock)                                                               ' release the lock, we're done with it
 
-    expectedFileSize := recordCount * RECORD_LEN
+      expectedFileSize := recordCount * RECORD_LEN
 
-    expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
+      expectedFileBlocks := utils.blockCountForFileSize(expectedFileSize)
 
-    '  get single file stats and verify against expectation
-    utils.startTest(@"Ensure expected file stats")
-    utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
+      '  get single file stats and verify against expectation
+      utils.startTest(@"Ensure expected file stats")
+      utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
 
-    utils.startTest(@"Ensure expected unused bytes stats")
-    sizeUnused := dfs.file_size_unused(dfs.DEV_FLASH, pFilename)
+      utils.startTest(@"Ensure expected unused bytes stats")
+      sizeUnused := dfs.file_size_unused(dfs.DEV_FLASH, pFilename)
 
-    expectedFileSize := recordCount * RECORD_LEN
-    allocatedFileSize := dfs.BYTES_IN_HEAD_BLOCK
-    if expectedFileBlocks > 2
-        allocatedFileSize += (dfs.BYTES_IN_BODY_BLOCK * 2)
-    elseif expectedFileBlocks > 1
-        allocatedFileSize += dfs.BYTES_IN_BODY_BLOCK
-    utils.evaluateSingleValue(sizeUnused, @"file_size_unused()", allocatedFileSize - expectedFileSize)
+      expectedFileSize := recordCount * RECORD_LEN
+      allocatedFileSize := dfs.BYTES_IN_HEAD_BLOCK
+      if expectedFileBlocks > 2
+          allocatedFileSize += (dfs.BYTES_IN_BODY_BLOCK * 2)
+      elseif expectedFileBlocks > 1
+          allocatedFileSize += dfs.BYTES_IN_BODY_BLOCK
+      utils.evaluateSingleValue(sizeUnused, @"file_size_unused()", allocatedFileSize - expectedFileSize)
 
-    utils.startTest(@"Ensure no error on size unused call")
-    status := dfs.error()
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"Ensure no error on size unused call")
+      status := dfs.error()
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
 pri testVerifyRecords(pFilename, recordCount) | handle, status, recordNbr, rdLength, calcCRC
@@ -635,45 +628,44 @@ pri testVerifyRecords(pFilename, recordCount) | handle, status, recordNbr, rdLen
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle < 0
-        return
+    if handle >= 0
 
-    dumpRecords(pFilename, handle, recordCount, @record, RECORD_LEN)
+      dumpRecords(pFilename, handle, recordCount, @record, RECORD_LEN)
 
-    utils.startTest(@"read expected N RECORDs")
-    utils.setCheckCountPerTest(3)
-    repeat recordNbr from 1 to recordCount
-        rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
-        ' ensure length is same as expected
-        utils.evaluateSubValue(rdLength, @"read()", RECORD_LEN)
-        ' ensure record ID is same as expected
-        utils.evaluateSubValue(recordId, @"recordId", recordNbr)
-        ' ensure record CRC is same as expected
-        calcCRC := utils.record_crc(@record, RECORD_LEN)
-        utils.evaluateSubValue(calcCRC, @"recordCRC", recordCRC)
-        ' IF WE HAVE a CRC error then show buffers!
-        if calcCRC <> recordCRC
-          debug("** CRC ERROR at record #", udec_(recordNbr))
-        if rdLength <> RECORD_LEN
-            debug("- ABORT bad rcd length")
-            status := dfs.error()
-            quit
+      utils.startTest(@"read expected N RECORDs")
+      utils.setCheckCountPerTest(3)
+      repeat recordNbr from 1 to recordCount
+          rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
+          ' ensure length is same as expected
+          utils.evaluateSubValue(rdLength, @"read()", RECORD_LEN)
+          ' ensure record ID is same as expected
+          utils.evaluateSubValue(recordId, @"recordId", recordNbr)
+          ' ensure record CRC is same as expected
+          calcCRC := utils.record_crc(@record, RECORD_LEN)
+          utils.evaluateSubValue(calcCRC, @"recordCRC", recordCRC)
+          ' IF WE HAVE a CRC error then show buffers!
+          if calcCRC <> recordCRC
+            debug("** CRC ERROR at record #", udec_(recordNbr))
+          if rdLength <> RECORD_LEN
+              debug("- ABORT bad rcd length")
+              status := dfs.error()
+              quit
 
-    utils.startTest(@"ensure no errors on read RECORDs")
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      utils.startTest(@"ensure no errors on read RECORDs")
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
-    '  read past end of file to verify read returns error
-    utils.startTest(@"BAD: read one more Record than written")
-    utils.setCheckCountPerTest(2)
-    rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
-    utils.evaluateSubValue(rdLength, @"read()", 0)
-    status := dfs.error()
-    utils.evaluateSubStatus(status, @"read()", dfs.E_END_OF_FILE)
+      '  read past end of file to verify read returns error
+      utils.startTest(@"BAD: read one more Record than written")
+      utils.setCheckCountPerTest(2)
+      rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
+      utils.evaluateSubValue(rdLength, @"read()", 0)
+      status := dfs.error()
+      utils.evaluateSubStatus(status, @"read()", dfs.E_END_OF_FILE)
 
-    '  close file
-    utils.startTest(@"Close read file")
-    status := dfs.close(handle)
-    utils.evaluateResultNegError(status, dfs.SUCCESS)
+      '  close file
+      utils.startTest(@"Close read file")
+      status := dfs.close(handle)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
 
     lockrel(bufferLock)                                                               ' release the lock, we're done with it
 

@@ -37,6 +37,168 @@ CON
   CSD_SIZE = 16
   SCR_SIZE = 8
   VBR_SIZE = 512
+  SDST_SIZE = 64
+  CARD_ID_STR_SIZE = 64
+
+  ' MBR structure offsets
+  OFS_MBR_PART1_TYPE   = $1C2
+  OFS_MBR_PART1_LBA    = $1C6
+
+  ' Partition types
+  PART_TYPE_EMPTY      = $00
+  PART_TYPE_FAT12      = $01
+  PART_TYPE_FAT16_SMALL = $04
+  PART_TYPE_FAT16_LARGE = $06
+  PART_TYPE_EXFAT_NTFS = $07
+  PART_TYPE_FAT32_CHS  = $0B
+  PART_TYPE_FAT32_LBA  = $0C
+  PART_TYPE_FAT16_LBA  = $0E
+  PART_TYPE_LINUX      = $83
+  PART_TYPE_GPT        = $EE
+
+  ' VBR/BPB field offsets
+  OFS_VBR_OEM_NAME     = $03
+  OFS_VBR_BYTES_PER_SEC = $0B
+  OFS_VBR_SEC_PER_CLUS = $0D
+  OFS_VBR_RESERVED_SEC = $0E
+  OFS_VBR_NUM_FATS     = $10
+  OFS_VBR_TOTAL_SECS   = $20
+  OFS_VBR_SEC_PER_FAT  = $24
+  OFS_VBR_ROOT_CLUSTER = $2C
+  OFS_VBR_VOL_SERIAL   = $43
+  OFS_VBR_VOL_LABEL    = $47
+  OFS_VBR_FS_TYPE      = $52
+  LEN_VBR_OEM_NAME     = 8
+  LEN_VBR_VOL_LABEL    = 11
+  LEN_VBR_FS_TYPE      = 8
+
+  ' CID byte indices
+  IDX_CID_MID          = 0
+  IDX_CID_OID_HI       = 1
+  IDX_CID_OID_LO       = 2
+  IDX_CID_PNM_START    = 3
+  CID_PNM_CHARS        = 5
+  IDX_CID_PRV          = 8
+  IDX_CID_PSN_0        = 9
+  IDX_CID_PSN_1        = 10
+  IDX_CID_PSN_2        = 11
+  IDX_CID_PSN_3        = 12
+  IDX_CID_MDT_HI       = 13
+  IDX_CID_MDT_LO       = 14
+  IDX_CID_CRC          = 15
+  CID_YEAR_BASE        = 2000
+
+  ' CSD byte indices
+  IDX_CSD_STRUCTURE    = 0
+  IDX_CSD_TAAC         = 1
+  IDX_CSD_NSAC         = 2
+  IDX_CSD_TRAN_SPEED   = 3
+  IDX_CSD_CCC_HI       = 4
+  IDX_CSD_CCC_LO       = 5
+  IDX_CSD_BLOCK_FLAGS   = 6
+  IDX_CSD_V1_CSIZE_HI  = 6
+  IDX_CSD_V1_CSIZE_MID = 7
+  IDX_CSD_V1_CSIZE_LO  = 8
+  IDX_CSD_V2_CSIZE_HI  = 7
+  IDX_CSD_V2_CSIZE_MID = 8
+  IDX_CSD_V2_CSIZE_LO  = 9
+  IDX_CSD_ERASE        = 10
+  IDX_CSD_WP           = 11
+  IDX_CSD_WP_GRP       = 12
+  IDX_CSD_WRITE_BL     = 13
+  IDX_CSD_FLAGS        = 14
+  IDX_CSD_CRC          = 15
+
+  ' SCR byte indices
+  IDX_SCR_0            = 0
+  IDX_SCR_1            = 1
+  IDX_SCR_2            = 2
+  IDX_SCR_3            = 3
+  IDX_SCR_4            = 4
+
+  ' SD Status byte indices
+  IDX_SDST_SPEED_CLASS = 8
+  IDX_SDST_UHS_GRADE   = 14
+  IDX_SDST_VIDEO_CLASS = 15
+  IDX_SDST_APP_PERF    = 21
+
+  ' Bit masks
+  TWO_BIT_MASK         = $03
+  THREE_BIT_MASK       = $07
+  NIBBLE_MASK          = $0F
+  SIX_BIT_MASK         = $3F
+  SEVEN_BIT_MASK       = $7F
+  BYTE_MASK            = $FF
+
+  ' ASCII character codes
+  ASCII_SPACE          = 32
+  ASCII_DEL            = 127
+
+  ' Card capacity thresholds
+  SDXC_THRESHOLD_MB    = 32768
+  SECTORS_PER_MB       = 2048
+  BYTES_PER_KB         = 1024
+
+  ' CSD timeout defaults (milliseconds)
+  NS_TO_MS_DIVISOR         = 10_000
+  CSD_MIN_READ_TIMEOUT_MS  = 100
+  CSD_FIXED_READ_TIMEOUT_MS  = 100
+  CSD_FIXED_WRITE_TIMEOUT_MS = 250
+
+  ' CCC command class bit masks
+  CCC_CLASS0_BASIC     = $001
+  CCC_CLASS2_BLOCK_RD  = $004
+  CCC_CLASS4_BLOCK_WR  = $010
+  CCC_CLASS5_ERASE     = $020
+  CCC_CLASS6_WR_PROT   = $040
+  CCC_CLASS7_LOCK      = $080
+  CCC_CLASS8_APP_SPEC  = $100
+  CCC_CLASS10_SWITCH   = $400
+
+  ' SCR bus width bit masks
+  SCR_BUS_1BIT         = $01
+  SCR_BUS_4BIT         = $04
+
+  ' SCR command support bit masks
+  SCR_CMD20_SUPPORT    = $01
+  SCR_CMD23_SUPPORT    = $02
+
+  ' OCR register bit positions
+  OCR_BIT_BUSY         = 31
+  OCR_BIT_CCS          = 30
+  OCR_BIT_UHSII        = 29
+  OCR_BIT_S18A         = 24
+  OCR_BIT_35_36V       = 23
+  OCR_BIT_34_35V       = 22
+  OCR_BIT_33_34V       = 21
+  OCR_BIT_32_33V       = 20
+  OCR_BIT_31_32V       = 19
+  OCR_BIT_30_31V       = 18
+  OCR_BIT_29_30V       = 17
+  OCR_BIT_28_29V       = 16
+  OCR_BIT_27_28V       = 15
+
+  ' Decimal conversion
+  DECIMAL_BASE         = 10
+
+  ' Speed class encoding (SD Status byte 8)
+  SPEED_CLASS_NONE     = $00
+  SPEED_CLASS_2        = $01
+  SPEED_CLASS_4        = $02
+  SPEED_CLASS_6        = $03
+  SPEED_CLASS_10       = $04
+
+  ' Speed class decoded values
+  SPEED_VAL_2          = 2
+  SPEED_VAL_4          = 4
+  SPEED_VAL_6          = 6
+  SPEED_VAL_10         = 10
+
+  ' MBR local buffer size (in LONGs: 512 / 4 = 128)
+  MBR_BUF_LONGS       = 128
+
+  ' End marker for lookup tables
+  TABLE_END_MARKER     = $FF
 
 ' Enable full driver features for this utility
 #IFDEF __SPINTOOLS__
@@ -153,14 +315,14 @@ DAT
   vbr_oem_name        BYTE    0[9]
 
   ' ===== MBR PARTITION TYPE =====
-  mbr_part_type       BYTE    0           ' Partition type from MBR offset $1C2
+  mbr_part_type       BYTE    0           ' Partition type from MBR offset OFS_MBR_PART1_TYPE
 
   ' ===== SD STATUS FIELDS (64 bytes, ACMD13) =====
-  sdst_buf            BYTE    0[64]       ' Raw SD Status register
-  sdst_speed_class    BYTE    0           ' Decoded from sdst_buf[8]
-  sdst_uhs_grade      BYTE    0           ' Decoded from sdst_buf[14] upper nibble
-  sdst_video_class    BYTE    0           ' Decoded from sdst_buf[15]
-  sdst_app_perf_class BYTE    0           ' Decoded from sdst_buf[21] lower nibble (0=None, 1=A1, 2=A2)
+  sdst_buf            BYTE    0[SDST_SIZE] ' Raw SD Status register
+  sdst_speed_class    BYTE    0           ' Decoded from sdst_buf byte IDX_SDST_SPEED_CLASS
+  sdst_uhs_grade      BYTE    0           ' Decoded from sdst_buf byte IDX_SDST_UHS_GRADE upper nibble
+  sdst_video_class    BYTE    0           ' Decoded from sdst_buf byte IDX_SDST_VIDEO_CLASS
+  sdst_app_perf_class BYTE    0           ' Decoded from sdst_buf byte IDX_SDST_APP_PERF lower nibble (0=None, 1=A1, 2=A2)
   sdst_valid          BYTE    0           ' TRUE if ACMD13 read succeeded
 
   ' SD spec version string buffer
@@ -201,7 +363,7 @@ DAT
                 BYTE    $AD, "Longsys/Lexar", 0
                 BYTE    $C9, "BIWIN/Longsys", 0
                 BYTE    $FE, "PNY OEM", 0
-                BYTE    $FF                   ' End marker
+                BYTE    TABLE_END_MARKER      ' End marker
 
   ' TRAN_SPEED unit table (bits [2:0])
   tran_unit_table   LONG    100_000       ' 0: 100 kbit/s
@@ -242,7 +404,7 @@ DAT
                     LONG    10_000_000    ' 7: 10 ms
 
   ' Unique card ID string buffer
-  card_id_str   BYTE    0[64]
+  card_id_str   BYTE    0[CARD_ID_STR_SIZE]
 
 PUB main() | result
 '' Main entry point - runs comprehensive SD card characterization.
@@ -369,22 +531,22 @@ PRI parseCID() | idx
 '   [7:1]     CRC7 checksum (7 bits)
 '   [0]       always 1
 
-  cid_mid := cid_buf[0]
-  cid_oid := (cid_buf[1] << 8) | cid_buf[2]
+  cid_mid := cid_buf[IDX_CID_MID]
+  cid_oid := (cid_buf[IDX_CID_OID_HI] << 8) | cid_buf[IDX_CID_OID_LO]
 
-  repeat idx from 0 to 4
-    cid_pnm[idx] := cid_buf[3 + idx]
-  cid_pnm[5] := 0  ' null terminate
+  repeat idx from 0 to CID_PNM_CHARS - 1
+    cid_pnm[idx] := cid_buf[IDX_CID_PNM_START + idx]
+  cid_pnm[CID_PNM_CHARS] := 0  ' null terminate
 
-  cid_prv_major := cid_buf[8] >> 4
-  cid_prv_minor := cid_buf[8] & $0F
+  cid_prv_major := cid_buf[IDX_CID_PRV] >> 4
+  cid_prv_minor := cid_buf[IDX_CID_PRV] & NIBBLE_MASK
 
-  cid_psn := (cid_buf[9] << 24) | (cid_buf[10] << 16) | (cid_buf[11] << 8) | cid_buf[12]
+  cid_psn := (cid_buf[IDX_CID_PSN_0] << 24) | (cid_buf[IDX_CID_PSN_1] << 16) | (cid_buf[IDX_CID_PSN_2] << 8) | cid_buf[IDX_CID_PSN_3]
 
-  cid_mdt_year := 2000 + ((cid_buf[13] & $0F) << 4) + ((cid_buf[14] >> 4) & $0F)
-  cid_mdt_month := cid_buf[14] & $0F
+  cid_mdt_year := CID_YEAR_BASE + ((cid_buf[IDX_CID_MDT_HI] & NIBBLE_MASK) << 4) + ((cid_buf[IDX_CID_MDT_LO] >> 4) & NIBBLE_MASK)
+  cid_mdt_month := cid_buf[IDX_CID_MDT_LO] & NIBBLE_MASK
 
-  cid_crc := cid_buf[15] >> 1
+  cid_crc := cid_buf[IDX_CID_CRC] >> 1
 
 PRI displayCID() | p_mfr, oid_c1, oid_c2
 ' Display parsed CID register fields with [USED]/[INFO] annotations.
@@ -399,8 +561,8 @@ PRI displayCID() | p_mfr, oid_c1, oid_c2
   debug("[USED] MID (Manufacturer ID):     $", uhex_byte_(cid_mid), " (", zstr_(p_mfr), ")")
 
   oid_c1 := cid_oid >> 8
-  oid_c2 := cid_oid & $FF
-  if oid_c1 >= 32 and oid_c1 < 127 and oid_c2 >= 32 and oid_c2 < 127
+  oid_c2 := cid_oid & BYTE_MASK
+  if oid_c1 >= ASCII_SPACE and oid_c1 < ASCII_DEL and oid_c2 >= ASCII_SPACE and oid_c2 < ASCII_DEL
     debug("[INFO] OID (OEM/Application ID): $", uhex_byte_(oid_c1), " $", uhex_byte_(oid_c2), " (ASCII)")
   else
     debug("[INFO] OID (OEM/Application ID): $", uhex_byte_(oid_c1), " $", uhex_byte_(oid_c2))
@@ -409,7 +571,7 @@ PRI displayCID() | p_mfr, oid_c1, oid_c2
   debug("[INFO] PRV (Product Revision):    ", udec_(cid_prv_major), ".", udec_(cid_prv_minor))
   debug("[INFO] PSN (Serial Number):       $", uhex_long_(cid_psn))
 
-  if cid_mdt_month < 10
+  if cid_mdt_month < DECIMAL_BASE
     debug("[INFO] MDT (Manufacturing Date): ", udec_(cid_mdt_year), "-0", udec_(cid_mdt_month))
   else
     debug("[INFO] MDT (Manufacturing Date): ", udec_(cid_mdt_year), "-", udec_(cid_mdt_month))
@@ -422,17 +584,20 @@ PRI lookupManufacturer(mid) : p_name | p_entry, entry_id
 ' @param mid - Manufacturer ID byte from CID
 ' @returns p_name - Pointer to manufacturer name string
 
+  p_name := @"Unknown"
   p_entry := @mfr_table
   repeat
     entry_id := BYTE[p_entry]
-    if entry_id == $FF
-      return @"Unknown"
-    if entry_id == mid
-      return p_entry + 1
-    p_entry++
-    repeat while BYTE[p_entry] <> 0
+    if entry_id == TABLE_END_MARKER
+      quit
+    elseif entry_id == mid
+      p_name := p_entry + 1
+      quit
+    else
       p_entry++
-    p_entry++
+      repeat while BYTE[p_entry] <> 0
+        p_entry++
+      p_entry++
 
 ' ============================================================
 ' CSD PARSING AND DISPLAY
@@ -443,115 +608,115 @@ PRI parseCSD() | time_val, time_unit, c_size
 ' Handles both CSD v1.0 (SDSC) and v2.0 (SDHC/SDXC) formats.
 
   ' CSD Structure [127:126]
-  csd_structure := (csd_buf[0] >> 6) & $03
+  csd_structure := (csd_buf[IDX_CSD_STRUCTURE] >> 6) & TWO_BIT_MASK
 
   ' TAAC [119:112]
-  csd_taac := csd_buf[1]
+  csd_taac := csd_buf[IDX_CSD_TAAC]
 
   ' NSAC [111:104]
-  csd_nsac := csd_buf[2]
+  csd_nsac := csd_buf[IDX_CSD_NSAC]
 
   ' TRAN_SPEED [103:96]
-  csd_tran_speed := csd_buf[3]
+  csd_tran_speed := csd_buf[IDX_CSD_TRAN_SPEED]
 
   ' CCC [95:84] - spans bytes 4 and 5
-  csd_ccc := ((csd_buf[4] & $FF) << 4) | ((csd_buf[5] >> 4) & $0F)
+  csd_ccc := ((csd_buf[IDX_CSD_CCC_HI] & BYTE_MASK) << 4) | ((csd_buf[IDX_CSD_CCC_LO] >> 4) & NIBBLE_MASK)
 
   ' READ_BL_LEN [83:80]
-  csd_read_bl_len := csd_buf[5] & $0F
+  csd_read_bl_len := csd_buf[IDX_CSD_CCC_LO] & NIBBLE_MASK
 
   ' READ_BL_PARTIAL [79]
-  csd_read_bl_partial := (csd_buf[6] >> 7) & 1
+  csd_read_bl_partial := (csd_buf[IDX_CSD_BLOCK_FLAGS] >> 7) & 1
 
   ' WRITE_BLK_MISALIGN [78]
-  csd_write_blk_misalign := (csd_buf[6] >> 6) & 1
+  csd_write_blk_misalign := (csd_buf[IDX_CSD_BLOCK_FLAGS] >> 6) & 1
 
   ' READ_BLK_MISALIGN [77]
-  csd_read_blk_misalign := (csd_buf[6] >> 5) & 1
+  csd_read_blk_misalign := (csd_buf[IDX_CSD_BLOCK_FLAGS] >> 5) & 1
 
   ' DSR_IMP [76]
-  csd_dsr_imp := (csd_buf[6] >> 4) & 1
+  csd_dsr_imp := (csd_buf[IDX_CSD_BLOCK_FLAGS] >> 4) & 1
 
   if csd_structure == 0
     ' CSD Version 1.0 (SDSC)
     ' C_SIZE [73:62] - 12 bits
-    csd_v1_c_size := ((csd_buf[6] & $03) << 10) | (csd_buf[7] << 2) | ((csd_buf[8] >> 6) & $03)
+    csd_v1_c_size := ((csd_buf[IDX_CSD_V1_CSIZE_HI] & TWO_BIT_MASK) << 10) | (csd_buf[IDX_CSD_V1_CSIZE_MID] << 2) | ((csd_buf[IDX_CSD_V1_CSIZE_LO] >> 6) & TWO_BIT_MASK)
     ' VDD_R_CURR_MIN [61:59]
-    csd_v1_vdd_r_curr_min := (csd_buf[8] >> 3) & $07
+    csd_v1_vdd_r_curr_min := (csd_buf[IDX_CSD_V1_CSIZE_LO] >> 3) & THREE_BIT_MASK
     ' VDD_R_CURR_MAX [58:56]
-    csd_v1_vdd_r_curr_max := csd_buf[8] & $07
+    csd_v1_vdd_r_curr_max := csd_buf[IDX_CSD_V1_CSIZE_LO] & THREE_BIT_MASK
     ' VDD_W_CURR_MIN [55:53]
-    csd_v1_vdd_w_curr_min := (csd_buf[9] >> 5) & $07
+    csd_v1_vdd_w_curr_min := (csd_buf[IDX_CSD_V2_CSIZE_LO] >> 5) & THREE_BIT_MASK
     ' VDD_W_CURR_MAX [52:50]
-    csd_v1_vdd_w_curr_max := (csd_buf[9] >> 2) & $07
+    csd_v1_vdd_w_curr_max := (csd_buf[IDX_CSD_V2_CSIZE_LO] >> 2) & THREE_BIT_MASK
     ' C_SIZE_MULT [49:47]
-    csd_v1_c_size_mult := ((csd_buf[9] & $03) << 1) | ((csd_buf[10] >> 7) & 1)
+    csd_v1_c_size_mult := ((csd_buf[IDX_CSD_V2_CSIZE_LO] & TWO_BIT_MASK) << 1) | ((csd_buf[IDX_CSD_ERASE] >> 7) & 1)
     ' Calculate capacity
     csd_capacity_mb := ((csd_v1_c_size + 1) << (csd_v1_c_size_mult + 2)) >> (20 - csd_read_bl_len)
   else
     ' CSD Version 2.0 (SDHC/SDXC)
     ' C_SIZE [69:48] - 22 bits
-    csd_v2_c_size := ((csd_buf[7] & $3F) << 16) | (csd_buf[8] << 8) | csd_buf[9]
+    csd_v2_c_size := ((csd_buf[IDX_CSD_V2_CSIZE_HI] & SIX_BIT_MASK) << 16) | (csd_buf[IDX_CSD_V2_CSIZE_MID] << 8) | csd_buf[IDX_CSD_V2_CSIZE_LO]
     ' Calculate capacity: (C_SIZE + 1) * 512KB
     csd_capacity_mb := (csd_v2_c_size + 1) / 2
 
   ' ERASE_BLK_EN [46]
-  csd_erase_blk_en := (csd_buf[10] >> 6) & 1
+  csd_erase_blk_en := (csd_buf[IDX_CSD_ERASE] >> 6) & 1
 
   ' SECTOR_SIZE [45:39] - 7 bits
-  csd_sector_size := ((csd_buf[10] & $3F) << 1) | ((csd_buf[11] >> 7) & 1)
+  csd_sector_size := ((csd_buf[IDX_CSD_ERASE] & SIX_BIT_MASK) << 1) | ((csd_buf[IDX_CSD_WP] >> 7) & 1)
 
   ' WP_GRP_SIZE [38:32] - 7 bits
-  csd_wp_grp_size := csd_buf[11] & $7F
+  csd_wp_grp_size := csd_buf[IDX_CSD_WP] & SEVEN_BIT_MASK
 
   ' WP_GRP_ENABLE [31]
-  csd_wp_grp_enable := (csd_buf[12] >> 7) & 1
+  csd_wp_grp_enable := (csd_buf[IDX_CSD_WP_GRP] >> 7) & 1
 
   ' R2W_FACTOR [28:26] - 3 bits
-  csd_r2w_factor := (csd_buf[12] >> 2) & $07
+  csd_r2w_factor := (csd_buf[IDX_CSD_WP_GRP] >> 2) & THREE_BIT_MASK
 
   ' WRITE_BL_LEN [25:22] - 4 bits
-  csd_write_bl_len := ((csd_buf[12] & $03) << 2) | ((csd_buf[13] >> 6) & $03)
+  csd_write_bl_len := ((csd_buf[IDX_CSD_WP_GRP] & TWO_BIT_MASK) << 2) | ((csd_buf[IDX_CSD_WRITE_BL] >> 6) & TWO_BIT_MASK)
 
   ' WRITE_BL_PARTIAL [21]
-  csd_write_bl_partial := (csd_buf[13] >> 5) & 1
+  csd_write_bl_partial := (csd_buf[IDX_CSD_WRITE_BL] >> 5) & 1
 
   ' FILE_FORMAT_GRP [15]
-  csd_file_format_grp := (csd_buf[14] >> 7) & 1
+  csd_file_format_grp := (csd_buf[IDX_CSD_FLAGS] >> 7) & 1
 
   ' COPY [14]
-  csd_copy := (csd_buf[14] >> 6) & 1
+  csd_copy := (csd_buf[IDX_CSD_FLAGS] >> 6) & 1
 
   ' PERM_WRITE_PROTECT [13]
-  csd_perm_write_protect := (csd_buf[14] >> 5) & 1
+  csd_perm_write_protect := (csd_buf[IDX_CSD_FLAGS] >> 5) & 1
 
   ' TMP_WRITE_PROTECT [12]
-  csd_tmp_write_protect := (csd_buf[14] >> 4) & 1
+  csd_tmp_write_protect := (csd_buf[IDX_CSD_FLAGS] >> 4) & 1
 
   ' FILE_FORMAT [11:10] - 2 bits
-  csd_file_format := (csd_buf[14] >> 2) & $03
+  csd_file_format := (csd_buf[IDX_CSD_FLAGS] >> 2) & TWO_BIT_MASK
 
   ' CRC [7:1]
-  csd_crc := csd_buf[15] >> 1
+  csd_crc := csd_buf[IDX_CSD_CRC] >> 1
 
   ' Calculate TRAN_SPEED in Hz
-  time_val := tran_time_table[(csd_tran_speed >> 3) & $0F]
-  time_unit := tran_unit_table[csd_tran_speed & $07]
-  csd_max_speed_hz := (time_val * time_unit) / 10
+  time_val := tran_time_table[(csd_tran_speed >> 3) & NIBBLE_MASK]
+  time_unit := tran_unit_table[csd_tran_speed & THREE_BIT_MASK]
+  csd_max_speed_hz := (time_val * time_unit) / DECIMAL_BASE
 
   ' Calculate timeouts (simplified - SDHC uses fixed 100ms/250ms)
   if csd_structure == 0
     ' SDSC: Calculate from TAAC/NSAC
-    time_val := tran_time_table[(csd_taac >> 3) & $0F]
-    time_unit := taac_unit_table[csd_taac & $07]
-    csd_read_timeout_ms := (time_val * time_unit) / 10_000  ' Convert ns to ms approx
-    if csd_read_timeout_ms < 100
-      csd_read_timeout_ms := 100
+    time_val := tran_time_table[(csd_taac >> 3) & NIBBLE_MASK]
+    time_unit := taac_unit_table[csd_taac & THREE_BIT_MASK]
+    csd_read_timeout_ms := (time_val * time_unit) / NS_TO_MS_DIVISOR  ' Convert ns to ms approx
+    if csd_read_timeout_ms < CSD_MIN_READ_TIMEOUT_MS
+      csd_read_timeout_ms := CSD_MIN_READ_TIMEOUT_MS
     csd_write_timeout_ms := csd_read_timeout_ms << csd_r2w_factor
   else
     ' SDHC/SDXC: Fixed timeouts per spec
-    csd_read_timeout_ms := 100
-    csd_write_timeout_ms := 250
+    csd_read_timeout_ms := CSD_FIXED_READ_TIMEOUT_MS
+    csd_write_timeout_ms := CSD_FIXED_WRITE_TIMEOUT_MS
 
 PRI displayCSD() | cap_gb, total_sectors
 ' Display parsed CSD register fields with timing and capacity information.
@@ -585,26 +750,26 @@ PRI displayCSD() | cap_gb, total_sectors
   else
     debug("[USED] C_SIZE:               ", udec_(csd_v2_c_size), " (", udec_(csd_capacity_mb), " MB)")
 
-  cap_gb := csd_capacity_mb / 1024
+  cap_gb := csd_capacity_mb / BYTES_PER_KB
   if cap_gb > 0
     debug("       Capacity:             ~", udec_(cap_gb), " GB")
   else
     debug("       Capacity:             ", udec_(csd_capacity_mb), " MB")
 
-  total_sectors := csd_capacity_mb * 2048
+  total_sectors := csd_capacity_mb * SECTORS_PER_MB
   debug("       Total Sectors:        ", udec_(total_sectors))
 
   debug(" ")
   debug("--- Command Classes (CCC) ---")
   debug("[INFO] CCC:                  $", uhex_(csd_ccc))
-  debug("       Class 0 (basic):      ", zstr_(csd_ccc & $001 ? @"Yes" : @"No"))
-  debug("       Class 2 (block read): ", zstr_(csd_ccc & $004 ? @"Yes" : @"No"))
-  debug("       Class 4 (block write):", zstr_(csd_ccc & $010 ? @"Yes" : @"No"))
-  debug("       Class 5 (erase):      ", zstr_(csd_ccc & $020 ? @"Yes" : @"No"))
-  debug("       Class 6 (write prot): ", zstr_(csd_ccc & $040 ? @"Yes" : @"No"))
-  debug("       Class 7 (lock card):  ", zstr_(csd_ccc & $080 ? @"Yes" : @"No"))
-  debug("       Class 8 (app spec):   ", zstr_(csd_ccc & $100 ? @"Yes" : @"No"))
-  debug("       Class 10 (switch):    ", zstr_(csd_ccc & $400 ? @"Yes" : @"No"))
+  debug("       Class 0 (basic):      ", zstr_(csd_ccc & CCC_CLASS0_BASIC ? @"Yes" : @"No"))
+  debug("       Class 2 (block read): ", zstr_(csd_ccc & CCC_CLASS2_BLOCK_RD ? @"Yes" : @"No"))
+  debug("       Class 4 (block write):", zstr_(csd_ccc & CCC_CLASS4_BLOCK_WR ? @"Yes" : @"No"))
+  debug("       Class 5 (erase):      ", zstr_(csd_ccc & CCC_CLASS5_ERASE ? @"Yes" : @"No"))
+  debug("       Class 6 (write prot): ", zstr_(csd_ccc & CCC_CLASS6_WR_PROT ? @"Yes" : @"No"))
+  debug("       Class 7 (lock card):  ", zstr_(csd_ccc & CCC_CLASS7_LOCK ? @"Yes" : @"No"))
+  debug("       Class 8 (app spec):   ", zstr_(csd_ccc & CCC_CLASS8_APP_SPEC ? @"Yes" : @"No"))
+  debug("       Class 10 (switch):    ", zstr_(csd_ccc & CCC_CLASS10_SWITCH ? @"Yes" : @"No"))
 
   debug(" ")
   debug("--- Block Parameters ---")
@@ -618,7 +783,7 @@ PRI displayCSD() | cap_gb, total_sectors
   debug(" ")
   debug("--- Erase Parameters ---")
   debug("[INFO] ERASE_BLK_EN:         ", udec_(csd_erase_blk_en), " (", zstr_(csd_erase_blk_en ? @"512-byte erase" : @"SECTOR_SIZE erase"), ")")
-  debug("[INFO] SECTOR_SIZE:          ", udec_(csd_sector_size), " (erase sector = ", udec_((csd_sector_size + 1) * 512), " bytes)")
+  debug("[INFO] SECTOR_SIZE:          ", udec_(csd_sector_size), " (erase sector = ", udec_((csd_sector_size + 1) * VBR_SIZE), " bytes)")
 
   debug(" ")
   debug("--- Write Protection ---")
@@ -650,20 +815,20 @@ PRI displayCSD() | cap_gb, total_sectors
 PRI parseOCR()
 ' Parse all OCR register fields including voltage window and card status.
 
-  ocr_busy := (ocr_val >> 31) & 1
-  ocr_ccs := (ocr_val >> 30) & 1
-  ocr_uhsii := (ocr_val >> 29) & 1
-  ocr_s18a := (ocr_val >> 24) & 1
+  ocr_busy := (ocr_val >> OCR_BIT_BUSY) & 1
+  ocr_ccs := (ocr_val >> OCR_BIT_CCS) & 1
+  ocr_uhsii := (ocr_val >> OCR_BIT_UHSII) & 1
+  ocr_s18a := (ocr_val >> OCR_BIT_S18A) & 1
 
-  ocr_voltage_35_36 := (ocr_val >> 23) & 1
-  ocr_voltage_34_35 := (ocr_val >> 22) & 1
-  ocr_voltage_33_34 := (ocr_val >> 21) & 1
-  ocr_voltage_32_33 := (ocr_val >> 20) & 1
-  ocr_voltage_31_32 := (ocr_val >> 19) & 1
-  ocr_voltage_30_31 := (ocr_val >> 18) & 1
-  ocr_voltage_29_30 := (ocr_val >> 17) & 1
-  ocr_voltage_28_29 := (ocr_val >> 16) & 1
-  ocr_voltage_27_28 := (ocr_val >> 15) & 1
+  ocr_voltage_35_36 := (ocr_val >> OCR_BIT_35_36V) & 1
+  ocr_voltage_34_35 := (ocr_val >> OCR_BIT_34_35V) & 1
+  ocr_voltage_33_34 := (ocr_val >> OCR_BIT_33_34V) & 1
+  ocr_voltage_32_33 := (ocr_val >> OCR_BIT_32_33V) & 1
+  ocr_voltage_31_32 := (ocr_val >> OCR_BIT_31_32V) & 1
+  ocr_voltage_30_31 := (ocr_val >> OCR_BIT_30_31V) & 1
+  ocr_voltage_29_30 := (ocr_val >> OCR_BIT_29_30V) & 1
+  ocr_voltage_28_29 := (ocr_val >> OCR_BIT_28_29V) & 1
+  ocr_voltage_27_28 := (ocr_val >> OCR_BIT_27_28V) & 1
 
 PRI displayOCR()
 ' Display parsed OCR register fields including voltage support and CCS bit.
@@ -710,34 +875,34 @@ PRI parseSCR()
 ' SCR structure (64 bits = 8 bytes).
 
   ' SCR_STRUCTURE [63:60]
-  scr_structure := (scr_buf[0] >> 4) & $0F
+  scr_structure := (scr_buf[IDX_SCR_0] >> 4) & NIBBLE_MASK
 
   ' SD_SPEC [59:56]
-  scr_sd_spec := scr_buf[0] & $0F
+  scr_sd_spec := scr_buf[IDX_SCR_0] & NIBBLE_MASK
 
   ' DATA_STAT_AFTER_ERASE [55]
-  scr_data_stat_after_erase := (scr_buf[1] >> 7) & 1
+  scr_data_stat_after_erase := (scr_buf[IDX_SCR_1] >> 7) & 1
 
   ' SD_SECURITY [54:52]
-  scr_sd_security := (scr_buf[1] >> 4) & $07
+  scr_sd_security := (scr_buf[IDX_SCR_1] >> 4) & THREE_BIT_MASK
 
   ' SD_BUS_WIDTHS [51:48]
-  scr_sd_bus_widths := scr_buf[1] & $0F
+  scr_sd_bus_widths := scr_buf[IDX_SCR_1] & NIBBLE_MASK
 
   ' SD_SPEC3 [47]
-  scr_sd_spec3 := (scr_buf[2] >> 7) & 1
+  scr_sd_spec3 := (scr_buf[IDX_SCR_2] >> 7) & 1
 
   ' EX_SECURITY [46:43]
-  scr_ex_security := (scr_buf[2] >> 3) & $0F
+  scr_ex_security := (scr_buf[IDX_SCR_2] >> 3) & NIBBLE_MASK
 
   ' SD_SPEC4 [42]
-  scr_sd_spec4 := (scr_buf[2] >> 2) & 1
+  scr_sd_spec4 := (scr_buf[IDX_SCR_2] >> 2) & 1
 
   ' SD_SPECX [41:38]
-  scr_sd_specx := ((scr_buf[2] & $03) << 2) | ((scr_buf[3] >> 6) & $03)
+  scr_sd_specx := ((scr_buf[IDX_SCR_2] & TWO_BIT_MASK) << 2) | ((scr_buf[IDX_SCR_3] >> 6) & TWO_BIT_MASK)
 
   ' CMD_SUPPORT [33:32]
-  scr_cmd_support := scr_buf[4] & $03
+  scr_cmd_support := scr_buf[IDX_SCR_4] & TWO_BIT_MASK
 
 PRI displaySCR()
 ' Display parsed SCR register fields including SD version and bus width support.
@@ -771,9 +936,9 @@ PRI displaySCR()
   debug(" ")
   debug("--- Bus Width Support ---")
   debug("[INFO] SD_BUS_WIDTHS:        $", uhex_byte_(scr_sd_bus_widths))
-  if scr_sd_bus_widths & $01
+  if scr_sd_bus_widths & SCR_BUS_1BIT
     debug("       1-bit bus:            Supported (SPI mode uses this)")
-  if scr_sd_bus_widths & $04
+  if scr_sd_bus_widths & SCR_BUS_4BIT
     debug("       4-bit bus:            Supported")
 
   debug(" ")
@@ -792,9 +957,9 @@ PRI displaySCR()
   debug(" ")
   debug("--- Command Support ---")
   debug("[INFO] CMD_SUPPORT:          $", uhex_byte_(scr_cmd_support))
-  if scr_cmd_support & $01
+  if scr_cmd_support & SCR_CMD20_SUPPORT
     debug("       CMD20 (Speed Class):  Supported")
-  if scr_cmd_support & $02
+  if scr_cmd_support & SCR_CMD23_SUPPORT
     debug("       CMD23 (Set Block Cnt):Supported")
 
   debug(" ")
@@ -827,7 +992,7 @@ PRI displayRawRegisters()
 ' VBR/FILESYSTEM PARSING AND DISPLAY
 ' ============================================================
 
-PRI findAndReadVBR() | mbr_buf[128], vbr_sector, type_code
+PRI findAndReadVBR() | mbr_buf[MBR_BUF_LONGS], vbr_sector, type_code
 ' Find and read the Volume Boot Record (VBR) from the partition table.
 
   debug(" ")
@@ -837,104 +1002,101 @@ PRI findAndReadVBR() | mbr_buf[128], vbr_sector, type_code
   ' Read MBR (sector 0)
   dfs.readSectorRaw(0, @mbr_buf)
 
-  ' Get partition type code from MBR at offset 0x1C2
-  type_code := BYTE[@mbr_buf + $1C2]
+  ' Get partition type code from MBR
+  type_code := BYTE[@mbr_buf + OFS_MBR_PART1_TYPE]
   mbr_part_type := type_code
   debug("MBR Partition Type:          $", uhex_byte_(type_code))
 
-  if type_code == $0B or type_code == $0C
-    debug("                             FAT32 (", zstr_(type_code == $0C ? @"LBA" : @"CHS"), ")")
-  elseif type_code == $07
+  if type_code == PART_TYPE_FAT32_CHS or type_code == PART_TYPE_FAT32_LBA
+    debug("                             FAT32 (", zstr_(type_code == PART_TYPE_FAT32_LBA ? @"LBA" : @"CHS"), ")")
+  elseif type_code == PART_TYPE_EXFAT_NTFS
     debug("                             exFAT/NTFS")
-  elseif type_code == $06
+  elseif type_code == PART_TYPE_FAT16_LARGE
     debug("                             FAT16")
   else
     debug("                             Unknown type")
 
-  if type_code <> $0B and type_code <> $0C
+  if type_code <> PART_TYPE_FAT32_CHS and type_code <> PART_TYPE_FAT32_LBA
     debug("NOTE: Not FAT32 - VBR parsing skipped")
-    return
+  else
+    ' Get VBR sector from MBR
+    vbr_sector := LONG[@mbr_buf + OFS_MBR_PART1_LBA]
+    debug("VBR at sector:               ", udec_(vbr_sector))
 
-  ' Get VBR sector from MBR at offset 0x1C6
-  vbr_sector := LONG[@mbr_buf + $1C6]
-  debug("VBR at sector:               ", udec_(vbr_sector))
-
-  ' Read VBR
-  dfs.readSectorRaw(vbr_sector, @vbr_buf)
+    ' Read VBR
+    dfs.readSectorRaw(vbr_sector, @vbr_buf)
 
 PRI parseVBR()
 ' Parse VBR/BPB fields including filesystem parameters.
 
-  ' OEM Name at offset 0x03 (8 bytes)
-  bytemove(@vbr_oem_name, @vbr_buf + $03, 8)
-  vbr_oem_name[8] := 0
+  ' OEM Name
+  bytemove(@vbr_oem_name, @vbr_buf + OFS_VBR_OEM_NAME, LEN_VBR_OEM_NAME)
+  vbr_oem_name[LEN_VBR_OEM_NAME] := 0
 
-  ' Bytes per sector at offset 0x0B (16-bit)
-  vbr_bytes_per_sec := WORD[@vbr_buf + $0B]
+  ' Bytes per sector (16-bit)
+  vbr_bytes_per_sec := WORD[@vbr_buf + OFS_VBR_BYTES_PER_SEC]
 
-  ' Sectors per cluster at offset 0x0D (8-bit)
-  vbr_sec_per_clus := vbr_buf[$0D]
+  ' Sectors per cluster (8-bit)
+  vbr_sec_per_clus := vbr_buf[OFS_VBR_SEC_PER_CLUS]
 
-  ' Reserved sectors at offset 0x0E (16-bit)
-  vbr_reserved_sec := WORD[@vbr_buf + $0E]
+  ' Reserved sectors (16-bit)
+  vbr_reserved_sec := WORD[@vbr_buf + OFS_VBR_RESERVED_SEC]
 
-  ' Number of FATs at offset 0x10 (8-bit)
-  vbr_num_fats := vbr_buf[$10]
+  ' Number of FATs (8-bit)
+  vbr_num_fats := vbr_buf[OFS_VBR_NUM_FATS]
 
-  ' Total sectors (32-bit) at offset 0x20
-  vbr_total_sectors := LONG[@vbr_buf + $20]
+  ' Total sectors (32-bit)
+  vbr_total_sectors := LONG[@vbr_buf + OFS_VBR_TOTAL_SECS]
 
-  ' Sectors per FAT (32-bit) at offset 0x24
-  vbr_sec_per_fat := LONG[@vbr_buf + $24]
+  ' Sectors per FAT (32-bit)
+  vbr_sec_per_fat := LONG[@vbr_buf + OFS_VBR_SEC_PER_FAT]
 
-  ' Root cluster at offset 0x2C (32-bit)
-  vbr_root_cluster := LONG[@vbr_buf + $2C]
+  ' Root cluster (32-bit)
+  vbr_root_cluster := LONG[@vbr_buf + OFS_VBR_ROOT_CLUSTER]
 
-  ' Volume serial at offset 0x43 (32-bit)
-  vbr_volume_serial := LONG[@vbr_buf + $43]
+  ' Volume serial (32-bit)
+  vbr_volume_serial := LONG[@vbr_buf + OFS_VBR_VOL_SERIAL]
 
-  ' Volume label at offset 0x47 (11 bytes)
-  bytemove(@vbr_volume_label, @vbr_buf + $47, 11)
-  vbr_volume_label[11] := 0
+  ' Volume label (11 bytes)
+  bytemove(@vbr_volume_label, @vbr_buf + OFS_VBR_VOL_LABEL, LEN_VBR_VOL_LABEL)
+  vbr_volume_label[LEN_VBR_VOL_LABEL] := 0
 
-  ' FS type string at offset 0x52 (8 bytes)
-  bytemove(@vbr_fs_type, @vbr_buf + $52, 8)
-  vbr_fs_type[8] := 0
+  ' FS type string (8 bytes)
+  bytemove(@vbr_fs_type, @vbr_buf + OFS_VBR_FS_TYPE, LEN_VBR_FS_TYPE)
+  vbr_fs_type[LEN_VBR_FS_TYPE] := 0
 
 PRI displayVBR() | cluster_size, data_region, total_clusters
 ' Display parsed VBR/BPB fields for FAT32 filesystem.
 
-  if vbr_bytes_per_sec == 0
-    return  ' VBR not read
+  if vbr_bytes_per_sec <> 0
+    debug(" ")
+    debug("--- FAT32 Filesystem ---")
+    debug("OEM Name:                    [", zstr_(@vbr_oem_name), "]")
+    debug("Volume Label:                [", zstr_(@vbr_volume_label), "]")
+    debug("Volume Serial:               $", uhex_long_(vbr_volume_serial))
+    debug("FS Type:                     [", zstr_(@vbr_fs_type), "]")
+    debug("Bytes/Sector:                ", udec_(vbr_bytes_per_sec))
 
-  debug(" ")
-  debug("--- FAT32 Filesystem ---")
-  debug("OEM Name:                    [", zstr_(@vbr_oem_name), "]")
-  debug("Volume Label:                [", zstr_(@vbr_volume_label), "]")
-  debug("Volume Serial:               $", uhex_long_(vbr_volume_serial))
-  debug("FS Type:                     [", zstr_(@vbr_fs_type), "]")
-  debug("Bytes/Sector:                ", udec_(vbr_bytes_per_sec))
+    cluster_size := vbr_sec_per_clus * vbr_bytes_per_sec
+    if cluster_size >= BYTES_PER_KB
+      debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size / BYTES_PER_KB), " KB clusters)")
+    else
+      debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size), " byte clusters)")
 
-  cluster_size := vbr_sec_per_clus * vbr_bytes_per_sec
-  if cluster_size >= 1024
-    debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size / 1024), " KB clusters)")
-  else
-    debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size), " byte clusters)")
+    debug("Reserved Sectors:            ", udec_(vbr_reserved_sec))
+    debug("Number of FATs:              ", udec_(vbr_num_fats))
+    debug("Sectors per FAT:             ", udec_(vbr_sec_per_fat))
+    debug("Root Cluster:                ", udec_(vbr_root_cluster))
+    debug("Total Sectors:               ", udec_(vbr_total_sectors))
 
-  debug("Reserved Sectors:            ", udec_(vbr_reserved_sec))
-  debug("Number of FATs:              ", udec_(vbr_num_fats))
-  debug("Sectors per FAT:             ", udec_(vbr_sec_per_fat))
-  debug("Root Cluster:                ", udec_(vbr_root_cluster))
-  debug("Total Sectors:               ", udec_(vbr_total_sectors))
+    ' Calculate data region start
+    data_region := vbr_reserved_sec + (vbr_num_fats * vbr_sec_per_fat)
+    debug("Data Region Start:           Sector ", udec_(data_region))
 
-  ' Calculate data region start
-  data_region := vbr_reserved_sec + (vbr_num_fats * vbr_sec_per_fat)
-  debug("Data Region Start:           Sector ", udec_(data_region))
-
-  ' Calculate total clusters
-  if vbr_sec_per_clus > 0
-    total_clusters := (vbr_total_sectors - data_region) / vbr_sec_per_clus
-    debug("Total Clusters:              ", udec_(total_clusters))
+    ' Calculate total clusters
+    if vbr_sec_per_clus > 0
+      total_clusters := (vbr_total_sectors - data_region) / vbr_sec_per_clus
+      debug("Total Clusters:              ", udec_(total_clusters))
 
 ' ============================================================
 ' UNIQUE CARD ID GENERATION
@@ -976,7 +1138,7 @@ PRI generateCardID() | p_dst, p_mfr, idx, ch
 
   ' Manufacturing date (YYYYMM)
   p_dst := decWord(p_dst, cid_mdt_year)
-  if cid_mdt_month < 10
+  if cid_mdt_month < DECIMAL_BASE
     BYTE[p_dst++] := "0"
   p_dst := decByte(p_dst, cid_mdt_month)
 
@@ -990,13 +1152,13 @@ PRI hexLong(p_dst, val) : p_out | idx, nibble
 ' @param val - Value to convert
 ' @returns p_out - Pointer to next position after written string
 
+  p_out := p_dst
   repeat idx from 7 to 0
-    nibble := (val >> (idx * 4)) & $0F
-    if nibble < 10
-      BYTE[p_dst++] := nibble + "0"
+    nibble := (val >> (idx * 4)) & NIBBLE_MASK
+    if nibble < DECIMAL_BASE
+      BYTE[p_out++] := nibble + "0"
     else
-      BYTE[p_dst++] := nibble - 10 + "A"
-  return p_dst
+      BYTE[p_out++] := nibble - DECIMAL_BASE + "A"
 
 PRI decWord(p_dst, val) : p_out | digits[5], idx, started
 ' Convert a WORD value to decimal string.
@@ -1005,15 +1167,15 @@ PRI decWord(p_dst, val) : p_out | digits[5], idx, started
 ' @param val - Value to convert
 ' @returns p_out - Pointer to next position after written string
 
+  p_out := p_dst
   repeat idx from 0 to 4
-    digits[idx] := val // 10
-    val := val / 10
+    digits[idx] := val // DECIMAL_BASE
+    val := val / DECIMAL_BASE
   started := false
   repeat idx from 4 to 0
     if digits[idx] <> 0 or started or idx == 0
-      BYTE[p_dst++] := digits[idx] + "0"
+      BYTE[p_out++] := digits[idx] + "0"
       started := true
-  return p_dst
 
 PRI decByte(p_dst, val) : p_out | digits[3], idx, started
 ' Convert a BYTE value to decimal string.
@@ -1022,15 +1184,15 @@ PRI decByte(p_dst, val) : p_out | digits[3], idx, started
 ' @param val - Value to convert
 ' @returns p_out - Pointer to next position after written string
 
+  p_out := p_dst
   repeat idx from 0 to 2
-    digits[idx] := val // 10
-    val := val / 10
+    digits[idx] := val // DECIMAL_BASE
+    val := val / DECIMAL_BASE
   started := false
   repeat idx from 2 to 0
     if digits[idx] <> 0 or started or idx == 0
-      BYTE[p_dst++] := digits[idx] + "0"
+      BYTE[p_out++] := digits[idx] + "0"
       started := true
-  return p_dst
 
 PRI displayCardID()
 ' Display the generated unique card ID string.
@@ -1048,10 +1210,10 @@ PRI parseSDStatus()
 ' Parse key fields from SD Status register (ACMD13).
 
   if sdst_valid
-    sdst_speed_class := sdst_buf[8]
-    sdst_uhs_grade := sdst_buf[14] >> 4
-    sdst_video_class := sdst_buf[15]
-    sdst_app_perf_class := sdst_buf[21] & $0F
+    sdst_speed_class := sdst_buf[IDX_SDST_SPEED_CLASS]
+    sdst_uhs_grade := sdst_buf[IDX_SDST_UHS_GRADE] >> 4
+    sdst_video_class := sdst_buf[IDX_SDST_VIDEO_CLASS]
+    sdst_app_perf_class := sdst_buf[IDX_SDST_APP_PERF] & NIBBLE_MASK
   else
     sdst_speed_class := 0
     sdst_uhs_grade := 0
@@ -1077,11 +1239,11 @@ PRI displayCardDesignator() | cap_gb, spi_mhz, p_mfr, p_type, p_fs, speedVal
   p_fs := getFilesystemStr()
   buildSDSpecStr()
 
-  cap_gb := csd_capacity_mb / 1024
+  cap_gb := csd_capacity_mb / BYTES_PER_KB
   spi_mhz := csd_max_speed_hz / 1_000_000
 
   ' Line 1
-  if cid_mdt_month < 10
+  if cid_mdt_month < DECIMAL_BASE
     debug(zstr_(p_mfr), " ", zstr_(@cid_pnm), " ", zstr_(p_type), " ", udec_(cap_gb), "GB [", zstr_(p_fs), "] SD ", zstr_(@sd_spec_str), " rev", udec_(cid_prv_major), ".", udec_(cid_prv_minor), " SN:", uhex_long_(cid_psn), " ", udec_(cid_mdt_year), "/0", udec_(cid_mdt_month))
   else
     debug(zstr_(p_mfr), " ", zstr_(@cid_pnm), " ", zstr_(p_type), " ", udec_(cap_gb), "GB [", zstr_(p_fs), "] SD ", zstr_(@sd_spec_str), " rev", udec_(cid_prv_major), ".", udec_(cid_prv_minor), " SN:", uhex_long_(cid_psn), " ", udec_(cid_mdt_year), "/", udec_(cid_mdt_month))
@@ -1112,11 +1274,11 @@ PRI getCardTypeStr() : p_str
 '
 ' @returns p_str - Pointer to "SDSC", "SDHC", or "SDXC" string
 
+  p_str := @"SDHC"
   if ocr_ccs == 0
-    return @"SDSC"
-  if csd_capacity_mb > 32768
-    return @"SDXC"
-  return @"SDHC"
+    p_str := @"SDSC"
+  elseif csd_capacity_mb > SDXC_THRESHOLD_MB
+    p_str := @"SDXC"
 
 PRI buildSDSpecStr() | p_dst
 ' Build SD spec version string into sd_spec_str buffer.
@@ -1125,37 +1287,35 @@ PRI buildSDSpecStr() | p_dst
   p_dst := @sd_spec_str
   if scr_sd_spec < 2
     bytemove(p_dst, @"1.x", 4)
-    return
-  if scr_sd_spec3 == 0
+  elseif scr_sd_spec3 == 0
     bytemove(p_dst, @"2.0", 4)
-    return
-  if scr_sd_spec4 == 0
+  elseif scr_sd_spec4 == 0
     bytemove(p_dst, @"3.x", 4)
-    return
-  ' SD_SPEC4 == 1, use SPECX
-  case scr_sd_specx
-    0 : bytemove(p_dst, @"4.x", 4)
-    1 : bytemove(p_dst, @"5.x", 4)
-    2 : bytemove(p_dst, @"6.x", 4)
-    3 : bytemove(p_dst, @"7.x", 4)
-    4 : bytemove(p_dst, @"8.x", 4)
-    5 : bytemove(p_dst, @"9.x", 4)
-    other : bytemove(p_dst, @">9.x", 5)
+  else
+    ' SD_SPEC4 == 1, use SPECX
+    case scr_sd_specx
+      0 : bytemove(p_dst, @"4.x", 4)
+      1 : bytemove(p_dst, @"5.x", 4)
+      2 : bytemove(p_dst, @"6.x", 4)
+      3 : bytemove(p_dst, @"7.x", 4)
+      4 : bytemove(p_dst, @"8.x", 4)
+      5 : bytemove(p_dst, @"9.x", 4)
+      other : bytemove(p_dst, @">9.x", 5)
 
 PRI getFilesystemStr() : p_str
 ' Determine filesystem type string from MBR partition type byte.
 '
 ' @returns p_str - Pointer to filesystem name string
 
+  p_str := @"Unknown"
   case mbr_part_type
-    $00 : return @"Empty"
-    $01 : return @"FAT12"
-    $04, $06, $0E : return @"FAT16"
-    $0B, $0C : return @"FAT32"
-    $07 : return @"exFAT"
-    $83 : return @"Linux"
-    $EE : return @"GPT"
-    other : return @"Unknown"
+    PART_TYPE_EMPTY : p_str := @"Empty"
+    PART_TYPE_FAT12 : p_str := @"FAT12"
+    PART_TYPE_FAT16_SMALL, PART_TYPE_FAT16_LARGE, PART_TYPE_FAT16_LBA : p_str := @"FAT16"
+    PART_TYPE_FAT32_CHS, PART_TYPE_FAT32_LBA : p_str := @"FAT32"
+    PART_TYPE_EXFAT_NTFS : p_str := @"exFAT"
+    PART_TYPE_LINUX : p_str := @"Linux"
+    PART_TYPE_GPT : p_str := @"GPT"
 
 PRI decodeSpeedClass(classByte) : speedClass
 ' Decode SD Status SPEED_CLASS byte to integer speed class.
@@ -1163,13 +1323,13 @@ PRI decodeSpeedClass(classByte) : speedClass
 ' @param classByte - Raw byte from SD Status byte[8]
 ' @returns speedClass - Speed class value (0, 2, 4, 6, or 10)
 
+  speedClass := 0
   case classByte
-    $00 : return 0
-    $01 : return 2
-    $02 : return 4
-    $03 : return 6
-    $04 : return 10
-    other : return 0
+    SPEED_CLASS_NONE : speedClass := 0
+    SPEED_CLASS_2 : speedClass := SPEED_VAL_2
+    SPEED_CLASS_4 : speedClass := SPEED_VAL_4
+    SPEED_CLASS_6 : speedClass := SPEED_VAL_6
+    SPEED_CLASS_10 : speedClass := SPEED_VAL_10
 
 ' ============================================================
 ' DRIVER USAGE SUMMARY

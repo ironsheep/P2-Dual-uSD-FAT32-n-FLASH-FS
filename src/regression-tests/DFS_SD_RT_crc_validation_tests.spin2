@@ -29,8 +29,7 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 
-     ' Error codes
-     E_NOT_MOUNTED   = -20
+     SECTOR_SIZE     = 512
 
 ' Enable raw sector access and debug features
 #IFDEF __SPINTOOLS__
@@ -56,7 +55,7 @@ DAT
 crcTestFile     BYTE    "CRCVAL.TXT", 0
 
 ' Buffers
-writeBuffer     BYTE    0[512]
+writeBuffer     BYTE    0[SECTOR_SIZE]
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 
@@ -73,103 +72,99 @@ PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, m
     ' Initialize worker cog
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
-        debug("ERROR: Could not mount SD card!")
-        dfs.stop()
-        debug("END_SESSION")
-        return
+    if result == dfs.SUCCESS
 
-    debug(" ")
-    debug("* SD Card mounted successfully")
+        debug(" ")
+        debug("* SD Card mounted successfully")
 
-    ' ----------------------------------
-    ' TEST GROUP: Error Hook State
-    ' ----------------------------------
-    utils.startTestGroup(@"CRC Error Hook State")
+        ' ----------------------------------
+        ' TEST GROUP: Error Hook State
+        ' ----------------------------------
+        utils.startTestGroup(@"CRC Error Hook State")
 
-    ' Test: Initial error count is 0
-    utils.startTest(@"Initial error count is 0")
-    dfs.clearTestErrors()
-    errorCount := dfs.getTestErrorCount()
-    utils.evaluateSingleValue(errorCount, @"getTestErrorCount()", 0)
+        ' Test: Initial error count is 0
+        utils.startTest(@"Initial error count is 0")
+        dfs.clearTestErrors()
+        errorCount := dfs.getTestErrorCount()
+        utils.evaluateSingleValue(errorCount, @"getTestErrorCount()", 0)
 
-    ' Test: clearTestErrors resets count
-    utils.startTest(@"clearTestErrors() resets all hooks")
-    dfs.setTestForceReadError(5)
-    dfs.clearTestErrors()
-    errorCount := dfs.getTestErrorCount()
-    utils.evaluateSingleValue(errorCount, @"errorCount after clear", 0)
+        ' Test: clearTestErrors resets count
+        utils.startTest(@"clearTestErrors() resets all hooks")
+        dfs.setTestForceReadError(5)
+        dfs.clearTestErrors()
+        errorCount := dfs.getTestErrorCount()
+        utils.evaluateSingleValue(errorCount, @"errorCount after clear", 0)
 
-    ' ----------------------------------
-    ' TEST GROUP: Read CRC Injection
-    ' ----------------------------------
-    utils.startTestGroup(@"Read CRC Error Injection")
+        ' ----------------------------------
+        ' TEST GROUP: Read CRC Injection
+        ' ----------------------------------
+        utils.startTestGroup(@"Read CRC Error Injection")
 
-    ' Create a test file for read tests
-    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
-    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-    if handle >= 0
-        bytefill(@writeBuffer, $AA, 512)
-        dfs.writeHandle(handle, @writeBuffer, 512)
-        dfs.closeFileHandle(handle)
+        ' Create a test file for read tests
+        dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        if handle >= 0
+            bytefill(@writeBuffer, $AA, SECTOR_SIZE)
+            dfs.writeHandle(handle, @writeBuffer, SECTOR_SIZE)
+            dfs.closeFileHandle(handle)
 
-    ' Test: Force 1 read CRC error increments mismatch counter
-    utils.startTest(@"Forced read CRC error increments mismatch count")
-    mismatchBefore := dfs.getCRCMismatchCount()
-    dfs.clearTestErrors()
-    dfs.setTestForceReadError(1)
-    handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-    if handle >= 0
-        bytesRead := dfs.readHandle(handle, @readBuffer, 10)
-        dfs.closeFileHandle(handle)
-    mismatchAfter := dfs.getCRCMismatchCount()
-    debug("  Mismatch before: ", udec_(mismatchBefore), " after: ", udec_(mismatchAfter))
-    utils.evaluateBool(mismatchAfter > mismatchBefore, @"mismatch count grew", true)
+        ' Test: Force 1 read CRC error increments mismatch counter
+        utils.startTest(@"Forced read CRC error increments mismatch count")
+        mismatchBefore := dfs.getCRCMismatchCount()
+        dfs.clearTestErrors()
+        dfs.setTestForceReadError(1)
+        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        if handle >= 0
+            bytesRead := dfs.readHandle(handle, @readBuffer, 10)
+            dfs.closeFileHandle(handle)
+        mismatchAfter := dfs.getCRCMismatchCount()
+        debug("  Mismatch before: ", udec_(mismatchBefore), " after: ", udec_(mismatchAfter))
+        utils.evaluateBool(mismatchAfter > mismatchBefore, @"mismatch count grew", true)
 
-    ' Test: Error count reflects injected error
-    utils.startTest(@"getTestErrorCount() reflects injection")
-    errorCount := dfs.getTestErrorCount()
-    utils.evaluateSingleValue(errorCount, @"injected error count", 1)
+        ' Test: Error count reflects injected error
+        utils.startTest(@"getTestErrorCount() reflects injection")
+        errorCount := dfs.getTestErrorCount()
+        utils.evaluateSingleValue(errorCount, @"injected error count", 1)
 
-    ' ----------------------------------
-    ' TEST GROUP: Write CRC Injection
-    ' ----------------------------------
-    utils.startTestGroup(@"Write CRC Error Injection")
+        ' ----------------------------------
+        ' TEST GROUP: Write CRC Injection
+        ' ----------------------------------
+        utils.startTestGroup(@"Write CRC Error Injection")
 
-    ' Test: Force write CRC error (one-shot)
-    utils.startTest(@"Forced write CRC error is one-shot")
-    dfs.clearTestErrors()
-    dfs.setTestForceWriteError(true)
-    ' Write a file to trigger the hook
-    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
-    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-    if handle >= 0
-        bytefill(@writeBuffer, $BB, 512)
-        dfs.writeHandle(handle, @writeBuffer, 512)
-        dfs.closeFileHandle(handle)
-    errorCount := dfs.getTestErrorCount()
-    debug("  Write error count: ", udec_(errorCount))
-    utils.evaluateSingleValue(errorCount, @"write error injected", 1)
+        ' Test: Force write CRC error (one-shot)
+        utils.startTest(@"Forced write CRC error is one-shot")
+        dfs.clearTestErrors()
+        dfs.setTestForceWriteError(true)
+        ' Write a file to trigger the hook
+        dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        if handle >= 0
+            bytefill(@writeBuffer, $BB, SECTOR_SIZE)
+            dfs.writeHandle(handle, @writeBuffer, SECTOR_SIZE)
+            dfs.closeFileHandle(handle)
+        errorCount := dfs.getTestErrorCount()
+        debug("  Write error count: ", udec_(errorCount))
+        utils.evaluateSingleValue(errorCount, @"write error injected", 1)
 
-    ' Test: Second write has no injection (one-shot cleared)
-    utils.startTest(@"One-shot clears after first write")
-    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
-    handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-    if handle >= 0
-        bytefill(@writeBuffer, $CC, 512)
-        dfs.writeHandle(handle, @writeBuffer, 512)
-        dfs.closeFileHandle(handle)
-    ' Error count should still be 1 (no new injection)
-    errorCount := dfs.getTestErrorCount()
-    utils.evaluateSingleValue(errorCount, @"no second injection", 1)
+        ' Test: Second write has no injection (one-shot cleared)
+        utils.startTest(@"One-shot clears after first write")
+        dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        if handle >= 0
+            bytefill(@writeBuffer, $CC, SECTOR_SIZE)
+            dfs.writeHandle(handle, @writeBuffer, SECTOR_SIZE)
+            dfs.closeFileHandle(handle)
+        ' Error count should still be 1 (no new injection)
+        errorCount := dfs.getTestErrorCount()
+        utils.evaluateSingleValue(errorCount, @"no second injection", 1)
 
-    ' ----------------------------------
-    ' Cleanup
-    ' ----------------------------------
-    dfs.clearTestErrors()
-    dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+        ' ----------------------------------
+        ' Cleanup
+        ' ----------------------------------
+        dfs.clearTestErrors()
+        dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
 
-    dfs.unmount(dfs.DEV_SD)
+        dfs.unmount(dfs.DEV_SD)
 
     ' ----------------------------------
     ' Summary
