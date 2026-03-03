@@ -95,7 +95,7 @@ PUB go() | workerCog, result
     ' Mount the card
     debug("Mounting SD card (V2 driver)...")
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Mount failed!")
         debug("END_SESSION")
         return

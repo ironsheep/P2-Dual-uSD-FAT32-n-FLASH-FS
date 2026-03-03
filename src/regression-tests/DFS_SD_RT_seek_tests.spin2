@@ -60,7 +60,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -112,7 +112,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(0) - beginning of file")
     result := dfs.seekHandle(handle, 0)
-    utils.evaluateBool(result, @"seek(0)", true)
+    utils.evaluateSingleValue(result, @"seek(0)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at position 0")
     utils.initGuard(@readBuffer_guard)
@@ -122,7 +122,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(100) - position 100")
     result := dfs.seekHandle(handle, 100)
-    utils.evaluateBool(result, @"seek(100)", true)
+    utils.evaluateSingleValue(result, @"seek(100)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at position 100")
     utils.initGuard(@readBuffer_guard)
@@ -132,7 +132,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(255) - position 255")
     result := dfs.seekHandle(handle, 255)
-    utils.evaluateBool(result, @"seek(255)", true)
+    utils.evaluateSingleValue(result, @"seek(255)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at position 255")
     utils.initGuard(@readBuffer_guard)
@@ -142,7 +142,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(256) - position 256 (wraps to 0 in pattern)")
     result := dfs.seekHandle(handle, 256)
-    utils.evaluateBool(result, @"seek(256)", true)
+    utils.evaluateSingleValue(result, @"seek(256)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at position 256")
     utils.initGuard(@readBuffer_guard)
@@ -164,7 +164,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
     ' Sector boundary is at 512 bytes
     utils.startTest(@"seek(511) - last byte of first sector")
     result := dfs.seekHandle(handle, 511)
-    utils.evaluateBool(result, @"seek(511)", true)
+    utils.evaluateSingleValue(result, @"seek(511)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at 511")
     utils.initGuard(@readBuffer_guard)
@@ -174,7 +174,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(512) - first byte of second sector")
     result := dfs.seekHandle(handle, 512)
-    utils.evaluateBool(result, @"seek(512)", true)
+    utils.evaluateSingleValue(result, @"seek(512)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at 512")
     utils.initGuard(@readBuffer_guard)
@@ -184,7 +184,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(1023) - last byte of second sector")
     result := dfs.seekHandle(handle, 1023)
-    utils.evaluateBool(result, @"seek(1023)", true)
+    utils.evaluateSingleValue(result, @"seek(1023)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at 1023")
     utils.initGuard(@readBuffer_guard)
@@ -194,7 +194,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek(1024) - first byte of third sector")
     result := dfs.seekHandle(handle, 1024)
-    utils.evaluateBool(result, @"seek(1024)", true)
+    utils.evaluateSingleValue(result, @"seek(1024)", dfs.SUCCESS)
 
     utils.startTest(@"Read byte at 1024")
     utils.initGuard(@readBuffer_guard)
@@ -274,11 +274,11 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"seek() beyond EOF should fail")
     result := dfs.seekHandle(handle, TEST_FILE_SIZE + 100)
-    utils.evaluateBool(result, @"seek(beyond EOF)", false)
+    utils.evaluateBool(result <> dfs.SUCCESS, @"seek(beyond EOF)", true)
 
     utils.startTest(@"seek() to exact EOF should succeed")
     result := dfs.seekHandle(handle, TEST_FILE_SIZE - 1)
-    utils.evaluateBool(result, @"seek(EOF-1)", true)
+    utils.evaluateSingleValue(result, @"seek(EOF-1)", dfs.SUCCESS)
 
     utils.startTest(@"Read at EOF position")
     utils.initGuard(@readBuffer_guard)
@@ -329,7 +329,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
         dfs.readHandle(handle, @readBuffer, 50)
         ' Now seek back to 0
         result := dfs.seekHandle(handle, 0)
-        utils.evaluateSubBool(result, @"seek(0)", true)
+        utils.evaluateSubValue(result, @"seek(0)", dfs.SUCCESS)
         ' Read first byte - verifies we're at position 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := dfs.readHandle(handle, @readBuffer, 1)
@@ -363,7 +363,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
     if handle >= 0
         ' Try seek(0) in empty file - should succeed
         result := dfs.seekHandle(handle, 0)
-        utils.evaluateSubBool(result, @"seek(0) in empty", true)
+        utils.evaluateSubValue(result, @"seek(0) in empty", dfs.SUCCESS)
         ' Try to read - should get 0 bytes
         utils.initGuard(@readBuffer_guard)
         bytesRead := dfs.readHandle(handle, @readBuffer, 1)
@@ -371,7 +371,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
         utils.evaluateSubValue(bytesRead, @"read from empty", 0)
         ' Try seek(1) in empty file - should fail (beyond EOF)
         result := dfs.seekHandle(handle, 1)
-        utils.evaluateSubBool(result == false, @"seek(1) in empty fails", true)
+        utils.evaluateSubBool(result <> dfs.SUCCESS, @"seek(1) in empty fails", true)
         dfs.closeFileHandle(handle)
     dfs.deleteFile(dfs.DEV_SD, @testEmpty)
 
@@ -407,7 +407,7 @@ PRI testSeekPosition(position) | result, bytesRead, expectedByte, handle
     utils.initGuard(@readBuffer_guard)
     bytesRead := dfs.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSubBool(result, @"seek()", true)
+    utils.evaluateSubValue(result, @"seek()", dfs.SUCCESS)
     utils.evaluateSubValue(readBuffer[0], @"byte value", expectedByte)
     debug("  Position ", udec_(position), ": expected $", uhex_(expectedByte), " got $", uhex_(readBuffer[0]))
 

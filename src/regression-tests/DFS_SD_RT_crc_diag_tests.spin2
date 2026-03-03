@@ -80,7 +80,7 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, matchCount, misma
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -168,7 +168,7 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, matchCount, misma
     utils.startTest(@"CRC counters reset after unmount/remount")
     dfs.unmount(dfs.DEV_SD)
     result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSubBool(result, @"remount succeeds", true)
+    utils.evaluateSubValue(result, @"remount succeeds", dfs.SUCCESS)
     matchCount := dfs.getCRCMatchCount()
     debug("   Match count after remount: ", udec(matchCount))
     ' After remount, count should be > 0 (mount reads sectors) but less than before

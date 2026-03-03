@@ -411,7 +411,7 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
 
     utils.startTest(@"Mount formatted card")
     result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateBool(result, @"mount() succeeds", true)
+    utils.evaluateSingleValue(result, @"mount() succeeds", dfs.SUCCESS)
 
     utils.startTest(@"Read volume label")
     debug("  Mounted volume: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))

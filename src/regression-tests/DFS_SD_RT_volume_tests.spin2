@@ -100,7 +100,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, bytesWritten, bytesRea
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -147,7 +147,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, bytesWritten, bytesRea
     utils.startTest(@"Label persists through unmount/remount")
     dfs.unmount(dfs.DEV_SD)
     result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSubBool(result, @"remount succeeds", true)
+    utils.evaluateSubValue(result, @"remount succeeds", dfs.SUCCESS)
     pLabel := dfs.volumeLabel(dfs.DEV_SD)
     debug("   Label after remount: [", zstr_(pLabel), "]")
     result := strncmp(pLabel, @"12345678901", 11)
@@ -227,7 +227,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, bytesWritten, bytesRea
     utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
     dfs.writeHandle(handle, @testContent, strsize(@testContent))
     result := dfs.syncHandle(handle)
-    utils.evaluateSubBool(result, @"syncHandle()", true)
+    utils.evaluateSubValue(result, @"syncHandle()", dfs.SUCCESS)
     dfs.closeFileHandle(handle)
 
     ' Test: sync with no file open

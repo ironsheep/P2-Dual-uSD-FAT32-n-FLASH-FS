@@ -73,7 +73,7 @@ PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, m
     ' Initialize worker cog
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")

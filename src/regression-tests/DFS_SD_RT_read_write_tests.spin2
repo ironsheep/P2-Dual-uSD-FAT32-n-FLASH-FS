@@ -37,6 +37,17 @@ CON
      BUFFER_SIZE = 512
      LARGE_BUFFER_SIZE = 2048
 
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
@@ -85,7 +96,7 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -629,6 +640,11 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
     dfs.deleteFile(dfs.DEV_SD, @testLarge)
     dfs.deleteFile(dfs.DEV_SD, @testMulti)
     dfs.deleteFile(dfs.DEV_SD, @testPattern)
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
 
     ' Unmount
     dfs.unmount(dfs.DEV_SD)

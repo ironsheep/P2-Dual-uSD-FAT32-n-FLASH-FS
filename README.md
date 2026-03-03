@@ -8,6 +8,8 @@
 
 A unified filesystem driver for the Parallax Propeller 2 (P2) that provides simultaneous access to both the onboard 16MB FLASH chip and a microSD card through a single cog and a single API.
 
+[Wondering why we used FAT32?](#why-fat32)
+
 ![Project Status](https://img.shields.io/badge/status-active-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Propeller%202-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -174,6 +176,18 @@ pnut-ts -d -I .. <filename>.spin2
 # Download and run
 pnut-term-ts -r <filename>.bin
 ```
+
+---
+
+## Why FAT32?
+
+### Our reasoning for choosing FAT32 over exFAT
+
+*Our storage subsystem uses FAT32 rather than exFAT to avoid the patent and licensing constraints that still apply to exFAT in commercial products. exFAT remains covered by Microsoft intellectual property, and compliant implementations are generally expected to be licensed, which can add cost, legal complexity, and contractual obligations that are disproportionate for many embedded systems. In contrast, the relevant FAT patents (including those covering long filenames) have expired, so a clean-room FAT32 implementation can be shipped royalty-free, making it a safer and more predictable choice from an IP and compliance standpoint.*
+
+*Technically, FAT32 also remains the most broadly compatible filesystem for removable media in the embedded space. It is supported by virtually all major desktop and mobile operating systems, works out of the box with common SD and microSD cards up to 32 GB, and has a relatively small code and RAM footprint - important advantages on microcontrollers. By standardizing on FAT32, our driver delivers simple integration, excellent cross-platform interoperability, and a clear legal posture, which together make it a practical and low-risk foundation for products that need removable storage without the overhead of exFAT licensing.*
+
+---
 
 ## Credits
 

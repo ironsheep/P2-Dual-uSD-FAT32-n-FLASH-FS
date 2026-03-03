@@ -88,7 +88,7 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -163,7 +163,7 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
 
     ' Remount for timeout tests
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not remount!")
         dfs.stop()
 

@@ -414,7 +414,7 @@ PUB go() | workerCog, status, handle, size, sn_hi, sn_lo, used, free_ct, file_co
     utils.startTest(@"open(FILEMODE_WRITE) creates new file")
     dfs.deleteFile(dfs.DEV_SD, @parFile2)
     handle := dfs.open(dfs.DEV_SD, @parFile2, dfs.FILEMODE_WRITE)
-    utils.evaluateBool(handle >= 0, @"new file created", true)
+    utils.evaluateSubBool(handle >= 0, @"new file created", true)
     if handle >= 0
         dfs.writeHandle(handle, @testContent, CONTENT_LEN)
         dfs.closeFileHandle(handle)

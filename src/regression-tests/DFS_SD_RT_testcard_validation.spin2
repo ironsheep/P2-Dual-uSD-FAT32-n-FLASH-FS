@@ -76,7 +76,7 @@ PUB go() | workerCog, result
 
     ' Mount the card
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         debug("Is the test card inserted?")
         dfs.stop()

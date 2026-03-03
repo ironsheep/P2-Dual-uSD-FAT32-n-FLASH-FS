@@ -78,7 +78,7 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
     ' Mount the card first
     status := dfs.mount(dfs.DEV_SD)
-    if status == false
+    if status <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -377,7 +377,7 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
     handle := dfs.openDirectory(dfs.DEV_SD, @".")
     if handle >= 0
         repeat
-            pEntry := dfs.readDirectory(handle)
+            pEntry := dfs.readDirectoryHandle(handle)
             if pEntry == 0
                 quit
             pFilename := dfs.fileName()

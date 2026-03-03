@@ -88,7 +88,7 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWr
     ' Mount the card first
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     result := dfs.mount(dfs.DEV_SD)
-    if result == false
+    if result <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
         dfs.stop()
         debug("END_SESSION")
@@ -248,7 +248,7 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWr
     dfs.setTestForceReadError(1)
     dfs.unmount(dfs.DEV_SD)
     result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSubBool(result, @"remount succeeds", true)
+    utils.evaluateSubValue(result, @"remount succeeds", dfs.SUCCESS)
 
     ' Create a new file
     dfs.clearTestErrors()
