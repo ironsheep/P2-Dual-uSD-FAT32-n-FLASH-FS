@@ -19,6 +19,17 @@ CON
      _CLKFREQ        = 320_000_000
      DEBUG_BAUD       = 2_000_000
 
+' Enable stack depth measurement
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "DFS_FL_RT_utilities"
@@ -226,12 +237,17 @@ PUB go() | workerCog
     status := dfs.unmount(dfs.DEV_FLASH)
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
+    dfs.stop()
+
     utils.ShowTestEndCounts()
 
     debug("* Test Complete")
     debug("END_SESSION")
-
-    dfs.stop()
 
 
 DAT ' verifyMessages

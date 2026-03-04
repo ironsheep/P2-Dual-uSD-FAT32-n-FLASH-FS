@@ -75,15 +75,20 @@ CON
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 #ELSE
 '' Enable raw sector access and debug methods for diagnostic tests
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -482,6 +487,11 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, pFilename, fileSize, a
     ' ----------------------------------
     ' Summary
     ' ----------------------------------
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
     dfs.stop()
 
     utils.ShowTestEndCounts()

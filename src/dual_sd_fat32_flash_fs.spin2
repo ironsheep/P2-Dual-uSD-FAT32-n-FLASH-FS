@@ -289,7 +289,7 @@ CON ' V3 multi-file handle configuration
   HF_DIRTY  = $80               ' Handle's buffer has pending writes (OR'd with mode)
 
 CON ' worker cog stack size
-  STACK_SIZE = 256              ' 256 longs = 1024 bytes (increased for Flash mount scan)
+  STACK_SIZE = 160              ' 160 longs = 640 bytes (sized from audit: peak 127 + 25% headroom)
   STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 

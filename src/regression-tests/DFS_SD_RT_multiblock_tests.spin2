@@ -51,12 +51,17 @@ CON
 
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
+#DEFINE SD_INCLUDE_STACK_CHECK
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 #ELSE
 '' Enable full driver features for multi-block testing
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -130,6 +135,11 @@ PUB go() | workerCog, result
         debug("============================================================")
         debug("  Multi-Block Tests - Pass: ", udec_(pass_count), ", Fail: ", udec_(fail_count))
         debug("============================================================")
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
 
     dfs.stop()
     debug(" ")

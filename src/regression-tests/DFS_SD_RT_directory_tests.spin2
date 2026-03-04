@@ -31,6 +31,17 @@ CON
 
      ATTR_DIRECTORY       = $10    ' FAT32 directory attribute bit
 
+' Enable stack depth measurement
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
@@ -417,6 +428,11 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
     ' ----------------------------------
     ' Summary
     ' ----------------------------------
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
     dfs.stop()
 
     utils.ShowTestEndCounts()

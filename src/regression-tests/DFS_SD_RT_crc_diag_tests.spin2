@@ -44,12 +44,17 @@ CON
 
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 #ELSE
 '' Enable debug/diagnostic features
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -258,6 +263,11 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, matchCount, misma
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile2)
 
         dfs.unmount(dfs.DEV_SD)
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
 
     dfs.stop()
 

@@ -39,11 +39,16 @@ CON
 
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -501,6 +506,11 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
 
         dfs.unmount(dfs.DEV_SD)
         dfs.unmount(dfs.DEV_FLASH)
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
 
     dfs.stop()
 

@@ -39,6 +39,17 @@ CON
 
      ' NOTE: Error codes and handle limits come from dfs.E_* and dfs.MAX_OPEN_FILES
 
+' Enable stack depth measurement
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
@@ -446,6 +457,11 @@ PUB go() | workerCog, result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, p
         cleanupTestFiles()
 
         dfs.unmount(dfs.DEV_SD)
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
 
     dfs.stop()
 

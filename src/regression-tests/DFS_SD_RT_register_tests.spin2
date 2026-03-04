@@ -39,6 +39,7 @@ CON
 #DEFINE SD_INCLUDE_REGISTERS
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_SPEED
+#DEFINE SD_INCLUDE_STACK_CHECK
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
@@ -46,11 +47,15 @@ CON
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_SPEED
 #pragma exportdef SD_INCLUDE_SPEED
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 #ELSE
 '' Enable register and raw access
 #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
 #PRAGMA EXPORTDEF SD_INCLUDE_SPEED
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -156,6 +161,12 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
         ' Verify same version
         result := (csdBuf[0] >> 6) & $03
         utils.evaluateSubValue(result, @"CSD version matches", csdVer)
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
         dfs.stop()
 
         ' Remount for timeout tests

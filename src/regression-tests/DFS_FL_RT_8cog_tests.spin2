@@ -26,11 +26,16 @@ CON
 
 #IFDEF __SPINTOOLS__
 #DEFINE MAX_OPEN_FILES
+#DEFINE SD_INCLUDE_STACK_CHECK
 #ELSEIFDEF __FLEXSPIN__
 #define MAX_OPEN_FILES
 #pragma exportdef MAX_OPEN_FILES
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 #ELSE
 #PRAGMA EXPORTDEF MAX_OPEN_FILES
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -130,10 +135,15 @@ PUB go() | cogIdx, totalFiles, status, workerCog
     ' TEST SCENARIO 2: read/write tests by all cogs individually but at same time
     ' ---------------------------------------------------------------------
 
-    debug("* Test Complete")
-    debug("END_SESSION")
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
 
     dfs.stop()
+
+    debug("* Test Complete")
+    debug("END_SESSION")
 
 
 con ' ---- file tests ---

@@ -40,6 +40,17 @@ CON
      STATUS_PASS      = 2
      STATUS_FAIL      = -1
 
+' Enable stack depth measurement
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "isp_rt_utilities"
@@ -285,6 +296,11 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         result := dfs.unmount(dfs.DEV_SD)
         utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
 
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
         utils.startTest(@"stop() releases resources")
         dfs.stop()
         debug("  stop(): completed")
@@ -293,7 +309,6 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
     ' ----------------------------------
     ' Summary
     ' ----------------------------------
-    dfs.stop()
 
     utils.ShowTestEndCounts()
 

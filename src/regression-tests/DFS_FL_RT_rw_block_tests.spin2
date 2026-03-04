@@ -17,6 +17,17 @@ CON
      _CLKFREQ        = 320_000_000
      DEBUG_BAUD       = 2_000_000
 
+' Enable stack depth measurement
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "DFS_FL_RT_utilities"
@@ -68,12 +79,17 @@ PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, wor
             testWriteRecords(@testfile2, 45, 2, 1)                 ' tail last record in 2nd block
             testWriteRecords(@testfile3, 92, 3, 3)                 ' tail of last record in 3rd block
 
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
+    dfs.stop()
+
     utils.ShowTestEndCounts()
 
     debug("* Test Complete")
     debug("END_SESSION")
-
-    dfs.stop()
 
 pri testWriteRecords(pFilename, recordCount, fileCount, blocksAllocated) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize
     ' ----------------------------------

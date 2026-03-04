@@ -97,7 +97,7 @@ PUB dumpStack(pStack, nStackLongCt)
 '' Dump stack memory
     dbgMemDump(@"TASK Stack", pStack, (nStackLongCt + 1) * 4)
 
-PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, rowLen, pCurrByte, lastRowByteCount, bytesSoFar
+PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, pCurrByte, lastRowByteCount, bytesSoFar
 '' Dump rows of hex values with address preceeding
 
     if pMessage
