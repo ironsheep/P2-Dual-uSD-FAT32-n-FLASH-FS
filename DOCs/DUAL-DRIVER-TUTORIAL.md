@@ -883,6 +883,7 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 | Code | Constant | Meaning |
 |------|----------|---------|
 | -1 | `E_TIMEOUT` | Card didn't respond |
+| -8 | `E_NO_CARD` | No card detected in slot |
 | -20 | `E_NOT_MOUNTED` | Filesystem not mounted |
 | -40 | `E_FILE_NOT_FOUND` | File doesn't exist |
 | -41 | `E_FILE_EXISTS` | File already exists |
@@ -921,7 +922,10 @@ PUB safeOperation() | handle, status
 
   status := fs.mount(fs.DEV_BOTH)
   if status < 0
-    debug("Mount failed: ", zstr(fs.string_for_error(status)))
+    if status == fs.E_NO_CARD
+      debug("No SD card detected - check slot")
+    else
+      debug("Mount failed: ", zstr(fs.string_for_error(status)))
     fs.stop()
     return
 

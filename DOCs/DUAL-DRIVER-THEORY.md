@@ -735,6 +735,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_WRITE_REJECTED` | -5 | Card rejected write operation |
 | `E_CARD_BUSY` | -6 | Card busy timeout |
 | `E_IO_ERROR` | -7 | General I/O error during read/write |
+| `E_NO_CARD` | -8 | No card detected in slot (MISO idle during CMD0 probe) |
 | `E_NOT_MOUNTED` | -20 | Filesystem not mounted |
 | `E_INIT_FAILED` | -21 | Card initialization failed |
 | `E_NOT_FAT32` | -22 | Card not formatted as FAT32 |
