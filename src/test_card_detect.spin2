@@ -1,0 +1,59 @@
+'' =================================================================================================
+''
+''   File....... test_card_detect.spin2
+''   Purpose.... Throwaway test for E_NO_CARD card presence detection
+''   Author..... Stephen M Moraco
+''               Copyright (c) 2026 Iron Sheep Productions, LLC
+''   Started.... 03 MAR 2026
+''
+'' =================================================================================================
+''
+''  Run with card inserted -> expect SUCCESS (0)
+''  Run with card removed  -> expect E_NO_CARD (-8)
+''  Run with card inserted -> expect SUCCESS (0)
+''
+
+CON
+
+    _CLKFREQ   = 350_000_000
+    DEBUG_BAUD = 2_000_000
+
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+OBJ
+
+    dfs : "dual_sd_fat32_flash_fs"
+
+PUB go() | workerCog, status
+
+    debug("=== Card Presence Detection Test ===")
+    debug(" ")
+
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if workerCog < 0
+        debug("ERROR: Could not start driver")
+    else
+        debug("Driver started on cog ", udec_(workerCog))
+
+        status := dfs.mount(dfs.DEV_SD)
+        debug(" ")
+        debug("mount() returned: ", sdec_(status))
+        debug("  string: ", zstr_(dfs.string_for_error(status)))
+        debug(" ")
+
+        if status == dfs.SUCCESS
+            debug("PASS - card detected and mounted")
+            dfs.unmount(dfs.DEV_SD)
+        elseif status == dfs.E_NO_CARD
+            debug("PASS - no card detected (E_NO_CARD)")
+        else
+            debug("INFO - got error: ", sdec_(status), " (", zstr_(dfs.string_for_error(status)), ")")
+
+        dfs.stop()
+
+    debug(" ")
+    debug("=== Done ===")
+    debug("END_SESSION")

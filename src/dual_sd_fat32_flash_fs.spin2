@@ -211,6 +211,7 @@ CON ' error codes
   E_WRITE_REJECTED  = -5        ' Card rejected write operation
   E_CARD_BUSY       = -6        ' Card busy
   E_IO_ERROR        = -7        ' General I/O error during read/write
+  E_NO_CARD         = -8        ' No card detected in slot (MISO idle during CMD0 probe)
   E_NOT_MOUNTED     = -20       ' Filesystem not mounted
   E_INIT_FAILED     = -21       ' Card initialization failed
   E_NOT_FAT32       = -22       ' Card not formatted as FAT32
@@ -368,7 +369,13 @@ CON ' SD card command codes and tokens for multi-block operations
   CMD12  = 12                   ' STOP_TRANSMISSION - terminates multi-block read/write
   CMD13  = 13                   ' SEND_STATUS - get card status register (R2 response)
   CMD18  = 18                   ' READ_MULTIPLE_BLOCK - read consecutive sectors
+  CMD0   = 0                    ' GO_IDLE_STATE - reset card to idle state
   CMD25  = 25                   ' WRITE_MULTIPLE_BLOCK - write consecutive sectors
+
+CON ' SD card initialization constants
+  CMD0_MAX_RETRIES    = 5       ' Maximum CMD0 attempts during card init
+  CMD_RETRY_DELAY_MS  = 10      ' Delay between CMD0 retries (milliseconds)
+  R1_IN_IDLE          = $01     ' R1 response: card in idle state (bit 0 set)
 
   ' ===========================================================================
   ' Card Status Register (CSR) bits - returned by CMD13 (R2 response = R1 + status byte)
@@ -453,6 +460,7 @@ DAT '' singleton control - SHARED across all object instances
   driver_mode   LONG    0               ' Current mode: MODE_NONE, MODE_RAW, or MODE_FILESYSTEM
   sd_mounted    LONG    0               ' TRUE if SD filesystem is mounted
   flash_mounted LONG    0               ' TRUE if Flash filesystem is mounted
+  last_init_error LONG  0               ' Specific error from last initCard() failure
 
   ' =======================================================================
   ' CMD13 STATUS STAGING - Preserved for diagnostic inspection
@@ -837,21 +845,22 @@ PUB mount(dev) : status
           set_error(status)
 
     ' Set final status based on mounted state
+    ' Preserve specific error (e.g. E_NO_CARD) if mount already failed
     case dev
       DEV_SD:
         if sd_mounted
           status := SUCCESS
-        else
+        elseif status == SUCCESS
           status := E_NOT_MOUNTED
       DEV_FLASH:
         if flash_mounted
           status := SUCCESS
-        else
+        elseif status == SUCCESS
           status := E_NOT_MOUNTED
       DEV_BOTH:
         if sd_mounted and flash_mounted
           status := SUCCESS
-        else
+        elseif status == SUCCESS
           status := E_NOT_MOUNTED
       other:
         set_error(E_BAD_DEVICE)
@@ -2171,6 +2180,7 @@ PUB string_for_error(code) : p_str
     E_WRITE_REJECTED:        p_str := @s_write_rejected
     E_CARD_BUSY:             p_str := @s_card_busy
     E_IO_ERROR:              p_str := @s_io_error
+    E_NO_CARD:               p_str := @s_no_card
     E_NOT_MOUNTED:           p_str := @s_not_mounted
     E_INIT_FAILED:           p_str := @s_init_failed
     E_NOT_FAT32:             p_str := @s_not_fat32
@@ -2215,6 +2225,7 @@ DAT '' error strings for string_for_error()
   s_write_rejected    BYTE  "Write rejected", 0
   s_card_busy         BYTE  "Card busy", 0
   s_io_error          BYTE  "I/O error", 0
+  s_no_card           BYTE  "No card detected", 0
   s_not_mounted       BYTE  "Not mounted", 0
   s_init_failed       BYTE  "Init failed", 0
   s_not_fat32         BYTE  "Not FAT32", 0
@@ -3724,7 +3735,7 @@ CON ' ==========================================================================
 PRI do_mount() : status | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sector, sec_idx, next_cluster, found
 ' Internal mount operation - initializes card and reads filesystem structures.
 '
-' @returns status - SUCCESS on success, error code on failure
+' @returns status - SUCCESS, E_NO_CARD, E_BAD_RESPONSE, E_TIMEOUT, E_INIT_FAILED, E_IO_ERROR, E_NOT_FAT32, or E_BAD_SECTOR_SIZE
 ' @local reserved - Reserved sector count from VBR
 
   dir_sec_in_buf := -1
@@ -3742,7 +3753,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sect
     debug("  [do_mount] Calling initCard()...")
     if not initCard()
       debug("  [do_mount] FAIL: initCard() returned false")
-      status := E_INIT_FAILED
+      status := last_init_error
 
   ' Card is initialized (either fresh or from RAW mode)
   if status == SUCCESS
@@ -5119,7 +5130,7 @@ PRI do_init_card_only() : status
 ' Internal card-only init (raw mode) - initialize card for raw sector access.
 ' Sets driver_mode to MODE_RAW without filesystem parsing.
 '
-' @returns status - SUCCESS on success, E_INIT_FAILED on failure
+' @returns status - SUCCESS, E_NO_CARD, E_BAD_RESPONSE, E_TIMEOUT, or E_INIT_FAILED
 
   dir_sec_in_buf := -1
   fat_sec_in_buf := -1
@@ -5133,7 +5144,7 @@ PRI do_init_card_only() : status
   else
     debug("  [do_init_card_only] FAIL: initCard() returned false")
     driver_mode := MODE_NONE
-    status := E_INIT_FAILED
+    status := last_init_error
 
 PRI do_get_card_size() : sector_count | csd[4], c_size, read_bl_len, c_size_mult
 ' Internal get card size operation - returns total number of 512-byte sectors.
@@ -8156,19 +8167,23 @@ PRI sp_transfer_32(data) : rx_data | _sck, _mosi, _miso, tx_data
         rev     rx_data                          ' Reverse for MSB-first
   end
 
-PRI initCard() : ok | t, resp, card_version, acmd41_arg
+PRI initCard() : ok | t, resp, card_version, acmd41_arg, got_response
 ' Initialize SD card - performs complete card initialization sequence per SD spec.
 ' Steps: power-on delay, SPI setup, CMD0, CMD8, ACMD41 loop, CMD58.
+' Sets last_init_error DAT variable with specific failure reason on error.
 '
 ' @returns ok - TRUE on successful init, FALSE on failure
+' @side-effect last_init_error - Set to E_NO_CARD, E_BAD_RESPONSE, E_TIMEOUT, or E_INIT_FAILED
 ' @local t - Timeout counter
 ' @local resp - Command response byte
 ' @local card_version - Detected SD version (1 or 2)
 ' @local acmd41_arg - Argument for ACMD41 (HCS flag)
+' @local got_response - TRUE if any CMD0 attempt returned non-zero
 
   debug("    [initCard] Starting card init...")
   debug("    [initCard] Reference: SPI_SD_Implementation_Reference.md")
   sec_in_buf := -1
+  last_init_error := E_INIT_FAILED                                              '  Default: overwritten with specific error
 
   ' ============================================
   ' STEP 1: Power-on delay
@@ -8189,7 +8204,9 @@ PRI initCard() : ok | t, resp, card_version, acmd41_arg
   pinh(cs)                                                                      '  CS HIGH = deselected
   pinh(mosi)                                                                    '  MOSI HIGH (card expects high during idle)
   pinl(sck)                                                                     '  SCK LOW (SPI mode 0 idle state)
-  pinf(miso)                                                                    '  MISO as floating input
+  wrpin(miso, P_HIGH_15K)
+  pinf(miso)                                                                    '  MISO as input with pull-up active
+  waitus(10)                                                                    '  Let pull-up settle
 
   debug("    [initCard] Pins: CS=", udec_(pinr(cs)), " MOSI=", udec_(pinr(mosi)), " MISO=", udec_(pinr(miso)), " SCK=", udec_(pinr(sck)))
 
@@ -8226,18 +8243,24 @@ PRI initCard() : ok | t, resp, card_version, acmd41_arg
   ' Expected R1: 0x01 (in idle state)
   ' ============================================
   debug("    [initCard] Step 4: CMD0 (GO_IDLE_STATE)...")
+  got_response := false
   resp := 0
-  repeat 5                                                                      '  try up to 5 times
-    resp := cmd(0, 0)
+  repeat CMD0_MAX_RETRIES
+    resp := cmd(CMD0, 0)
     debug("    [initCard] CMD0 response: $", uhex_(resp))
-    if resp == $01
+    if resp <> 0
+      got_response := true
+    if resp == R1_IN_IDLE
       quit
-    waitms(10)
+    waitms(CMD_RETRY_DELAY_MS)
 
-  if resp <> $01
-    debug("    [initCard] FAIL: CMD0 expected $01, got $", uhex_(resp))
-    if resp == $FF
-      debug("    [initCard] ($FF = no response, check wiring)")
+  if resp <> R1_IN_IDLE
+    if got_response
+      debug("    [initCard] FAIL: CMD0 got response $", uhex_(resp), " but not $01 (idle)")
+      last_init_error := E_BAD_RESPONSE
+    else
+      debug("    [initCard] FAIL: CMD0 no response (no card or wiring fault)")
+      last_init_error := E_NO_CARD
     ok := false
 
   else
@@ -8301,46 +8324,52 @@ PRI initCard() : ok | t, resp, card_version, acmd41_arg
       if getct() - t > 0
         debug("    [initCard] FAIL: ACMD41 timeout after 2 seconds")
         debug("    [initCard] Last response: $", uhex_(resp))
+        last_init_error := E_TIMEOUT
         ok := false
         quit
       else
         waitms(10)
 
-    ' ============================================
-    ' STEP 7: CMD58 - READ_OCR
-    ' Sends: 0x7A 0x00 0x00 0x00 0x00 0xFD
-    ' Expected R3: R1 + 32-bit OCR register
-    ' Check bit 31 (busy), bit 30 (CCS)
-    ' ============================================
-    debug("    [initCard] Step 7: CMD58 (READ_OCR)...")
-    resp := cmd(58, 0)
-    ocr_value := resp                                                             '  Cache OCR for later retrieval
-    debug("    [initCard] OCR: $", uhex_long(resp))
-    debug("    [initCard]   Bit 31 (ready): ", udec((resp >> 31) & 1))
-    debug("    [initCard]   Bit 30 (CCS):   ", udec((resp >> 30) & 1))
+    ' ACMD41 succeeded if resp is $00 (card ready)
+    if resp == $00
+      ok := true
 
-    if (resp >> 30) & 1
-      hcs := 0                                                                    '  SDHC/SDXC: block addressing (no shift)
-      debug("    [initCard] Card type: SDHC/SDXC (block addressing)")
-    else
-      hcs := 9                                                                    '  SDSC: byte addressing (shift by 9 = multiply by 512)
-      debug("    [initCard] Card type: SDSC (byte addressing)")
+    if ok
+      ' ============================================
+      ' STEP 7: CMD58 - READ_OCR
+      ' Sends: 0x7A 0x00 0x00 0x00 0x00 0xFD
+      ' Expected R3: R1 + 32-bit OCR register
+      ' Check bit 31 (busy), bit 30 (CCS)
+      ' ============================================
+      debug("    [initCard] Step 7: CMD58 (READ_OCR)...")
+      resp := cmd(58, 0)
+      ocr_value := resp                                                             '  Cache OCR for later retrieval
+      debug("    [initCard] OCR: $", uhex_long(resp))
+      debug("    [initCard]   Bit 31 (ready): ", udec((resp >> 31) & 1))
+      debug("    [initCard]   Bit 30 (CCS):   ", udec((resp >> 30) & 1))
 
-    ' ============================================
-    ' STEP 8: Identify card and set optimal SPI speed
-    ' Reads CID for manufacturer ID, CSD for TRAN_SPEED
-    ' PNY cards ($1D) limited to 20 MHz due to timing sensitivity
-    ' ============================================
-    pinh(cs)                                                                      '  ensure CS HIGH before CID/CSD read
-    debug("    [initCard] Step 8: Card identification and speed selection...")
-    identifyCard()                                                                '  read CID/CSD, identify manufacturer
-    setOptimalSpeed()                                                             '  set speed based on card type
-    ' Send dummy clocks with CS HIGH to stabilize new clock rate
-    repeat 8
-      sp_transfer(-1, 8)                                                          '  8 dummy bytes = 64 clocks (using smart pins)
-    debug("    [initCard] Dummy clocks sent, CS HIGH")
-    debug("    [initCard] === INIT SUCCESS ===")
-    ok := true
+      if (resp >> 30) & 1
+        hcs := 0                                                                    '  SDHC/SDXC: block addressing (no shift)
+        debug("    [initCard] Card type: SDHC/SDXC (block addressing)")
+      else
+        hcs := 9                                                                    '  SDSC: byte addressing (shift by 9 = multiply by 512)
+        debug("    [initCard] Card type: SDSC (byte addressing)")
+
+      ' ============================================
+      ' STEP 8: Identify card and set optimal SPI speed
+      ' Reads CID for manufacturer ID, CSD for TRAN_SPEED
+      ' PNY cards ($1D) limited to 20 MHz due to timing sensitivity
+      ' ============================================
+      pinh(cs)                                                                      '  ensure CS HIGH before CID/CSD read
+      debug("    [initCard] Step 8: Card identification and speed selection...")
+      identifyCard()                                                                '  read CID/CSD, identify manufacturer
+      setOptimalSpeed()                                                             '  set speed based on card type
+      ' Send dummy clocks with CS HIGH to stabilize new clock rate
+      repeat 8
+        sp_transfer(-1, 8)                                                          '  8 dummy bytes = 64 clocks (using smart pins)
+      debug("    [initCard] Dummy clocks sent, CS HIGH")
+      debug("    [initCard] === INIT SUCCESS ===")
+      ok := true
 
 
 PRI cmd(op,parm) : response | t
