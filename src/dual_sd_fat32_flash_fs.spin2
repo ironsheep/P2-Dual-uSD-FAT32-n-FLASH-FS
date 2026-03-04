@@ -2141,9 +2141,12 @@ PUB setVolumeLabel(dev, p_label) : status
 '' @param p_label - Pointer to new volume label string (max 11 chars)
 '' @returns status - SUCCESS or negative error code
 
-  status := send_command(CMD_SET_VOL_LABEL, p_label, 0, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
+  if dev <> DEV_SD
+    status := set_error(E_NOT_SUPPORTED)
+  else
+    status := send_command(CMD_SET_VOL_LABEL, p_label, 0, 0, 0)
+    if status <> SUCCESS
+      set_error(status)
 
 PUB syncDirCache()
 '' Force directory cache invalidation - invalidates the directory sector cache.
@@ -2337,6 +2340,9 @@ PUB cardSizeSectors() : sector_count
   if cog_id == -1
     debug("  [cardSizeSectors] ERROR: Worker not running")
     sector_count := 0
+  elseif driver_mode == MODE_NONE
+    debug("  [cardSizeSectors] ERROR: SD not initialized")
+    sector_count := 0
   else
     send_command(CMD_GET_CARD_SIZE, 0, 0, 0, 0)
     sector_count := LONG[@saved_data0][COGID()]
@@ -2452,7 +2458,13 @@ PUB readSectorsRaw(start_sector, count, p_buffer) : status
 '' @param p_buffer - Pointer to buffer (must be count * 512 bytes)
 '' @returns status - Number of sectors successfully read
 
-  if send_command(CMD_READ_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
+  if cog_id == -1
+    set_error(E_NOT_MOUNTED)
+    status := 0
+  elseif driver_mode == MODE_NONE
+    set_error(E_NOT_MOUNTED)
+    status := 0
+  elseif send_command(CMD_READ_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
     status := LONG[@saved_data0][COGID()]
   else
     status := 0
@@ -2466,7 +2478,13 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : status
 '' @param p_buffer - Pointer to buffer with data (must be count * 512 bytes)
 '' @returns status - Number of sectors successfully written
 
-  if send_command(CMD_WRITE_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
+  if cog_id == -1
+    set_error(E_NOT_MOUNTED)
+    status := 0
+  elseif driver_mode == MODE_NONE
+    set_error(E_NOT_MOUNTED)
+    status := 0
+  elseif send_command(CMD_WRITE_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
     status := LONG[@saved_data0][COGID()]
   else
     status := 0
@@ -2520,12 +2538,17 @@ PUB readCIDRaw(p_buf) : status
 '' @param p_buf - Pointer to cid_t buffer to receive CID data
 '' @returns status - SUCCESS or negative error code
 
-  status := send_command(CMD_READ_CID, p_buf, 0, 0, 0)
-  if status == SUCCESS
-    debug("  [readCIDRaw] CID read successfully")
+  if cog_id == -1
+    status := set_error(E_NOT_MOUNTED)
+  elseif driver_mode == MODE_NONE
+    status := set_error(E_NOT_MOUNTED)
   else
-    debug("  [readCIDRaw] CID read FAILED")
-    set_error(status)
+    status := send_command(CMD_READ_CID, p_buf, 0, 0, 0)
+    if status == SUCCESS
+      debug("  [readCIDRaw] CID read successfully")
+    else
+      debug("  [readCIDRaw] CID read FAILED")
+      set_error(status)
 
 PUB readCSDRaw(p_buf) : status
 '' Read CSD register (16 bytes) into buffer.
@@ -2535,12 +2558,17 @@ PUB readCSDRaw(p_buf) : status
 '' @param p_buf - Pointer to csd_t buffer to receive CSD data
 '' @returns status - SUCCESS or negative error code
 
-  status := send_command(CMD_READ_CSD, p_buf, 0, 0, 0)
-  if status == SUCCESS
-    debug("  [readCSDRaw] CSD read successfully")
+  if cog_id == -1
+    status := set_error(E_NOT_MOUNTED)
+  elseif driver_mode == MODE_NONE
+    status := set_error(E_NOT_MOUNTED)
   else
-    debug("  [readCSDRaw] CSD read FAILED")
-    set_error(status)
+    status := send_command(CMD_READ_CSD, p_buf, 0, 0, 0)
+    if status == SUCCESS
+      debug("  [readCSDRaw] CSD read successfully")
+    else
+      debug("  [readCSDRaw] CSD read FAILED")
+      set_error(status)
 
 PUB readSCRRaw(p_buf) : status
 '' Read SCR register (8 bytes) into buffer.
@@ -2550,12 +2578,17 @@ PUB readSCRRaw(p_buf) : status
 '' @param p_buf - Pointer to scr_t buffer to receive SCR data
 '' @returns status - SUCCESS or negative error code
 
-  status := send_command(CMD_READ_SCR, p_buf, 0, 0, 0)
-  if status == SUCCESS
-    debug("  [readSCRRaw] SCR read successfully")
+  if cog_id == -1
+    status := set_error(E_NOT_MOUNTED)
+  elseif driver_mode == MODE_NONE
+    status := set_error(E_NOT_MOUNTED)
   else
-    debug("  [readSCRRaw] SCR read FAILED")
-    set_error(status)
+    status := send_command(CMD_READ_SCR, p_buf, 0, 0, 0)
+    if status == SUCCESS
+      debug("  [readSCRRaw] SCR read successfully")
+    else
+      debug("  [readSCRRaw] SCR read FAILED")
+      set_error(status)
 
 PUB readSDStatusRaw(p_buf) : status
 '' Read SD Status register (ACMD13) - returns 64 bytes of card status.
@@ -2564,12 +2597,17 @@ PUB readSDStatusRaw(p_buf) : status
 '' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
 '' @returns status - SUCCESS or negative error code
 
-  status := send_command(CMD_READ_SD_STATUS, p_buf, 0, 0, 0)
-  if status == SUCCESS
-    debug("  [readSDStatusRaw] SD Status read successfully")
+  if cog_id == -1
+    status := set_error(E_NOT_MOUNTED)
+  elseif driver_mode == MODE_NONE
+    status := set_error(E_NOT_MOUNTED)
   else
-    debug("  [readSDStatusRaw] SD Status read FAILED")
-    set_error(status)
+    status := send_command(CMD_READ_SD_STATUS, p_buf, 0, 0, 0)
+    if status == SUCCESS
+      debug("  [readSDStatusRaw] SD Status read successfully")
+    else
+      debug("  [readSDStatusRaw] SD Status read FAILED")
+      set_error(status)
 
 PUB getOCR() : ocr
 '' Get cached OCR register value - Operating Conditions Register from card init.
@@ -2596,6 +2634,8 @@ PUB attemptHighSpeed() : hs_ok
 
   if cog_id == -1
     hs_ok := false
+  elseif driver_mode == MODE_NONE
+    hs_ok := false
   else
     send_command(CMD_ATTEMPT_HIGH_SPEED, 0, 0, 0, 0)
     hs_ok := LONG[@saved_data0][COGID()]
@@ -2606,7 +2646,7 @@ PUB setSPISpeed(freq)
 ''
 '' @param freq - Target SPI frequency in Hz (e.g., 400_000 or 25_000_000)
 
-  if cog_id <> -1
+  if cog_id <> -1 and driver_mode <> MODE_NONE
     send_command(CMD_SET_SPI_SPEED, freq, 0, 0, 0)
 
 PUB checkCMD6Support() : supported | scr[2], sd_spec
@@ -2617,7 +2657,11 @@ PUB checkCMD6Support() : supported | scr[2], sd_spec
 '' @local scr - SCR register data (2 longs = 8 bytes)
 '' @local sd_spec - SD spec version from SCR
 
-  if not readSCRRaw(@scr)
+  if cog_id == -1
+    supported := false
+  elseif driver_mode == MODE_NONE
+    supported := false
+  elseif readSCRRaw(@scr) <> SUCCESS
     debug("  [checkCMD6Support] Failed to read SCR")
     supported := false
   else
@@ -2633,6 +2677,8 @@ PUB checkHighSpeedCapability() : capable
 '' @returns capable - TRUE if high-speed function is supported
 
   if cog_id == -1
+    capable := false
+  elseif driver_mode == MODE_NONE
     capable := false
   else
     send_command(CMD_CHECK_HS_CAPABILITY, 0, 0, 0, 0)
@@ -2854,9 +2900,12 @@ PUB debugClearRootDir() : status
 ''
 '' @returns status - 0 on success, -1 on error
 
-  status := send_command(CMD_DEBUG_CLEAR_ROOT, 0, 0, 0, 0)
+  if cog_id == -1
+    status := set_error(E_NOT_MOUNTED)
+  else
+    status := send_command(CMD_DEBUG_CLEAR_ROOT, 0, 0, 0, 0)
 
-PUB debugReadSectorSlow(sector, p_buffer) : status | data, i, timeout
+PUB debugReadSectorSlow(sector, p_buffer) : status
 '' DEBUG: Read sector byte-by-byte (no streamer) - for comparison with streamer.
 '' This is SLOW but useful for debugging streamer issues.
 '' Requires worker cog to be running (SPI pins configured).
@@ -2868,11 +2917,11 @@ PUB debugReadSectorSlow(sector, p_buffer) : status | data, i, timeout
 '' @param sector - Sector number to read
 '' @param p_buffer - Pointer to 512-byte destination buffer
 '' @returns status - 0 on success, -1 on timeout/error
-'' @local data - (unused in wrapper)
-'' @local i - (unused in wrapper)
-'' @local timeout - (unused in wrapper)
 
-  status := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
+  if cog_id == -1
+    status := set_error(E_NOT_MOUNTED)
+  else
+    status := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
 
 PUB debugGetReadSectorDiag(p_sector, p_buftype, p_token, p_b0, p_b1, p_b2, p_b3, p_pbuf)
 '' DEBUG: Get readSector diagnostic data - copies diagnostic data from last readSector call.
@@ -2922,21 +2971,24 @@ PUB debugDumpRootDir() | sec, i, p_entry, local_buf[128]
 '' @local p_entry - Pointer to current directory entry
 '' @local local_buf - Local 512-byte buffer for sector data (128 longs)
 
-  sec := root_sec
-  debug("  [debugDumpRootDir] root_sec=", udec_(sec), " cog_dir_sec=", udec_(cog_dir_sec[COGID()]))
-  if send_command(CMD_READ_SECTOR_RAW, sec, @local_buf, 0, 0) <> SUCCESS
-    debug("  [debugDumpRootDir] FAILED to read root directory sector")
+  if cog_id == -1
+    debug("  [debugDumpRootDir] ERROR: Worker not running")
   else
-    debug("  [debugDumpRootDir] Read sector ", udec_(sec), " via worker cog")
-    repeat i from 0 to 15                                                         ' First 16 entries
-      p_entry := @local_buf + (i * 32)
-      if byte[p_entry] == 0
-        debug("  Entry ", udec_(i), ": [END OF DIR]")
-        quit
-      elseif byte[p_entry] == $E5
-        debug("  Entry ", udec_(i), ": [DELETED]")
-      else
-        debug("  Entry ", udec_(i), ": [", lstr_(p_entry, 11), "] attr=$", uhex_byte_(byte[p_entry+11]), " clus=", udec_(word[p_entry+26] | (word[p_entry+20] << 16)))
+    sec := root_sec
+    debug("  [debugDumpRootDir] root_sec=", udec_(sec), " cog_dir_sec=", udec_(cog_dir_sec[COGID()]))
+    if send_command(CMD_READ_SECTOR_RAW, sec, @local_buf, 0, 0) <> SUCCESS
+      debug("  [debugDumpRootDir] FAILED to read root directory sector")
+    else
+      debug("  [debugDumpRootDir] Read sector ", udec_(sec), " via worker cog")
+      repeat i from 0 to 15                                                       ' First 16 entries
+        p_entry := @local_buf + (i * 32)
+        if byte[p_entry] == 0
+          debug("  Entry ", udec_(i), ": [END OF DIR]")
+          quit
+        elseif byte[p_entry] == $E5
+          debug("  Entry ", udec_(i), ": [DELETED]")
+        else
+          debug("  Entry ", udec_(i), ": [", lstr_(p_entry, 11), "] attr=$", uhex_byte_(byte[p_entry+11]), " clus=", udec_(word[p_entry+26] | (word[p_entry+20] << 16)))
 
 PUB displaySector() | address, char, ascii_ptr, i
 '' Display sector in buffer - prints hex dump with ASCII representation.
@@ -2986,12 +3038,15 @@ PUB displayFAT(cluster) | local_buf[128]
 '' @param cluster - Cluster number to display FAT sector for
 '' @local local_buf - Local 512-byte buffer for sector data (128 longs)
 
-  n_sec := fat_sec + cluster >> 7
-  if send_command(CMD_READ_SECTOR_RAW, n_sec, @local_buf, 0, 0) <> SUCCESS
-    debug("  [displayFAT] FAILED to read FAT sector")
+  if cog_id == -1
+    debug("  [displayFAT] ERROR: Worker not running")
   else
-    bytemove(@buf, @local_buf, 512)                                              ' Copy to @buf for displaySector()
-    displaySector()
+    n_sec := fat_sec + cluster >> 7
+    if send_command(CMD_READ_SECTOR_RAW, n_sec, @local_buf, 0, 0) <> SUCCESS
+      debug("  [displayFAT] FAILED to read FAT sector")
+    else
+      bytemove(@buf, @local_buf, 512)                                            ' Copy to @buf for displaySector()
+      displaySector()
 
 #ENDIF
 

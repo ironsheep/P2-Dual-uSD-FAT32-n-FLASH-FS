@@ -143,7 +143,7 @@ PUB hasOutput() : yes
 
     yes := (head <> tail)
 
-PUB getOutput() : pStr | pSlot
+PUB getOutput() : pStr
 '' Get pointer to the next string in the FIFO and advance tail.
 '' Returns 0 if FIFO is empty.
 ''
@@ -151,8 +151,7 @@ PUB getOutput() : pStr | pSlot
 
     pStr := 0                                                   ' default: empty
     if head <> tail
-        pSlot := @slots + (tail * SLOT_SIZE)
-        pStr := pSlot
+        pStr := @slots + (tail * SLOT_SIZE)
 
         ' advance tail (release slot for producer)
         tail := (tail + 1) & (NUM_SLOTS - 1)

@@ -410,6 +410,16 @@ PUB go() | workerCog, status, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
             utils.evaluateSingleValue(bytesRead, @"read after seek past EOF", 0)
             dfs.closeFileHandle(handle)
 
+        ' ======================================================================
+        ' TEST GROUP: Device Guard Errors
+        ' ======================================================================
+        utils.startTestGroup(@"Device Guard Errors")
+
+        ' Test: setVolumeLabel(DEV_FLASH) returns E_NOT_SUPPORTED
+        utils.startTest(@"setVolumeLabel(DEV_FLASH) returns E_NOT_SUPPORTED")
+        status := dfs.setVolumeLabel(dfs.DEV_FLASH, @testfile1)
+        utils.evaluateSingleValue(status, @"setVolumeLabel(FLASH)", dfs.E_NOT_SUPPORTED)
+
         ' ----------------------------------
         ' Cleanup: Delete test files and directories
         ' ----------------------------------

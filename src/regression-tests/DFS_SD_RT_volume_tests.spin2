@@ -200,6 +200,21 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, bytesWritten, bytesRea
         debug("   Restored label: [", zstr_(pLabel), "]")
 
         ' ======================================================================
+        ' TEST GROUP: Wrong Device Guards
+        ' ======================================================================
+        utils.startTestGroup(@"Wrong Device Guards")
+
+        ' Test: setVolumeLabel(DEV_FLASH) returns E_NOT_SUPPORTED
+        utils.startTest(@"setVolumeLabel(DEV_FLASH) returns E_NOT_SUPPORTED")
+        status := dfs.setVolumeLabel(dfs.DEV_FLASH, @newLabel)
+        utils.evaluateSingleValue(status, @"setVolumeLabel(FLASH)", dfs.E_NOT_SUPPORTED)
+
+        ' Test: volumeLabel(DEV_FLASH) returns 0
+        utils.startTest(@"volumeLabel(DEV_FLASH) returns 0")
+        result := dfs.volumeLabel(dfs.DEV_FLASH)
+        utils.evaluateSingleValue(result, @"volumeLabel(FLASH)", 0)
+
+        ' ======================================================================
         ' TEST GROUP: syncAllHandles
         ' ======================================================================
         utils.startTestGroup(@"syncAllHandles")

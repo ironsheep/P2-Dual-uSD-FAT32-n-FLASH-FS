@@ -84,8 +84,8 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
     utils.evaluateBool(handle >= 0, @"openFileRead()", false)
 
     utils.startTest(@"closeFile() before mount")
-    dfs.closeFileHandle(handle)  ' Should not crash
-    utils.evaluateBool(true, @"closeFile() completed without crash", true)
+    status := dfs.closeFileHandle(handle)
+    utils.evaluateSingleValue(status, @"closeFileHandle(bad)", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"freeSpace() before mount")
     freeSpace := dfs.freeSpace(dfs.DEV_SD)

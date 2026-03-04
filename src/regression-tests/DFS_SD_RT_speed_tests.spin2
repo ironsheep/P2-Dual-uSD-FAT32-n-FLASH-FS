@@ -163,12 +163,12 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         ' ======================================================================
         utils.startTestGroup(@"CMD6 / High-Speed")
 
-        ' Test: checkCMD6Support() returns boolean
-        utils.startTest(@"checkCMD6Support() returns boolean")
+        ' Test: checkCMD6Support() returns TRUE for SD 2.0+ card
+        utils.startTest(@"checkCMD6Support() returns TRUE")
         cmd6Sup := dfs.checkCMD6Support()
         debug("   CMD6 support: ", sdec_(cmd6Sup))
-        ' Result must be TRUE or FALSE (not negative error)
-        utils.evaluateSubBool(cmd6Sup == true or cmd6Sup == false, @"CMD6 result is boolean", true)
+        ' Test card is SD 2.0+ (confirmed by register tests), so CMD6 must be supported
+        utils.evaluateSingleValue(cmd6Sup, @"checkCMD6Support() returns TRUE", true)
 
         ' Test: checkHighSpeedCapability() returns boolean
         utils.startTest(@"checkHighSpeedCapability() returns boolean")
@@ -206,7 +206,7 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
             utils.evaluateBool(result, @"data integrity post-HS", true)
         else
             debug("  createFileNew failed after HS: ", sdec_(handle))
-            utils.evaluateBool(true, @"data integrity post-HS", true)  ' Skip - card-specific
+            utils.evaluateBool(false, @"createFileNew after HS", true)
 
         ' Test: getSPIFrequency() reflects HS state
         utils.startTest(@"getSPIFrequency() reflects HS state")
