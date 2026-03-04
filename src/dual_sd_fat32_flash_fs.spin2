@@ -1332,7 +1332,12 @@ PUB flashSeek(handle, position, whence) : end_position
 '' @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
 '' @returns end_position - Resulting position, or negative error code
 
-  end_position := seek(handle, position, whence)
+  ifnot flash_mounted
+    end_position := set_error(E_NOT_MOUNTED)
+  elseifnot validateHandle(handle)
+    end_position := set_error(E_FLASH_BAD_HANDLE)
+  else
+    end_position := seek(handle, position, whence)
 
 PUB tellHandle(handle) : position | cmd_status
 '' Get current position (V3 multi-file) - returns current byte position in file.
@@ -7240,6 +7245,9 @@ PRI fl_open_circular(p_filename, mode, max_file_length) : handle | bFileExists
 ' @param max_file_length - max file size in bytes
 ' @returns handle - handle or negative error code
 ' @local bFileExists - TRUE if file already exists
+
+  fl_errorCode := SUCCESS
+  handle := FL_NOT_VALID
 
   if max_file_length < 1
     handle := fl_set_error(E_FLASH_BAD_FILE_LENGTH)

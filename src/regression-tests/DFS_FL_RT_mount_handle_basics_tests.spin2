@@ -29,7 +29,7 @@ CON
 #ENDIF
 
 OBJ
-    dfs   : "dual_sd_fat32_flash_fs"
+    dfs   : "dual_sd_fat32_flash_fs" | MAX_FLASH_BUFFERS = 6
     utils : "DFS_FL_RT_utilities"
 
 CON
@@ -161,27 +161,27 @@ PUB go() | workerCog
 
     utils.startTest(@"wr_byte()")
     status := dfs.wr_byte(badHandle, 4)
-    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"wr_word()")
     status := dfs.wr_word(badHandle, $fc0)
-    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"wr_long()")
     status := dfs.wr_long(badHandle, $ffff_ece0)
-    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"wr_str()")
     status := dfs.wr_str(badHandle, @"dummy string")
-    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"read()")
     rdCount := dfs.readHandle(badHandle, @filename, 6)
@@ -191,27 +191,27 @@ PUB go() | workerCog
 
     utils.startTest(@"rd_byte()")
     rdValue := dfs.rd_byte(badHandle)
-    utils.evaluateSubStatus(rdValue!, @"rd_byte()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(rdValue, @"rd_byte()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_byte()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"rd_byte()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"rd_word()")
     rdValue := dfs.rd_word(badHandle)
-    utils.evaluateSubStatus(rdValue!, @"rd_word()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(rdValue, @"rd_word()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_word()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"rd_word()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"rd_long()")
     rdValue := dfs.rd_long(badHandle)
-    utils.evaluateSubStatus(rdValue, @"rd_long()", 0)
+    utils.evaluateSubValue(rdValue, @"rd_long()", 0)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_long()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"rd_long()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"rd_str()")
     rdCount := dfs.rd_str(badHandle, @filename, 127+1)
-    utils.evaluateSubStatus(rdCount, @"rd_str()", 0)
+    utils.evaluateSubValue(rdCount, @"rd_str()", 0)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_str()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSubStatus(status, @"rd_str()", dfs.E_INVALID_HANDLE)
 
 
     ' Ensure all open calls fail when no more handles
@@ -325,27 +325,27 @@ PUB go() | workerCog
 
     utils.startTest(@"wr_byte()")
     status := dfs.wr_byte(badHandle, 4)
-    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_byte()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"wr_word()")
     status := dfs.wr_word(badHandle, $fc0)
-    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_word()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"wr_long()")
     status := dfs.wr_long(badHandle, $ffff_ece0)
-    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_long()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"wr_str()")
     status := dfs.wr_str(badHandle, @"dummy string")
-    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"wr_str()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"read()")
     rdCount := dfs.readHandle(badHandle, @filename, 6)
@@ -355,27 +355,27 @@ PUB go() | workerCog
 
     utils.startTest(@"rd_byte()")
     rdValue := dfs.rd_byte(badHandle)
-    utils.evaluateSubStatus(rdValue, @"rd_byte()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(rdValue, @"rd_byte()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_byte()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"rd_byte()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"rd_word()")
     rdValue := dfs.rd_word(badHandle)
-    utils.evaluateSubStatus(rdValue, @"rd_word()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(rdValue, @"rd_word()", dfs.E_INVALID_HANDLE)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_word()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"rd_word()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"rd_long()")
     rdValue := dfs.rd_long(badHandle)
     utils.evaluateSubValue(rdValue, @"rd_long()", 0)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_long()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"rd_long()", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"rd_str()")
     rdCount := dfs.rd_str(badHandle, @filename, 127+1)
     utils.evaluateSubValue(rdCount, @"rd_str()", 0)
     status := dfs.error()
-    utils.evaluateSubStatus(status, @"rd_str()", dfs.E_FLASH_BAD_HANDLE)
+    utils.evaluateSubStatus(status, @"rd_str()", dfs.E_INVALID_HANDLE)
 
     utils.showSubTestResults()
 

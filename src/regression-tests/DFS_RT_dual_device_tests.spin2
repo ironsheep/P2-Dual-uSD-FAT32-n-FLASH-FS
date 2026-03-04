@@ -374,17 +374,19 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     h7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
     utils.evaluateBool(h7 < 0, @"7th handle fails", true)
 
-    ' Test: Close one SD handle, open Flash handle in freed slot
+    ' Test: Close one Flash handle, open new Flash handle in freed slot
+    ' (Flash open needs both a handle slot AND a flash buffer; closing an SD handle
+    '  frees a handle slot but not a flash buffer, so we must close a Flash handle)
     utils.startTest(@"Pool reclaim across devices")
-    dfs.closeFileHandle(h1)
+    dfs.closeFileHandle(h4)
     h7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
-    utils.evaluateBool(h7 >= 0, @"Flash handle in freed SD slot", true)
+    utils.evaluateBool(h7 >= 0, @"Flash handle in freed Flash slot", true)
 
     ' Test: Close all, verify all 6 slots available again
     utils.startTest(@"All 6 slots available after close all")
+    dfs.closeFileHandle(h1)
     dfs.closeFileHandle(h2)
     dfs.closeFileHandle(h3)
-    dfs.closeFileHandle(h4)
     dfs.closeFileHandle(h5)
     dfs.closeFileHandle(h6)
     if h7 >= 0
@@ -430,9 +432,15 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     ' ----------------------------------
     utils.startTestGroup(@"Worker cog health")
 
+    ' NOTE: When SD_INCLUDE_STACK_CHECK is defined, prepStackForCheck() overwrites
+    ' the $CC guard sentinel with its own DO_NOT_WRITE_MARK ($ADDEE5E5).
+    ' checkStackGuard() looks for $CC, so it will always return FALSE in that case.
+    ' The stack check utility has its own overflow detection via reportStackDepth().
+#IFNDEF SD_INCLUDE_STACK_CHECK
     utils.startTest(@"checkStackGuard() intact")
     result := dfs.checkStackGuard()
     utils.evaluateBool(result, @"stack guard intact", true)
+#ENDIF
 
     ' Final cleanup
     dfs.unmount(dfs.DEV_BOTH)
