@@ -62,6 +62,7 @@ jobs:
           cp DOCs/DUAL-DRIVER-THEORY.md "${DEST}/DOCs/"
           cp DOCs/DUAL-UTILITIES.md "${DEST}/DOCs/"
           cp DOCs/FLASH-FS-THEORY.md "${DEST}/DOCs/"
+          cp DOCs/CONDITIONAL-COMPILATION-GUIDE.md "${DEST}/DOCs/"
 
           # DOCs/images/
           mkdir -p "${DEST}/DOCs/images"
