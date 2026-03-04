@@ -67,6 +67,10 @@ writeLength         LONG    0
 filename            BYTE    0[127+1]
 
 PUB go() | workerCog
+'' Run Flash mount and handle basics regression tests.
+''
+' @local workerCog - Driver worker cog ID
+
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 
     ' Ensure all handle calls fail before mounted

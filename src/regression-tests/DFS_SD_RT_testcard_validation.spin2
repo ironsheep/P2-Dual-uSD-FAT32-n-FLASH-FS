@@ -81,6 +81,10 @@ mediumBuf       BYTE    0[MEDIUM_BUF]
 largeBuf        BYTE    0[LARGE_BUF]
 
 PUB go() | workerCog, result
+'' Validate SD test card configuration and basic operations.
+''
+' @local workerCog - Driver worker cog ID
+' @local result - Test result value
 
     debug(" ")
     debug("==============================================")

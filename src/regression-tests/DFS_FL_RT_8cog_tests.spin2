@@ -79,6 +79,12 @@ fileCountAr     BYTE    0[MAX_P2_COGS]
 fileNbr         BYTE    0
 
 PUB go() | cogIdx, totalFiles, status, workerCog
+'' Run 8-cog Flash filesystem stress tests.
+''
+' @local cogIdx - Cog iteration index
+' @local totalFiles - Total files created across all cogs
+' @local status - Operation status code
+' @local workerCog - Driver worker cog ID
 
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 

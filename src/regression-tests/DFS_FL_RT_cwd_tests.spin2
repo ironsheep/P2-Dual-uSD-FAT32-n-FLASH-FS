@@ -76,6 +76,14 @@ expectedValue   LONG    0
 
 
 PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_FILENAME_SIZE]
+'' Run Flash current working directory regression tests.
+''
+' @local workerCog - Driver worker cog ID
+' @local blockId - Flash block ID
+' @local fileSize - File size in bytes
+' @local found - TRUE if file was found
+' @local lenBytes - Length in bytes
+' @local byte - TBD - byte
 
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 
@@ -299,8 +307,8 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
 
 
 PRI setup_test_files() | h
-'' Create test files at various "directory" levels using full paths from root context.
-'' Flash CWD starts at root (empty prefix), so we create files with embedded "/" paths.
+' Create test files at various "directory" levels using full paths from root context.
+' Flash CWD starts at root (empty prefix), so we create files with embedded "/" paths.
 
     ' Ensure at root
     dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
@@ -352,9 +360,9 @@ PRI setup_test_files() | h
 
 
 PRI count_visible_files(p_filename) : count | blockId, fileSize
-'' Count the number of files visible via directory() in the current CWD.
-'' @param p_filename - pointer to FL_FILENAME_SIZE-byte buffer for filename (reused)
-'' @returns count - number of files visible
+' Count the number of files visible via directory() in the current CWD.
+' @param p_filename - pointer to FL_FILENAME_SIZE-byte buffer for filename (reused)
+' @returns count - number of files visible
 
     count := 0
     blockId := 0

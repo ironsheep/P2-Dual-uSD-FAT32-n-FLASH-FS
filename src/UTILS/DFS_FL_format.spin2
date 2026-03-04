@@ -30,6 +30,9 @@ OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
 PUB go() | status
+'' Format the onboard Flash filesystem, erasing all data.
+''
+' @local status - Operation status code
 
     debug(" ")
     debug("======================================================")

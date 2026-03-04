@@ -61,6 +61,18 @@ recordsThisTest LONG    0
 
 
 PUB go() | status, handle, testValue, expectedValue, bytePattern, endPosn, recordOffset, expectedFileBlocks, expectedFileSize, workerCog
+'' Run Flash read/write/modify regression tests.
+''
+' @local status - Operation status code
+' @local handle - File handle
+' @local testValue - Value read from file for comparison
+' @local expectedValue - Expected value for comparison
+' @local bytePattern - Byte pattern for fill operations
+' @local endPosn - End position in file
+' @local recordOffset - Offset to record in file
+' @local expectedFileBlocks - Expected number of blocks in file
+' @local expectedFileSize - Expected file size in bytes
+' @local workerCog - Driver worker cog ID
 
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 

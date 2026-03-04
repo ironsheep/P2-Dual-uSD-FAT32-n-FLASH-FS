@@ -467,16 +467,16 @@ PRI cleanupTestItems()
     dfs.deleteFile(dfs.DEV_SD, @testDir2)
 
 
-PRI makeStressName(n)
+PRI makeStressName(nameIdx)
 ' Generate stress test filename "STRnn.TXT" into genFileName buffer.
 '
-' @param n - File number (0-99)
+' @param nameIdx - File number (0-99)
 
     genFileName[0] := "S"
     genFileName[1] := "T"
     genFileName[2] := "R"
-    genFileName[3] := "0" + (n / 10)
-    genFileName[4] := "0" + (n // 10)
+    genFileName[3] := "0" + (nameIdx / 10)
+    genFileName[4] := "0" + (nameIdx // 10)
     genFileName[5] := "."
     genFileName[6] := "T"
     genFileName[7] := "X"

@@ -539,12 +539,19 @@ PRI cleanupTestFiles()
     dfs.deleteFile(dfs.DEV_SD, @vlLegacyFile)
     dfs.deleteFile(dfs.DEV_SD, @vlDateDir)
 
-PRI strncmp(p1, p2, n) : match | i
-' Compare first n bytes of two strings
+PRI strncmp(pStr1, pStr2, maxLen) : match | idx
+' Compare first maxLen bytes of two strings.
+'
+' @param pStr1 - Pointer to first string
+' @param pStr2 - Pointer to second string
+' @param maxLen - Number of bytes to compare
+' @returns match - TRUE if first maxLen bytes match
+'
+' @local idx - Loop counter
 
     match := true
-    repeat i from 0 to n - 1
-        if BYTE[p1][i] <> BYTE[p2][i]
+    repeat idx from 0 to maxLen - 1
+        if BYTE[pStr1][idx] <> BYTE[pStr2][idx]
             match := false
             quit
 

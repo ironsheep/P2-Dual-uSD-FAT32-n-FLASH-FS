@@ -524,17 +524,19 @@ PRI createTestFiles() | h
     debug("* Test files created")
     debug(" ")
 
-PRI strncmp(p1, p2, n) : match | i
-' Compare first n bytes of two strings
+PRI strncmp(pStr1, pStr2, maxLen) : match | idx
+' Compare first maxLen bytes of two strings.
 '
-' @param p1 - pointer to first string
-' @param p2 - pointer to second string
-' @param n - number of bytes to compare
-' @returns match - true if first n bytes match
+' @param pStr1 - Pointer to first string
+' @param pStr2 - Pointer to second string
+' @param maxLen - Number of bytes to compare
+' @returns match - TRUE if first maxLen bytes match
+'
+' @local idx - Loop counter
 
     match := true
-    repeat i from 0 to n - 1
-        if BYTE[p1][i] <> BYTE[p2][i]
+    repeat idx from 0 to maxLen - 1
+        if BYTE[pStr1][idx] <> BYTE[pStr2][idx]
             match := false
             quit
 

@@ -28,6 +28,10 @@ OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
 PUB go() | workerCog, status
+'' Test SD card presence detection by probing MISO pull-up during CMD0.
+''
+' @local workerCog - Driver worker cog ID
+' @local status - Operation status code
 
     debug("=== Card Presence Detection Test ===")
     debug(" ")

@@ -1395,7 +1395,6 @@ PUB do_card_info() | wasMounted, cardOk, ...
                      ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
                      pnm[2], p_mfr, p_type, p_spec, p_fs, ...
                      oemBuf[3], partStart, i, nLen
-
 '' Display compact card identification summary (SD only)
 
   if (ntokens <> 1)
@@ -2134,29 +2133,29 @@ CON { struct accessors }
 
 ' MBR partition entry accessors
 
-PRI partType(^dfs.mbr_partition_t p) : value
+PRI partType(^dfs.mbr_partition_t pPartEntry) : value
 ' Get partition type byte from MBR partition entry.
 '
-' @param p - Pointer to MBR partition entry struct
+' @param pPartEntry - Pointer to MBR partition entry struct
 ' @returns value - Partition type code
-  value := p.partType
+  value := pPartEntry.partType
 
-PRI partLbaStart(^dfs.mbr_partition_t p) : value
+PRI partLbaStart(^dfs.mbr_partition_t pPartEntry) : value
 ' Get LBA start sector from MBR partition entry.
 '
-' @param p - Pointer to MBR partition entry struct
+' @param pPartEntry - Pointer to MBR partition entry struct
 ' @returns value - First sector of partition (LBA)
-  value := p.lbaStart
+  value := pPartEntry.lbaStart
 
 ' VBR accessor
 
-PRI vbrOemNameByte(^dfs.vbr_t p, idx) : value
+PRI vbrOemNameByte(^dfs.vbr_t pVbrEntry, idx) : value
 ' Get single byte from VBR OEM name field.
 '
-' @param p - Pointer to VBR struct
+' @param pVbrEntry - Pointer to VBR struct
 ' @param idx - Byte index within OEM name (0-7)
 ' @returns value - OEM name byte at index
-  value := p.oemName[idx]
+  value := pVbrEntry.oemName[idx]
 
 
 CON { shared utility methods }

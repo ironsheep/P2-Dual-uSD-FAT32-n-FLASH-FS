@@ -99,6 +99,9 @@ expectedFileBlocks  LONG    0
 allocatedFileSize   LONG    0
 
 PUB go() | workerCog
+'' Run Flash circular file regression tests.
+''
+' @local workerCog - Driver worker cog ID
 
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 

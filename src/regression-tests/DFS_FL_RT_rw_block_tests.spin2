@@ -59,6 +59,15 @@ writeLength     LONG    0
 
 
 PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, workerCog
+'' Run Flash read/write block-level regression tests.
+''
+' @local status - Operation status code
+' @local handle - File handle
+' @local testValue - Value read from file for comparison
+' @local expectedValue - Expected value for comparison
+' @local pFilename - Pointer to filename string
+' @local bytePattern - Byte pattern for fill operations
+' @local workerCog - Driver worker cog ID
 
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 
