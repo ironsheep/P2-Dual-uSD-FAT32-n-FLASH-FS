@@ -37,7 +37,7 @@ CON
      'SD_SCK  = 21
 
      MBR_SIGNATURE       = $AA55
-     SECTOR_SIZE         = 512
+
      ATTR_DIRECTORY      = $10
 
 ' Enable raw sector access for MBR integrity check and debug features
@@ -77,7 +77,7 @@ badPath1        BYTE    "NOEXIST/CHILD", 0    ' parent doesn't exist
 testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
 
 ' Buffer for MBR integrity check
-mbr_buf         BYTE    0[SECTOR_SIZE]
+mbr_buf         BYTE    0[dfs.SECTOR_SIZE]
 
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]

@@ -20,6 +20,7 @@ The `-I ..` flag tells the compiler to find `dual_sd_fat32_flash_fs.spin2` in th
 | [DFS_example_basic.spin2](DFS_example_basic.spin2) | Mount both devices, write/read files on each, show stats — the "hello world" |
 | [DFS_example_cross_copy.spin2](DFS_example_cross_copy.spin2) | Copy a file from SD to Flash and back, verify round-trip data integrity |
 | [DFS_example_data_logger.spin2](DFS_example_data_logger.spin2) | Log sensor data to Flash, then archive (copy) the log to SD |
+| [DFS_example_sd_manifest.spin2](DFS_example_sd_manifest.spin2) | Read a manifest file from SD and copy listed files/folders to Flash |
 
 ## What Each Example Teaches
 
@@ -34,6 +35,10 @@ Creates a file on SD, copies it to Flash using `copyFile()`, then copies it back
 ### Data Logger
 
 The most common real-world dual-FS pattern. Opens a log file on Flash for fast writes, records timestamped sensor readings (simulated), then archives the completed log from Flash to SD using `copyFile()`. Verifies the archive by reading it back from SD. This pattern is useful for embedded data acquisition where Flash provides fast write buffering and SD provides large removable archival storage.
+
+### SD Manifest Copy (Deployment Pattern)
+
+Reads a text manifest file (MANIFEST.TXT) from the SD card containing one entry per line, then copies each listed file or folder from SD to Flash. Lines ending with `/` are folders -- all files in that SD directory are copied. Demonstrates: byte-level line parsing with `rd_byte()`, folder enumeration via `openDirectory()`/`readDirectoryHandle()`, duplicate detection, `exists()` pre-checks, `copyFile()` for SD-to-Flash transfer, absolute Flash paths (e.g., `"/ASSETS/PARAMS.TXT"`) to bypass CWD, and post-copy size verification. SD directories become path-prefixed filenames on Flash -- the directory trees look the same on both devices. This pattern is useful for embedded deployment where configuration and data files are prepared on a PC, placed on SD, and the firmware copies them to onboard Flash on first boot.
 
 ---
 

@@ -46,7 +46,7 @@ CON
     RECORD_LEN = 88 ' just for fun, tiny but even number of longs
     RECORD_DATA_LEN = RECORD_LEN - 12
 
-    MAX_P2_COGS = 8                              ' total cogs on P2
+
     NUM_WORKER_COGS = 6                        ' spawned cogs (cog 1 is driver worker)
     NUM_TOTAL_COGS = NUM_WORKER_COGS + 1       ' 7 active cogs (main + 6 spawned)
     NUM_FILE_TYPES = 5                         ' number of test file type cases (0..4)
@@ -74,7 +74,7 @@ bufferLock      LONG    -1
 
 stack           LONG    0[STACK_SIZE_PER_COG * NUM_WORKER_COGS]
 
-fileCountAr     BYTE    0[MAX_P2_COGS]
+fileCountAr     BYTE    0[dfs.MAX_P2_COGS]
 
 fileNbr         BYTE    0
 
@@ -118,7 +118,7 @@ PUB go() | cogIdx, totalFiles, status, workerCog
     ' Poll until all cogs have written their files (or 60 second timeout)
     repeat 600                          ' 600 * 100ms = 60 seconds max
         totalFiles := 0
-        repeat cogIdx from 0 to MAX_P2_COGS - 1
+        repeat cogIdx from 0 to dfs.MAX_P2_COGS - 1
             totalFiles += BYTE[@fileCountAr][cogIdx]
         if totalFiles >= NUM_TOTAL_COGS * 2
             quit
@@ -127,7 +127,7 @@ PUB go() | cogIdx, totalFiles, status, workerCog
 
     debug("*  after waiting on COGs to finish writing")
     totalFiles := 0
-    repeat cogIdx from 0 to MAX_P2_COGS - 1
+    repeat cogIdx from 0 to dfs.MAX_P2_COGS - 1
         totalFiles += BYTE[@fileCountAr][cogIdx]
     utils.startTest(@"Check Cogs wrote All files")
     utils.evaluateSingleValue(totalFiles, @"file written count", NUM_TOTAL_COGS * 2)

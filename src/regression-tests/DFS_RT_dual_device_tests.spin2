@@ -34,7 +34,7 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 
-     MAX_P2_COGS         = 8    ' P2 has 8 cogs (0-7)
+
      BUFFER_SIZE          = 512  ' Sector buffer size in bytes
      FL_READ_BUF_SIZE     = 64   ' Flash read buffer fill size
      FL_READ_COUNT        = 4    ' Bytes to read in Flash round-trip
@@ -106,7 +106,7 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
 
     utils.startTest(@"init() with valid pins")
     result := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateRange(result, @"init() returns cog ID", 0, MAX_P2_COGS - 1)
+    utils.evaluateRange(result, @"init() returns cog ID", 0, dfs.MAX_P2_COGS - 1)
 
     utils.startTest(@"mount(DEV_SD)")
     status := dfs.mount(dfs.DEV_SD)

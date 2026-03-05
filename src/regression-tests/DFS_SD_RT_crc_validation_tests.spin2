@@ -29,7 +29,6 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 
-     SECTOR_SIZE     = 512
 
 ' Enable raw sector access and debug features
 #IFDEF __SPINTOOLS__
@@ -60,7 +59,7 @@ DAT
 crcTestFile     BYTE    "CRCVAL.TXT", 0
 
 ' Buffers
-writeBuffer     BYTE    0[SECTOR_SIZE]
+writeBuffer     BYTE    0[dfs.SECTOR_SIZE]
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 
@@ -109,8 +108,8 @@ PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, m
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
         handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
         if handle >= 0
-            bytefill(@writeBuffer, $AA, SECTOR_SIZE)
-            dfs.writeHandle(handle, @writeBuffer, SECTOR_SIZE)
+            bytefill(@writeBuffer, $AA, dfs.SECTOR_SIZE)
+            dfs.writeHandle(handle, @writeBuffer, dfs.SECTOR_SIZE)
             dfs.closeFileHandle(handle)
 
         ' Test: Force 1 read CRC error increments mismatch counter
@@ -144,8 +143,8 @@ PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, m
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
         handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
         if handle >= 0
-            bytefill(@writeBuffer, $BB, SECTOR_SIZE)
-            dfs.writeHandle(handle, @writeBuffer, SECTOR_SIZE)
+            bytefill(@writeBuffer, $BB, dfs.SECTOR_SIZE)
+            dfs.writeHandle(handle, @writeBuffer, dfs.SECTOR_SIZE)
             dfs.closeFileHandle(handle)
         errorCount := dfs.getTestErrorCount()
         debug("  Write error count: ", udec_(errorCount))
@@ -156,8 +155,8 @@ PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, m
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
         handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
         if handle >= 0
-            bytefill(@writeBuffer, $CC, SECTOR_SIZE)
-            dfs.writeHandle(handle, @writeBuffer, SECTOR_SIZE)
+            bytefill(@writeBuffer, $CC, dfs.SECTOR_SIZE)
+            dfs.writeHandle(handle, @writeBuffer, dfs.SECTOR_SIZE)
             dfs.closeFileHandle(handle)
         ' Error count should still be 1 (no new injection)
         errorCount := dfs.getTestErrorCount()

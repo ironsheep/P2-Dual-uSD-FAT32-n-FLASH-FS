@@ -1,0 +1,416 @@
+'' =================================================================================================
+''
+''   File....... DFS_example_sd_manifest.spin2
+''   Purpose.... SD manifest-driven copy to Flash: deployment provisioning pattern
+''   Author..... Stephen M Moraco
+''               Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 04 MAR 2026
+''   Updated.... 04 MAR 2026
+'' =================================================================================================
+''
+''  This example demonstrates a manifest-driven deployment pattern:
+''    1. Mount both SD and Flash
+''    2. Open MANIFEST.TXT on SD and parse it line by line
+''    3. For each entry: copy the file (or folder contents) from SD to Flash
+''    4. Detect duplicates and pre-existing Flash files, verify copy via size check
+''    5. Report summary: copied, skipped, errors
+''    6. Clean up and unmount
+''
+''  Manifest format (MANIFEST.TXT on SD card):
+''    - One entry per line, CR/LF terminated
+''    - Lines ending with "/" are folders -- all files in that SD dir are copied
+''    - Lines starting with "'" are comments (skipped)
+''    - Empty lines are skipped
+''    - Max 20 entries, 12 chars per name (8.3 format)
+''
+''  This pattern is useful for first-boot provisioning where configuration and
+''  data files are prepared on a PC, placed on SD, and firmware copies them
+''  to onboard Flash.
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    MAX_MANIFEST_ENTRIES = 20                                   ' max entries in manifest
+    NAME_SLOT_SIZE       = 26                                   ' folder/filename + null (12+"/"+12+null)
+    LINE_BUF_SIZE        = 32                                   ' line buffer (generous for CR/LF)
+    MAX_DIR_FILES        = 20                                   ' max files to copy from one folder
+
+    DIR_ATTR_DIRECTORY   = $10                                  ' FAT directory attribute bit
+
+OBJ
+
+    dfs : "dual_sd_fat32_flash_fs"
+
+DAT
+
+    manifestName  BYTE  "MANIFEST.TXT", 0
+    dotStr        BYTE  ".", 0
+    rootStr       BYTE  "/", 0
+
+VAR
+
+    byte  lineBuf[LINE_BUF_SIZE]
+    byte  seenNames[MAX_MANIFEST_ENTRIES * NAME_SLOT_SIZE]      ' duplicate detection table
+    byte  pathBuf[NAME_SLOT_SIZE]                               ' scratch for folder/file path
+    long  filesCopied
+    long  filesSkipped
+    long  duplicatesWarned
+    long  errorCount
+    long  seenCount
+
+
+PUB go() | status
+'' Run manifest-driven SD-to-Flash copy, report results, and shut down.
+'' @local status - Operation status code
+
+    debug("=== SD Manifest Copy Example ===")
+    debug("Pattern: Read MANIFEST.TXT from SD, copy listed files to Flash")
+    debug(" ")
+
+    ' --- Initialize and mount both ---
+    status := dfs.SUCCESS                                       ' assume success
+    if dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("ERROR: Driver init failed")
+        status := dfs.E_IO_ERROR
+    if status == dfs.SUCCESS
+        status := dfs.mount(dfs.DEV_SD)
+        if status <> dfs.SUCCESS
+            debug("SD mount FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        status := dfs.mount(dfs.DEV_FLASH)
+        if status <> dfs.SUCCESS
+            debug("Flash mount FAILED: ", sdec_(status))
+    if status == dfs.SUCCESS
+        debug("Both devices mounted")
+        debug(" ")
+
+        ' --- Process manifest ---
+        processManifest()
+
+        ' --- Report summary ---
+        reportSummary()
+
+    ' --- Clean up ---
+    debug(" ")
+    cleanup()
+    debug("=== Example complete ===")
+
+
+PRI processManifest() | handle, lineLen, entryIdx, lastChar, bIsFolder
+' Open MANIFEST.TXT, parse lines, and orchestrate file/folder copies.
+'
+' @local handle - Manifest file handle
+' @local lineLen - Length of current line
+' @local entryIdx - Current manifest entry number (for display)
+' @local lastChar - Last character of line (to detect "/" folder marker)
+' @local bIsFolder - TRUE if current entry is a folder
+
+    ' Reset counters
+    filesCopied := 0
+    filesSkipped := 0
+    duplicatesWarned := 0
+    errorCount := 0
+    seenCount := 0
+    bytefill(@seenNames, 0, MAX_MANIFEST_ENTRIES * NAME_SLOT_SIZE)
+
+    handle := dfs.openFileRead(dfs.DEV_SD, @manifestName)
+    if handle < 0
+        debug("ERROR: Cannot open MANIFEST.TXT: ", sdec_(handle))
+        errorCount++
+    else
+        debug("Opened MANIFEST.TXT")
+        entryIdx := 0
+
+        repeat
+            if dfs.eofHandle(handle)
+                quit
+
+            lineLen := readLine(handle, @lineBuf, LINE_BUF_SIZE - 1)
+
+            ' Skip empty lines
+            if lineLen == 0
+                next
+
+            ' Skip comment lines (start with single quote)
+            if lineBuf[0] == "'"
+                next
+
+            entryIdx++
+            if entryIdx > MAX_MANIFEST_ENTRIES
+                debug("WARNING: Max entries (", udec_(MAX_MANIFEST_ENTRIES), ") reached, stopping")
+                quit
+
+            ' Detect folder entry (trailing "/")
+            lastChar := lineBuf[lineLen - 1]
+            bIsFolder := false
+            if lastChar == "/"
+                bIsFolder := true
+                ' Strip trailing "/" for use as directory name
+                lineBuf[lineLen - 1] := 0
+
+            debug(" ")
+            if bIsFolder
+                debug("Entry ", udec_(entryIdx), ": [folder] ", zstr_(@lineBuf), "/")
+            else
+                debug("Entry ", udec_(entryIdx), ": [file]   ", zstr_(@lineBuf))
+
+            ' Check for duplicate entry in manifest
+            if isDuplicate(@lineBuf)
+                debug("  WARNING: Duplicate entry -- skipping")
+                duplicatesWarned++
+                next
+
+            ' Record in seen-names table
+            if seenCount < MAX_MANIFEST_ENTRIES
+                bytemove(@seenNames + (seenCount * NAME_SLOT_SIZE), @lineBuf, strsize(@lineBuf) + 1)
+                seenCount++
+
+            ' Process entry
+            if bIsFolder
+                copyFolder(@lineBuf)
+            else
+                ' Root-level file: build absolute Flash path "/FILENAME"
+                buildPath(@pathBuf, @rootStr, @lineBuf)
+                copySingleFile(@lineBuf, @pathBuf)
+
+        dfs.closeFileHandle(handle)
+
+
+PRI copyFolder(p_dir) | status, dirHandle, p_entry, attr, p_name, folderFiles
+' Enumerate an SD folder and copy each file to Flash using absolute paths.
+' Changes SD CWD into the folder to enumerate, builds absolute Flash paths
+' like "/ASSETS/PARAMS.TXT" so no Flash chdir is needed.
+'
+' Flash has no real directories -- absolute paths bypass the CWD prefix entirely.
+' The "directory" appears automatically when files with that path prefix exist.
+'
+' @param p_dir - Pointer to folder name string (without trailing "/")
+' @local status - Operation status code
+' @local dirHandle - Directory enumeration handle
+' @local p_entry - Pointer to directory entry data
+' @local attr - File attribute byte
+' @local p_name - Pointer to filename from directory entry
+' @local folderFiles - Count of files copied from this folder
+
+    folderFiles := 0
+
+    ' Navigate SD into the folder (Flash uses absolute paths, no chdir needed)
+    status := dfs.changeDirectory(dfs.DEV_SD, p_dir)
+    if status <> dfs.SUCCESS
+        debug("  ERROR: SD chdir to ", zstr_(p_dir), " failed: ", sdec_(status))
+        errorCount++
+    else
+        ' Enumerate SD directory
+        dirHandle := dfs.openDirectory(dfs.DEV_SD, @dotStr)
+        if dirHandle < 0
+            debug("  ERROR: openDirectory failed: ", sdec_(dirHandle))
+            errorCount++
+        else
+            repeat
+                p_entry := dfs.readDirectoryHandle(dirHandle)
+                if p_entry == 0
+                    quit
+
+                ' Skip sub-directories
+                attr := dfs.attributes()
+                if attr & DIR_ATTR_DIRECTORY
+                    next
+
+                ' Get filename and build absolute Flash path "/DIR/FILE"
+                p_name := dfs.fileName()
+                if folderFiles < MAX_DIR_FILES
+                    debug("  -> ", zstr_(p_name))
+                    buildPath(@pathBuf, p_dir, p_name)
+                    copySingleFile(p_name, @pathBuf)
+                    folderFiles++
+                else
+                    debug("  WARNING: Max files per folder reached, skipping rest")
+                    quit
+
+            dfs.closeDirectoryHandle(dirHandle)
+
+    ' Return SD CWD to root
+    dfs.changeDirectory(dfs.DEV_SD, @rootStr)
+
+    if folderFiles > 0
+        debug("  Folder: ", udec_(folderFiles), " files processed")
+
+
+PRI copySingleFile(p_sd_name, p_flash_path) | status, srcSize, dstSize
+' Copy one file from SD to Flash. SD uses bare name (relies on SD CWD),
+' Flash uses absolute path (e.g., "/ASSETS/PARAMS.TXT") to bypass CWD.
+' Checks if already on Flash (skips), copies via copyFile(), and verifies
+' by comparing file sizes.
+'
+' @param p_sd_name - Pointer to SD filename (bare name, uses SD CWD)
+' @param p_flash_path - Pointer to Flash path (absolute, starts with "/")
+' @local status - Operation status code
+' @local srcSize - Source file size on SD
+' @local dstSize - Destination file size on Flash after copy
+
+    ' Check if file already exists on Flash
+    if dfs.exists(dfs.DEV_FLASH, p_flash_path)
+        debug("     Skipped (already on Flash)")
+        filesSkipped++
+    else
+        ' Get source file size for verification
+        srcSize := dfs.file_size(dfs.DEV_SD, p_sd_name)
+        if srcSize < 0
+            debug("     ERROR: Cannot get SD file size: ", sdec_(srcSize))
+            errorCount++
+        else
+            ' Copy SD -> Flash
+            status := dfs.copyFile(dfs.DEV_SD, p_sd_name, dfs.DEV_FLASH, p_flash_path)
+            if status <> dfs.SUCCESS
+                debug("     ERROR: Copy failed: ", sdec_(status))
+                errorCount++
+            else
+                ' Verify by comparing file sizes
+                dstSize := dfs.file_size(dfs.DEV_FLASH, p_flash_path)
+                if dstSize <> srcSize
+                    debug("     ERROR: Size mismatch! SD=", udec_(srcSize), " Flash=", udec_(dstSize))
+                    errorCount++
+                else
+                    debug("     Copied (", udec_(srcSize), " bytes, verified)")
+                    filesCopied++
+
+
+PRI buildPath(p_buf, p_dir, p_file) | dir_len
+' Build an absolute Flash path: "/DIR/FILE" or "/FILE" (when p_dir is "/").
+' Result always starts with "/" so Flash fl_prepend_cwd() treats it as absolute.
+'
+' @param p_buf - Destination buffer (NAME_SLOT_SIZE bytes)
+' @param p_dir - Directory name or "/" for root
+' @param p_file - Filename to append
+
+    bytefill(p_buf, 0, NAME_SLOT_SIZE)
+    dir_len := strsize(p_dir)
+
+    BYTE[p_buf][0] := "/"
+    if dir_len == 1 and BYTE[p_dir] == "/"
+        ' Root: build "/FILE"
+        strcopy(p_buf + 1, p_file, NAME_SLOT_SIZE - 2)
+    else
+        ' Subfolder: build "/DIR/FILE"
+        strcopy(p_buf + 1, p_dir, NAME_SLOT_SIZE - 2)
+        BYTE[p_buf][1 + dir_len] := "/"
+        strcopy(p_buf + 2 + dir_len, p_file, NAME_SLOT_SIZE - 3 - dir_len)
+
+
+PRI readLine(handle, p_buf, maxLen) : lineLen | byteVal
+' Read one line from a file handle using rd_byte(), stopping at CR, LF, or EOF.
+' Strips CR/LF terminators. Returns length of line (0 for empty lines).
+'
+' @param handle - Valid file handle open for read
+' @param p_buf - Pointer to output buffer
+' @param maxLen - Maximum characters to read (excluding null terminator)
+' @returns lineLen - Number of characters in line (not counting terminator)
+' @local byteVal - Current byte read from file
+
+    lineLen := 0
+
+    repeat
+        if dfs.eofHandle(handle)
+            quit
+
+        byteVal := dfs.rd_byte(handle)
+        if byteVal < 0
+            quit                                                ' read error
+
+        ' CR or LF ends the line
+        if byteVal == $0D                                       ' CR
+            ' Consume following LF if present (CR+LF pair)
+            if not dfs.eofHandle(handle)
+                byteVal := dfs.rd_byte(handle)
+                if byteVal <> $0A                               ' not LF, we over-read
+                    ' No way to "unread" -- accept the minor loss of one byte
+                    ' This only matters for bare-CR files, which are rare
+                    ' In practice, manifest files use CR+LF or LF only
+            quit
+        if byteVal == $0A                                       ' LF
+            quit
+
+        ' Append character to buffer
+        if lineLen < maxLen
+            BYTE[p_buf][lineLen] := byteVal
+            lineLen++
+
+    ' Null-terminate
+    BYTE[p_buf][lineLen] := 0
+
+
+PRI isDuplicate(p_name) : bFound | entryIdx, p_slot
+' Check if a name already appears in the seen-names table.
+'
+' @param p_name - Pointer to name string to check
+' @returns bFound - TRUE if name was already seen
+' @local entryIdx - Index into seen-names table
+' @local p_slot - Pointer to current slot in table
+
+    bFound := false
+
+    repeat entryIdx from 0 to seenCount - 1
+        p_slot := @seenNames + (entryIdx * NAME_SLOT_SIZE)
+        if strcomp(p_name, p_slot)
+            bFound := true
+            quit
+
+
+PRI reportSummary()
+' Print final summary of manifest processing results.
+
+    debug(" ")
+    debug("--- Summary ---")
+    debug("  Files copied:      ", udec_(filesCopied))
+    debug("  Files skipped:     ", udec_(filesSkipped), " (already on Flash)")
+    debug("  Duplicate entries: ", udec_(duplicatesWarned))
+    debug("  Errors:            ", udec_(errorCount))
+
+    if errorCount == 0
+        debug("  Result: SUCCESS")
+    else
+        debug("  Result: COMPLETED WITH ERRORS")
+
+
+PRI cleanup()
+' Unmount both devices and stop the driver.
+
+    dfs.unmount(dfs.DEV_SD)
+    dfs.unmount(dfs.DEV_FLASH)
+    dfs.stop()
+    debug("Unmounted and stopped")
+
+
+con { license }
+
+{{
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+}}

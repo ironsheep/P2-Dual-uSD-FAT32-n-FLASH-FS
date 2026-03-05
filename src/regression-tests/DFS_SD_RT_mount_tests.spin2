@@ -27,7 +27,6 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     SECTOR_SIZE     = 512       ' SD card sector size in bytes
 
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
@@ -57,7 +56,7 @@ DAT
 
 testfile1       BYTE    "TEST1.TXT", 0
 testfile2       BYTE    "TEST2.BIN", 0
-sectorBuffer    BYTE    0[SECTOR_SIZE]
+sectorBuffer    BYTE    0[dfs.SECTOR_SIZE]
 sectorBuffer_guard BYTE 0[16]
 
 PUB go() | workerCog, result, status, pLabel, freeSpace, handle

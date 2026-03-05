@@ -293,6 +293,64 @@ CON ' worker cog stack size
   STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 
+CON ' ---- Sector Arithmetic ----
+  SECTOR_SIZE           = 512
+  SECTOR_BITS           = 9           ' log2(SECTOR_SIZE) for shift operations
+  SECTOR_MASK           = SECTOR_SIZE - 1
+  SECTOR_LONGS          = SECTOR_SIZE / 4
+  MAX_P2_COGS           = 8           ' P2 hardware maximum cog count
+
+CON ' ---- FAT32 Structure Constants ----
+  DIR_ENTRY_SIZE        = 32
+  ENTRIES_PER_SECTOR    = SECTOR_SIZE / DIR_ENTRY_SIZE
+  FAT_ENTRY_SHIFT       = 2           ' Each FAT entry is 4 bytes (1 << 2)
+  CLUSTERS_PER_FAT_SEC  = SECTOR_SIZE / 4
+
+  ' Directory entry field offsets (from start of 32-byte entry)
+  DIR_ATTR_OFFSET       = 11
+  DIR_CRT_TIME_OFFSET   = 14
+  DIR_CLUS_HI_OFFSET    = 20
+  DIR_WRT_TIME_OFFSET   = 22
+  DIR_CLUS_LO_OFFSET    = 26
+
+  ' Directory attribute bits
+  DIR_ATTR_DIRECTORY    = $10
+
+  ' FAT chain markers
+  FAT_EOC_MASK          = $0FFF_FFFF
+  FAT_HIGH_BITS_MASK    = $F000_0000
+
+  ' 8.3 filename
+  FILENAME_83_LEN       = 11          ' 8 name + 3 extension bytes
+
+CON ' ---- FAT32 Date/Time Encoding ----
+  FAT_YEAR_BASE         = 1980
+  FAT_YEAR_SHIFT        = 25
+  FAT_MONTH_SHIFT       = 21
+  FAT_DAY_SHIFT         = 16
+  FAT_HOUR_SHIFT        = 11
+  FAT_MINUTE_SHIFT      = 5
+
+CON ' ---- Timeout and Speed Constants ----
+  INIT_TIMEOUT_SEC      = 2           ' Card initialization timeout (ACMD41)
+  CMD_TIMEOUT_SEC       = 1           ' Single command timeout
+  RESPONSE_TIMEOUT_DIV  = 10          ' clkfreq / 10 = 100ms timeout
+  SD_INIT_SPEED_HZ      = 400_000     ' Card init speed per SD spec
+  SD_FALLBACK_SPEED_HZ  = 25_000_000  ' Safe fallback / max SPI speed
+  GPIO_FLUSH_CYCLES     = 4096        ' Clock cycles for GPIO SPI recovery (512 bytes * 8 bits)
+
+CON ' ---- Flash Page/Block Constants ----
+  PAGES_PER_FLASH_BLOCK = 16
+  FLASH_PAGE_SIZE       = 256
+
+CON ' ---- SD Register Sizes ----
+  CSD_CID_BYTES         = 16          ' CSD and CID register size
+  SCR_LONGS             = 2           ' SCR register (8 bytes)
+  SD_STATUS_BYTES       = 64
+
+CON ' ---- Hex Dump Display ----
+  HEX_BYTES_PER_ROW     = 16          ' Bytes displayed per row in hex dump
+
 CON ' streamer configuration (compile-time constants for bulk sector transfers)
   ' Reference: flash_loader.spin2 pattern, P2 Silicon Doc streamer section
   ' Using explicit hex values from working flash_loader code:
@@ -1488,7 +1546,7 @@ PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status | srcHandle, dstHa
       else
         status := SUCCESS
         repeat
-          bytes_read := readHandle(srcHandle, @copy_buf, 512)
+          bytes_read := readHandle(srcHandle, @copy_buf, SECTOR_SIZE)
           if bytes_read < 0
             status := bytes_read
             quit
@@ -1753,7 +1811,10 @@ PUB file_size_unused(dev, p_filename) : size_unused | fl_path[32]
 
 PUB rename(dev, old_name, new_name) : status | fl_old[32], fl_new[32]
 '' Rename file or directory (multi-cog safe).
-'' Flash: CWD prefix is automatically prepended to both names.
+'' Flash: CWD prefix is automatically prepended to both names. Renaming a file
+'' to a different path prefix effectively moves it between directories. If this
+'' was the last file under the old prefix, that directory vanishes (Flash directories
+'' are not stored on disk -- they exist only as filename path prefixes).
 ''
 '' @param dev - Target device (DEV_SD or DEV_FLASH)
 '' @param old_name - Pointer to current name string
@@ -1780,6 +1841,10 @@ PUB rename(dev, old_name, new_name) : status | fl_old[32], fl_new[32]
 PUB deleteFile(dev, name_ptr) : status | fl_path[32]
 '' Delete file (multi-cog safe) - deletes file from current directory.
 '' Flash: CWD prefix is automatically prepended to the filename.
+'' NOTE: Flash directories are not stored on disk -- they exist only because files
+'' with matching path prefixes exist. Deleting the last file in a Flash directory
+'' causes that directory to vanish. This is an inherent property of the path-prefix
+'' emulation model, not an explicit step performed by this method.
 ''
 '' @param dev - Target device (DEV_SD or DEV_FLASH)
 '' @param name_ptr - Pointer to null-terminated filename string
@@ -1871,7 +1936,7 @@ PUB stats(dev) : used, free_ct, file_count | dirHandle, p_entry
           p_entry := readDirectoryHandle(dirHandle)
           if p_entry == 0
             quit
-          if not (BYTE[p_entry][11] & $10)                                      ' Skip directories (., .., subdirs)
+          if not (BYTE[p_entry][DIR_ATTR_OFFSET] & DIR_ATTR_DIRECTORY)             ' Skip directories (., .., subdirs)
             file_count++
         closeDirectoryHandle(dirHandle)
     DEV_FLASH:
@@ -1897,7 +1962,7 @@ PUB setDate(year, month, day, hour, minute, second)
 '' @param minute - Minute (0-59)
 '' @param second - Second (0-59)
 
-  date_stamp := (year - 1980) << 25 | month << 21 | day << 16 | hour << 11 | minute << 5 | second >> 1
+  date_stamp := (year - FAT_YEAR_BASE) << FAT_YEAR_SHIFT | month << FAT_MONTH_SHIFT | day << FAT_DAY_SHIFT | hour << FAT_HOUR_SHIFT | minute << FAT_MINUTE_SHIFT | second >> 1
 
 PUB serial_number(dev) : sn_hi, sn_lo | status
 '' Get device serial number.
@@ -2107,7 +2172,7 @@ PUB fileName() : p_filename | p_temp, idx
   idx := 0
   repeat until byte[p_temp + idx++] == " " or idx == 9
   bytemove(p_temp + idx,p_temp + 8,3)
-  if attributes() & $10
+  if attributes() & DIR_ATTR_DIRECTORY
     byte[p_temp + idx-1] := $00
   else
     byte[p_temp + idx-1] := "."
@@ -2985,15 +3050,15 @@ PUB debugDumpRootDir() | sec, idx, p_entry, local_buf[128]
       debug("  [debugDumpRootDir] FAILED to read root directory sector")
     else
       debug("  [debugDumpRootDir] Read sector ", udec_(sec), " via worker cog")
-      repeat idx from 0 to 15                                                       ' First 16 entries
-        p_entry := @local_buf + (idx * 32)
+      repeat idx from 0 to ENTRIES_PER_SECTOR - 1                                     ' First 16 entries
+        p_entry := @local_buf + (idx * DIR_ENTRY_SIZE)
         if byte[p_entry] == 0
           debug("  Entry ", udec_(idx), ": [END OF DIR]")
           quit
         elseif byte[p_entry] == $E5
           debug("  Entry ", udec_(idx), ": [DELETED]")
         else
-          debug("  Entry ", udec_(idx), ": [", lstr_(p_entry, 11), "] attr=$", uhex_byte_(byte[p_entry+11]), " clus=", udec_(word[p_entry+26] | (word[p_entry+20] << 16)))
+          debug("  Entry ", udec_(idx), ": [", lstr_(p_entry, FILENAME_83_LEN), "] attr=$", uhex_byte_(byte[p_entry+DIR_ATTR_OFFSET]), " clus=", udec_(word[p_entry+DIR_CLUS_LO_OFFSET] | (word[p_entry+DIR_CLUS_HI_OFFSET] << 16)))
 
 PUB displaySector() | address, char, ascii_ptr, idx
 '' Display sector in buffer - prints hex dump with ASCII representation.
@@ -3004,8 +3069,8 @@ PUB displaySector() | address, char, ascii_ptr, idx
 ' @local idx - Loop counter
 
   ascii_ptr := string("0123456789ABCDEF")
-  repeat address from 0 to 495 step 16
-    repeat idx from 0 to 15
+  repeat address from 0 to SECTOR_SIZE - HEX_BYTES_PER_ROW - 1 step HEX_BYTES_PER_ROW
+    repeat idx from 0 to HEX_BYTES_PER_ROW - 1
       case char := (buf[address + idx])
         $20..$7E: byte[ascii_ptr + idx] := char
         other:
@@ -3013,7 +3078,7 @@ PUB displaySector() | address, char, ascii_ptr, idx
             byte[ascii_ptr + idx] := "."
           else
             byte[ascii_ptr + idx] := char // 26 + "a"
-    debug(uhex_word_(address),uhex_byte_array_(@buf + address,8),"-",uhex_byte_array_(@buf + address + 8,8)," | ",lstr_(ascii_ptr,16))
+    debug(uhex_word_(address),uhex_byte_array_(@buf + address,8),"-",uhex_byte_array_(@buf + address + 8,8)," | ",lstr_(ascii_ptr,HEX_BYTES_PER_ROW))
 
 PUB displayEntry() | address, char, ascii_ptr, idx
 '' Display directory entry - prints hex dump of entry_buffer with ASCII representation.
@@ -3024,8 +3089,8 @@ PUB displayEntry() | address, char, ascii_ptr, idx
 ' @local idx - Loop counter
 
   ascii_ptr := string("0123456789ABCDEF")
-  repeat address from 0 to 31 step 16
-    repeat idx from 0 to 15
+  repeat address from 0 to DIR_ENTRY_SIZE - 1 step HEX_BYTES_PER_ROW
+    repeat idx from 0 to HEX_BYTES_PER_ROW - 1
       case char := (BYTE[@entry_buffer][address + idx])
         $20..$7E: byte[ascii_ptr + idx] := char
         other:
@@ -3050,7 +3115,7 @@ PUB displayFAT(cluster) | local_buf[128]
     if send_command(CMD_READ_SECTOR_RAW, n_sec, @local_buf, 0, 0) <> SUCCESS
       debug("  [displayFAT] FAILED to read FAT sector")
     else
-      bytemove(@buf, @local_buf, 512)                                            ' Copy to @buf for displaySector()
+      bytemove(@buf, @local_buf, SECTOR_SIZE)                                            ' Copy to @buf for displaySector()
       displaySector()
 
 #ENDIF
@@ -3180,7 +3245,7 @@ PRI fs_worker() | cur_cmd
 
       CMD_DEBUG_CLEAR_ROOT:
         ' DEBUG: Clear root directory by writing zeros
-        bytefill(@buf, 0, 512)                                                  ' Zero the buffer
+        bytefill(@buf, 0, SECTOR_SIZE)                                                  ' Zero the buffer
         if writeSector(root_sec, BUF_DATA)                                      ' Write to root directory
           dir_sec_in_buf := -1                                                  ' Invalidate cache
           pb_status := SUCCESS
@@ -3191,7 +3256,7 @@ PRI fs_worker() | cur_cmd
       CMD_READ_SECTOR_RAW:
         sec_in_buf := -1                                                        ' Force re-read
         if readSector(pb_param0, BUF_DATA) == 0                                 ' readSector returns 0 on success, -1 on error
-          bytemove(pb_param1, @buf, 512)
+          bytemove(pb_param1, @buf, SECTOR_SIZE)
           pb_status := SUCCESS
         else
           pb_status := E_IO_ERROR
@@ -3206,7 +3271,7 @@ PRI fs_worker() | cur_cmd
         pb_status := SUCCESS
 
       CMD_WRITE_SECTOR_RAW:
-        bytemove(@buf, pb_param1, 512)
+        bytemove(@buf, pb_param1, SECTOR_SIZE)
         debug("  [WRITE_RAW] after bytemove: buf[0..3]=$", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " sig=$", uhex_word_(WORD[@buf + $1FE]))
         if writeSector(pb_param0, BUF_DATA)                                     ' writeSector returns true on success
           pb_status := SUCCESS
@@ -3594,7 +3659,7 @@ PRI getHandleBuffer(handle) : p_buffer
 ' @param handle - Handle index
 ' @returns p_buffer - Address of the 512-byte buffer for this handle
 
-  p_buffer := @h_buf + (handle << 9)  ' handle * 512
+  p_buffer := @h_buf + (handle << SECTOR_BITS)  ' handle * 512
 
 PRI initHandleTable() | idx
 ' Initialize all handles to free state - called during mount() for clean state.
@@ -3837,7 +3902,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
   if status == SUCCESS
     pVBR := @buf                                                                  '  overlay VBR
     debug("  [do_mount] Bytes/sector: ", udec(vbrBytesPerSec(pVBR)))
-    if vbrBytesPerSec(pVBR) <> 512
+    if vbrBytesPerSec(pVBR) <> SECTOR_SIZE
       debug("  [do_mount] FAIL: Bytes/sector not 512")
       status := E_BAD_SECTOR_SIZE
 
@@ -3881,8 +3946,8 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
           debug("  [do_mount] Root dir read failed, using VBR label")
           found := true
           quit
-        repeat idx from 0 to 15
-          p_entry := @dir_buf + (idx * 32)
+        repeat idx from 0 to ENTRIES_PER_SECTOR - 1
+          p_entry := @dir_buf + (idx * DIR_ENTRY_SIZE)
           if byte[p_entry] == $00                                                        '  end of directory
             found := true
             quit
@@ -3898,7 +3963,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
       if not found
         if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
           quit
-        next_cluster := LONG[@fat_buf + ((cluster << 2) & 511)]
+        next_cluster := LONG[@fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)]
         cluster := next_cluster
 
     ' Read FSInfo sector for free cluster count and next-free hint
@@ -3970,13 +4035,13 @@ PRI do_close() : status
 
   ' Update directory entry on disk
   if flags & F_NEWDIR
-    if readSector(entry_address >> 9, BUF_DIR) < 0
-      debug("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> 9))
+    if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+      debug("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
       status := E_IO_ERROR
     else
-      bytemove(@dir_buf + (entry_address & 511), @entry_buffer, 32)
-      if not writeSector(entry_address >> 9, BUF_DIR)
-        debug("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> 9))
+      bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
+      if not writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
+        debug("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
         status := E_IO_ERROR
 
   bytefill(@entry_buffer, 0, 32)
@@ -4008,7 +4073,7 @@ PRI do_open_read(p_path) : handle | start_cluster
     handle := E_FILE_NOT_FOUND
 
   ' Verify it's a file, not a directory
-  elseif attributes() & %0001_0000                                                  ' Directory bit
+  elseif attributes() & DIR_ATTR_DIRECTORY                                                  ' Directory bit
     debug("  [do_open_read] Path is a directory, not a file")
     freeHandle(handle)
     handle := E_NOT_A_FILE
@@ -4019,8 +4084,8 @@ PRI do_open_read(p_path) : handle | start_cluster
     h_start_clus[handle] := start_cluster
     h_size[handle] := fileSize()
     h_attr[handle] := attributes()
-    h_dir_sector[handle] := entry_address >> 9
-    h_dir_offset[handle] := entry_address & 511
+    h_dir_sector[handle] := entry_address >> SECTOR_BITS
+    h_dir_offset[handle] := entry_address & SECTOR_MASK
     h_cluster[handle] := start_cluster
     h_sector[handle] := clus2sec(start_cluster)
     h_position[handle] := 0
@@ -4054,13 +4119,13 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     handle := E_FILE_NOT_FOUND
 
   ' Verify it's a file, not a directory
-  elseif attributes() & %0001_0000                                                  ' Directory bit
+  elseif attributes() & DIR_ATTR_DIRECTORY                                                  ' Directory bit
     debug("  [do_open_write] Path is a directory, not a file")
     freeHandle(handle)
     handle := E_NOT_A_FILE
 
   ' Check single-writer policy
-  elseif isFileOpenForWrite(entry_address >> 9, entry_address & 511)
+  elseif isFileOpenForWrite(entry_address >> SECTOR_BITS, entry_address & SECTOR_MASK)
     debug("  [do_open_write] File already open for write")
     freeHandle(handle)
     handle := E_FILE_ALREADY_OPEN
@@ -4072,15 +4137,15 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     h_start_clus[handle] := start_cluster
     h_size[handle] := f_size
     h_attr[handle] := attributes()
-    h_dir_sector[handle] := entry_address >> 9
-    h_dir_offset[handle] := entry_address & 511
+    h_dir_sector[handle] := entry_address >> SECTOR_BITS
+    h_dir_offset[handle] := entry_address & SECTOR_MASK
 
     ' Position at end of file for append mode
     ' Walk FAT chain to find the last cluster
     h_position[handle] := f_size
     if f_size > 0
       ' Calculate which cluster contains the last byte
-      cluster_count := (f_size - 1) / (sec_per_clus << 9)
+      cluster_count := (f_size - 1) / (sec_per_clus << SECTOR_BITS)
       current_cluster := start_cluster
       repeat cluster_count
         fat_addr := readFat(current_cluster)
@@ -4088,7 +4153,7 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
         if current_cluster +>= $0FFF_FFF8                                         ' End of chain - shouldn't happen
           quit
       h_cluster[handle] := current_cluster
-      h_sector[handle] := clus2sec(current_cluster) + ((f_size - 1) >> 9) & (sec_per_clus - 1)
+      h_sector[handle] := clus2sec(current_cluster) + ((f_size - 1) >> SECTOR_BITS) & (sec_per_clus - 1)
     else
       ' Empty file - position at start
       h_cluster[handle] := start_cluster
@@ -4128,8 +4193,8 @@ PRI do_create(p_path) : handle | temp, first_cluster
   ' searchDirectory() sets entry_address to first free directory entry
   ' Check if we need to allocate a new cluster for the directory
   else
-    temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
-    if temp == (sec_per_clus << 9 - 32)
+    temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
+    if temp == (sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE)
       if dir_buf[480] == $00                                                      ' End of directory
         temp := allocateCluster(byte2clus(entry_address))
         if temp < 0
@@ -4155,14 +4220,14 @@ PRI do_create(p_path) : handle | temp, first_cluster
       dirEntSetFileSize(@entry_buffer, 0)
 
       ' Write directory entry to disk
-      if readSector(entry_address >> 9, BUF_DIR) < 0
-        debug("  [do_create] Directory read FAILED for sector ", udec_(entry_address >> 9))
+      if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+        debug("  [do_create] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
         freeHandle(handle)
         handle := E_IO_ERROR
       else
-        bytemove(@dir_buf + (entry_address & 511), @entry_buffer, 32)
-        if not writeSector(entry_address >> 9, BUF_DIR)
-          debug("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> 9))
+        bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
+        if not writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
+          debug("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
           freeHandle(handle)
           handle := E_IO_ERROR
 
@@ -4171,8 +4236,8 @@ PRI do_create(p_path) : handle | temp, first_cluster
           h_start_clus[handle] := first_cluster
           h_size[handle] := 0
           h_attr[handle] := $20
-          h_dir_sector[handle] := entry_address >> 9
-          h_dir_offset[handle] := entry_address & 511
+          h_dir_sector[handle] := entry_address >> SECTOR_BITS
+          h_dir_offset[handle] := entry_address & SECTOR_MASK
           h_cluster[handle] := first_cluster
           h_sector[handle] := clus2sec(first_cluster)
           h_position[handle] := 0
@@ -4202,7 +4267,7 @@ PRI do_close_h(handle) : status | p_buf
     ' If buffer is dirty, flush it to disk
     if h_flags[handle] & HF_DIRTY
       p_buf := getHandleBuffer(handle)
-      bytemove(@buf, p_buf, 512)                                                    ' Copy to shared buffer
+      bytemove(@buf, p_buf, SECTOR_SIZE)                                                    ' Copy to shared buffer
       if not writeSector(h_buf_sector[handle], BUF_DATA)
         debug("  [do_close_h] Data write FAILED for sector ", udec_(h_buf_sector[handle]))
         status := E_IO_ERROR
@@ -4260,7 +4325,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
 
       ' Advance past sector boundary left by previous read that ended exactly at 512-byte boundary.
       ' Without this, the next read returns stale data from the previous sector's buffer.
-      if (h_position[handle] & 511) == 0 and h_position[handle] > 0 and h_buf_sector[handle] == h_sector[handle]
+      if (h_position[handle] & SECTOR_MASK) == 0 and h_position[handle] > 0 and h_buf_sector[handle] == h_sector[handle]
         h_buf_sector[handle] := -1
         h_sector[handle]++
         if ((h_sector[handle] - cluster_offset) & (sec_per_clus - 1)) == 0
@@ -4270,7 +4335,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
             debug("  [do_read_h] FAT chain follow FAILED at boundary advance")
             bytes_read := 0
           else
-            fat_addr := @fat_buf + ((cluster << 2) & 511)
+            fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             next_cluster := long[fat_addr]
             if next_cluster +>= $0FFF_FFF8
               debug("  [do_read_h] End of chain at boundary advance")
@@ -4287,12 +4352,12 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
           if readSector(h_sector[handle], BUF_DATA) < 0
             debug("  [do_read_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
             quit  ' Return partial read count
-          bytemove(p_hbuf, @buf, 512)
+          bytemove(p_hbuf, @buf, SECTOR_SIZE)
           h_buf_sector[handle] := h_sector[handle]
 
         ' Calculate offset within sector and bytes to read from this sector
-        offset := h_position[handle] & 511
-        to_read := (512 - offset) <# count
+        offset := h_position[handle] & SECTOR_MASK
+        to_read := (SECTOR_SIZE - offset) <# count
 
         ' Copy data from handle buffer to user buffer
         bytemove(p_buffer, p_hbuf + offset, to_read)
@@ -4304,7 +4369,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
         count -= to_read
 
         ' If we've finished this sector, advance to next
-        if (h_position[handle] & 511) == 0 and count > 0
+        if (h_position[handle] & SECTOR_MASK) == 0 and count > 0
           h_sector[handle]++
           ' Check if we crossed a cluster boundary
           if ((h_sector[handle] - cluster_offset) & (sec_per_clus - 1)) == 0
@@ -4313,7 +4378,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
             if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
               debug("  [do_read_h] FAT read FAILED for cluster ", udec_(cluster))
               quit  ' Return partial read count
-            fat_addr := @fat_buf + ((cluster << 2) & 511)
+            fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             next_cluster := long[fat_addr]
             if next_cluster +>= $0FFF_FFF8
               ' End of chain - shouldn't happen if h_size is correct
@@ -4362,10 +4427,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 
     ' Advance past sector boundary left by previous write that ended exactly at 512-byte boundary.
     ' Without this, the next write overwrites the unflushed handle buffer before it reaches disk.
-    if (h_position[handle] & 511) == 0 and h_position[handle] > 0 and h_buf_sector[handle] == h_sector[handle]
+    if (h_position[handle] & SECTOR_MASK) == 0 and h_position[handle] > 0 and h_buf_sector[handle] == h_sector[handle]
       if h_flags[handle] & HF_DIRTY
         debug("  [do_write_h] Flushing stale sector ", udec_(h_buf_sector[handle]))
-        bytemove(@buf, p_hbuf, 512)
+        bytemove(@buf, p_hbuf, SECTOR_SIZE)
         writeSector(h_buf_sector[handle], BUF_DATA)
         h_flags[handle] &= !HF_DIRTY
       h_buf_sector[handle] := -1
@@ -4386,7 +4451,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         ' Flush dirty buffer first if needed
         if h_flags[handle] & HF_DIRTY
           debug("  [do_write_h] Flushing dirty sector ", udec_(h_buf_sector[handle]))
-          bytemove(@buf, p_hbuf, 512)
+          bytemove(@buf, p_hbuf, SECTOR_SIZE)
           writeSector(h_buf_sector[handle], BUF_DATA)
           h_flags[handle] &= !HF_DIRTY
 
@@ -4396,15 +4461,15 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
           if readSector(h_sector[handle], BUF_DATA) < 0
             debug("  [do_write_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
             quit  ' Return partial write count
-          bytemove(p_hbuf, @buf, 512)
+          bytemove(p_hbuf, @buf, SECTOR_SIZE)
         else
           ' Past end of file - zero-fill buffer
-          bytefill(p_hbuf, 0, 512)
+          bytefill(p_hbuf, 0, SECTOR_SIZE)
         h_buf_sector[handle] := h_sector[handle]
 
       ' Calculate offset within sector and bytes to write to this sector
-      offset := h_position[handle] & 511
-      to_write := (512 - offset) <# count
+      offset := h_position[handle] & SECTOR_MASK
+      to_write := (SECTOR_SIZE - offset) <# count
 
       ' Copy data from user buffer to handle buffer
       bytemove(p_hbuf + offset, p_buffer, to_write)
@@ -4421,10 +4486,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         h_size[handle] := h_position[handle]
 
       ' If we've filled this sector, flush and advance to next
-      if (h_position[handle] & 511) == 0 and count > 0
+      if (h_position[handle] & SECTOR_MASK) == 0 and count > 0
         ' Flush current sector
         debug("  [do_write_h] Sector full, flushing sector ", udec_(h_sector[handle]))
-        bytemove(@buf, p_hbuf, 512)
+        bytemove(@buf, p_hbuf, SECTOR_SIZE)
         writeSector(h_sector[handle], BUF_DATA)
         h_flags[handle] &= !HF_DIRTY
         h_buf_sector[handle] := -1
@@ -4472,7 +4537,7 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
     debug("  [do_seek_h] handle=", udec_(handle), " pos ", udec_(h_position[handle]), " -> ", udec_(position))
 
     ' Fast path: if position is in the same sector, just update position
-    if (position >> 9) == (h_position[handle] >> 9)
+    if (position >> SECTOR_BITS) == (h_position[handle] >> SECTOR_BITS)
       h_position[handle] := position
       debug("  [do_seek_h] Same sector, fast path")
       status := SUCCESS
@@ -4480,7 +4545,7 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
     ' Calculate which cluster the target position is in
     ' target_cluster_idx = how many clusters from the start
     else
-      target_cluster_idx := position / (sec_per_clus << 9)
+      target_cluster_idx := position / (sec_per_clus << SECTOR_BITS)
 
       ' Walk the FAT chain from the file's start cluster
       cluster := h_start_clus[handle]
@@ -4496,7 +4561,7 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
             debug("  [do_seek_h] FAT read FAILED for cluster ", udec_(cluster))
             status := E_IO_ERROR
           else
-            fat_addr := @fat_buf + ((cluster << 2) & 511)
+            fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             cluster := long[fat_addr]
             if cluster +>= $0FFF_FFF8
               ' End of chain reached before target - shouldn't happen
@@ -4506,7 +4571,7 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
 
       if status <> E_END_OF_FILE
         ' Calculate sector within cluster
-        sector_in_cluster := (position >> 9) & (sec_per_clus - 1)
+        sector_in_cluster := (position >> SECTOR_BITS) & (sec_per_clus - 1)
 
         ' Update handle state
         h_cluster[handle] := cluster
@@ -4539,7 +4604,7 @@ PRI do_sync_h(handle) : status | p_buf
     if h_flags[handle] & HF_DIRTY
       debug("  [do_sync_h] Flushing dirty buffer for sector ", udec_(h_buf_sector[handle]))
       p_buf := getHandleBuffer(handle)
-      bytemove(@buf, p_buf, 512)
+      bytemove(@buf, p_buf, SECTOR_SIZE)
       writeSector(h_buf_sector[handle], BUF_DATA)
       h_flags[handle] &= !HF_DIRTY
 
@@ -4607,7 +4672,7 @@ PRI do_open_dir(p_path) : handle | start_cluster
         freeHandle(handle)
         handle := E_FILE_NOT_FOUND
       ' Verify it's a directory
-      elseif not (attributes() & %0001_0000)
+      elseif not (attributes() & DIR_ATTR_DIRECTORY)
         debug("  [do_open_dir] Not a directory: ", zstr_(p_path))
         freeHandle(handle)
         handle := E_NOT_A_DIR
@@ -4664,7 +4729,7 @@ PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_
             status := E_IO_ERROR
             quit
           else
-            fat_addr := @fat_buf + ((cluster << 2) & 511)
+            fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             next_cluster := long[fat_addr]
             if next_cluster +>= $0FFF_FFF8
               status := E_FILE_NOT_FOUND  ' End of directory chain
@@ -4681,7 +4746,7 @@ PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_
           status := E_IO_ERROR
           quit
         else
-          bytemove(p_hbuf, @buf, 512)
+          bytemove(p_hbuf, @buf, SECTOR_SIZE)
           h_buf_sector[handle] := h_sector[handle]
 
       ' Calculate byte offset within sector (each entry is 32 bytes)
@@ -4689,7 +4754,7 @@ PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_
 
       ' Read first byte and attributes
       char := byte[p_hbuf + offset]
-      attrib := byte[p_hbuf + offset + 11]
+      attrib := byte[p_hbuf + offset + DIR_ATTR_OFFSET]
 
       ' Advance position for next call
       h_position[handle]++
@@ -4749,8 +4814,8 @@ PRI do_newfile(name_ptr) : status | temp
     status := E_FILE_NOT_FOUND
 
   else
-    temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
-    if temp == (sec_per_clus << 9 - 32)
+    temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
+    if temp == (sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE)
       if dir_buf[480] == $00                                                      ' Check dir buffer after searchDirectory
         temp := allocateCluster(byte2clus(entry_address))
         clearCluster(temp)
@@ -4781,8 +4846,8 @@ PRI do_newdir(name_ptr) : status | temp
     status := E_FILE_NOT_FOUND
 
   else
-    temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
-    if temp == sec_per_clus << 9 - 32
+    temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
+    if temp == sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE
       if dir_buf[480] == $00                                                      ' Check dir buffer after searchDirectory
         temp := allocateCluster(byte2clus(entry_address))
         clearCluster(temp)
@@ -4794,42 +4859,42 @@ PRI do_newdir(name_ptr) : status | temp
     dirEntSetModifyStamp(@entry_buffer, date_stamp)
     dirEntSetFileSize(@entry_buffer, 0)
 
-    if readSector(entry_address >> 9, BUF_DIR) < 0
-      debug("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> 9))
+    if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+      debug("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
       status := E_IO_ERROR
     else
-      debug("  [do_newdir] Before write: dir_buf[", udec_(entry_address & 511), "]=[", lstr_(@dir_buf + (entry_address & 511), 11), "]")
-      bytemove(@dir_buf + (entry_address & 511), @entry_buffer, 32)
-      debug("  [do_newdir] After copy: dir_buf[", udec_(entry_address & 511), "]=[", lstr_(@dir_buf + (entry_address & 511), 11), "]")
+      debug("  [do_newdir] Before write: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+      bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
+      debug("  [do_newdir] After copy: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
       debug("  [do_newdir] entry_buffer=[", lstr_(@entry_buffer, 11), "]")
-      writeSector(entry_address >> 9, BUF_DIR)
+      writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
       ' Verify write by reading back
       dir_sec_in_buf := -1                                                          ' Force re-read
-      if readSector(entry_address >> 9, BUF_DIR) < 0
-        debug("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> 9))
+      if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+        debug("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
       else
-        debug("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & 511), "]=[", lstr_(@dir_buf + (entry_address & 511), 11), "]")
+        debug("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
 
-      bytefill(@dir_buf, 0, 512)
-      bytemove(@dir_buf[0], string(".          "), 11)
-      byte[@dir_buf + 11] := $10
-      long[@dir_buf + 14] := date_stamp
-      word[@dir_buf + 20] := temp >> 16
-      long[@dir_buf + 22] := date_stamp
-      word[@dir_buf + 26] := temp & $FFFF
+      bytefill(@dir_buf, 0, SECTOR_SIZE)
+      bytemove(@dir_buf[0], string(".          "), FILENAME_83_LEN)
+      byte[@dir_buf + DIR_ATTR_OFFSET] := DIR_ATTR_DIRECTORY
+      long[@dir_buf + DIR_CRT_TIME_OFFSET] := date_stamp
+      word[@dir_buf + DIR_CLUS_HI_OFFSET] := temp >> 16
+      long[@dir_buf + DIR_WRT_TIME_OFFSET] := date_stamp
+      word[@dir_buf + DIR_CLUS_LO_OFFSET] := temp & $FFFF
 
       temp := byte2clus(entry_address)
       if temp == 2
         temp := 0
-      bytemove(@dir_buf[32], string("..         "), 11)
-      byte[@dir_buf + 32 + 11] := $10
-      long[@dir_buf + 32 + 14] := date_stamp
-      word[@dir_buf + 32 + 20] := temp >> 16
-      long[@dir_buf + 32 + 22] := date_stamp
-      word[@dir_buf + 32 + 26] := temp & $FFFF
+      bytemove(@dir_buf[DIR_ENTRY_SIZE], string("..         "), FILENAME_83_LEN)
+      byte[@dir_buf + DIR_ENTRY_SIZE + DIR_ATTR_OFFSET] := DIR_ATTR_DIRECTORY
+      long[@dir_buf + DIR_ENTRY_SIZE + DIR_CRT_TIME_OFFSET] := date_stamp
+      word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_HI_OFFSET] := temp >> 16
+      long[@dir_buf + DIR_ENTRY_SIZE + DIR_WRT_TIME_OFFSET] := date_stamp
+      word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_LO_OFFSET] := temp & $FFFF
 
       n_sec := clus2sec(firstCluster())
-      debug("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
+      debug("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
       writeSector(n_sec, BUF_DIR)
       dir_sec_in_buf := n_sec
       ' Verify the ./.. write
@@ -4837,7 +4902,7 @@ PRI do_newdir(name_ptr) : status | temp
       if readSector(n_sec, BUF_DIR) < 0
         debug("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
       else
-        debug("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
+        debug("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
       status := SUCCESS
 
 PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count
@@ -4857,8 +4922,8 @@ PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count
     status := E_FILE_NOT_FOUND  ' Protected file (but allow directories)
 
   else
-    dir_buf[entry_address & 511] := $E5                                           ' Mark entry as deleted in dir buffer
-    writeSector(entry_address >> 9, BUF_DIR)
+    dir_buf[entry_address & SECTOR_MASK] := $E5                                           ' Mark entry as deleted in dir buffer
+    writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
 
     ' Only deallocate clusters if file has data (cluster >= 2)
     p_cluster := firstCluster()
@@ -4866,7 +4931,7 @@ PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count
     if p_cluster >= 2
       repeat
         cluster := long[readFAT(p_cluster)]
-        long[@fat_buf + ((p_cluster << 2) & 511)] := 0                            ' Zero the FAT entry in fat buffer
+        long[@fat_buf + ((p_cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)] := 0                            ' Zero the FAT entry in fat buffer
         if fsi_free_count <> $FFFF_FFFF                                           ' Track free count incrementally
           fsi_free_count++                                                        '  (avoids slow FAT scan on unmount)
         if (cluster >> 7) - (p_cluster >> 7) <> 0                                 ' Different FAT sector? (explicit precedence)
@@ -4922,7 +4987,7 @@ PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cl
       until cluster +>= $0FFF_FFF8
 
       if status <> E_IO_ERROR
-        unused_bytes := (cluster_count * sec_per_clus * 512) - fsize
+        unused_bytes := (cluster_count * sec_per_clus * SECTOR_SIZE) - fsize
         status := SUCCESS
 
 PRI do_chdir(name_ptr) : status
@@ -4933,7 +4998,7 @@ PRI do_chdir(name_ptr) : status
 
   do_close()
   if searchDirectory(name_ptr)
-    if (attributes() & %0001_0000) or (n_sec == root_sec)
+    if (attributes() & DIR_ATTR_DIRECTORY) or (n_sec == root_sec)
       cog_dir_sec[pb_caller] := n_sec
       status := SUCCESS
     else
@@ -4957,8 +5022,8 @@ PRI do_freespace() : free_sectors | cluster
       if readSector(n_sec++, BUF_FAT) < 0
         debug("  [do_freespace] FAT read FAILED, returning partial count")
       else
-        repeat cluster from 0 to 127
-          if long[@fat_buf + cluster << 2] == 0
+        repeat cluster from 0 to CLUSTERS_PER_FAT_SEC - 1
+          if long[@fat_buf + cluster << FAT_ENTRY_SHIFT] == 0
             free_sectors++
     free_sectors := free_sectors * sec_per_clus
 
@@ -4966,11 +5031,11 @@ PRI do_sync()
 ' Internal sync operation - flushes directory entry without closing file.
 
   if flags & F_NEWDIR
-    if readSector(entry_address >> 9, BUF_DIR) < 0
-      debug("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> 9))
+    if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+      debug("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
     else
-      bytemove(@dir_buf + (entry_address & 511), @entry_buffer, 32)
-      writeSector(entry_address >> 9, BUF_DIR)
+      bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
+      writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
     flags := flags & !F_NEWDIR
 
 PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entry[8], p_buf
@@ -4991,8 +5056,8 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
     debug("  [do_rename] Found old file, entry_address=", uhex_(entry_address))
     bookmark := entry_address
     temp_sec := cog_dir_sec[pb_caller]
-    bytemove(@saved_entry, @entry_buffer, 32)                                  ' Save complete entry (32 bytes)
-    cog_dir_sec[pb_caller] := entry_address >> 9                                ' Search in same directory
+    bytemove(@saved_entry, @entry_buffer, DIR_ENTRY_SIZE)                                  ' Save complete entry (32 bytes)
+    cog_dir_sec[pb_caller] := entry_address >> SECTOR_BITS                                ' Search in same directory
     idx := 0
     repeat until byte[new_name + idx] == $00
       if byte[new_name + idx] == "/"
@@ -5002,29 +5067,29 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
     debug("  [do_rename] Checking if new name exists...")
     if searchDirectory(new_name) == 0                                           ' Verify new name doesn't exist
       debug("  [do_rename] New name doesn't exist, proceeding")
-      bytemove(@entry_buffer, @saved_entry, 32)                                ' Restore complete entry
-      if readSector(bookmark >> 9, BUF_DIR) < 0
-        debug("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> 9))
+      bytemove(@entry_buffer, @saved_entry, DIR_ENTRY_SIZE)                                ' Restore complete entry
+      if readSector(bookmark >> SECTOR_BITS, BUF_DIR) < 0
+        debug("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
         status := E_IO_ERROR
       ' Parse new_name directly into buffer in 8.3 format
       else
-        p_buf := @dir_buf + (bookmark & 511)
+        p_buf := @dir_buf + (bookmark & SECTOR_MASK)
         idx := 0
         repeat until byte[new_name + idx] == "/" or byte[new_name + idx] == $00
           idx++
         bytefill(p_buf, " ", 11)                                                 ' Clear name field
         bytemove(p_buf, new_name, idx <# 12)                                       ' Copy name
         ' Convert to uppercase first (must happen before 8.3 rearrangement)
-        repeat idx from 0 to 10
+        repeat idx from 0 to FILENAME_83_LEN - 1
           case byte[p_buf + idx]
             "a".."z" : byte[p_buf + idx] -= $20
         ' Handle 8.3 extension separator
-        repeat idx from 0 to 10
+        repeat idx from 0 to FILENAME_83_LEN - 1
           if byte[p_buf + idx] == "."
             bytemove(p_buf + 8, p_buf + idx + 1, 3)
             bytefill(p_buf + idx, " ", 8 - idx)
             quit
-        writeSector(bookmark >> 9, BUF_DIR)
+        writeSector(bookmark >> SECTOR_BITS, BUF_DIR)
         cog_dir_sec[pb_caller] := temp_sec
         debug("  [do_rename] SUCCESS")
         status := SUCCESS
@@ -5078,7 +5143,7 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
       else
         idx := 0
         repeat
-          p_entry := @dir_buf + (idx & 511)
+          p_entry := @dir_buf + (idx & SECTOR_MASK)
           if byte[p_entry] == $00                                                            ' End of directory
             quit
           if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                              ' Volume label entry found
@@ -5087,7 +5152,7 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
             debug("  [do_set_vol_label] Updated root dir entry")
             quit
           idx += 32
-          if idx & 511 == 0
+          if idx & SECTOR_MASK == 0
             readNextSector(BUF_DIR)
 
         ' Step 3: Update in-memory copy
@@ -5113,22 +5178,22 @@ PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
     bytemove(p_temp, filename(), 12)
     temp_sec := cog_dir_sec[pb_caller]
     if do_chdir(dest_folder) == SUCCESS
-      if bookmark >> 9 == n_sec
+      if bookmark >> SECTOR_BITS == n_sec
         status := E_FILE_EXISTS  ' Same directory
       else
         if do_newfile(p_temp) == SUCCESS
           debug("  [do_movefile] newfile OK, new entry_address=", uhex_(entry_address))
-          debug("  [do_movefile] Reading sector ", udec_(bookmark >> 9), " (dir_sec_in_buf=", sdec_(dir_sec_in_buf), ")")
-          if readSector(bookmark >> 9, BUF_DIR) < 0
-            debug("  [do_movefile] Directory read FAILED for sector ", udec_(bookmark >> 9))
+          debug("  [do_movefile] Reading sector ", udec_(bookmark >> SECTOR_BITS), " (dir_sec_in_buf=", sdec_(dir_sec_in_buf), ")")
+          if readSector(bookmark >> SECTOR_BITS, BUF_DIR) < 0
+            debug("  [do_movefile] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
             status := E_IO_ERROR
           else
-            debug("  [do_movefile] After read: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "] dir_buf[", udec_(bookmark & 511), "]=[", lstr_(@dir_buf + (bookmark & 511), 11), "]")
-            bytemove(@entry_buffer, @dir_buf + (bookmark & 511), 32)
+            debug("  [do_movefile] After read: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "] dir_buf[", udec_(bookmark & SECTOR_MASK), "]=[", lstr_(@dir_buf + (bookmark & SECTOR_MASK), 11), "]")
+            bytemove(@entry_buffer, @dir_buf + (bookmark & SECTOR_MASK), 32)
             debug("  [do_movefile] Copied entry: [", lstr_(@entry_buffer, 11), "]")
-            byte[@dir_buf + (bookmark & 511)] := $E5
+            byte[@dir_buf + (bookmark & SECTOR_MASK)] := $E5
             debug("  [do_movefile] After $E5: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "]")
-            writeSector(bookmark >> 9, BUF_DIR)
+            writeSector(bookmark >> SECTOR_BITS, BUF_DIR)
             debug("  [do_movefile] Calling do_close, flags=", uhex_(flags))
             do_close()
             cog_dir_sec[pb_caller] := temp_sec
@@ -5160,8 +5225,8 @@ PRI do_readdir(entry_num) : p_entry | idx, char, attrib
 
   else
     repeat until entry_num == -1
-      char := byte[@dir_buf + (idx & 511)]
-      attrib := byte[@dir_buf + (idx & 511) + 11]
+      char := byte[@dir_buf + (idx & SECTOR_MASK)]
+      attrib := byte[@dir_buf + (idx & SECTOR_MASK) + DIR_ATTR_OFFSET]
 
       if char == $00
         p_entry := E_FILE_NOT_FOUND
@@ -5170,11 +5235,11 @@ PRI do_readdir(entry_num) : p_entry | idx, char, attrib
         if attrib & %0000_1110 == 0
           entry_num--
           if entry_num == -1
-            bytemove(@entry_buffer, @dir_buf + (idx & 511), 32)
+            bytemove(@entry_buffer, @dir_buf + (idx & SECTOR_MASK), 32)
             p_entry := SUCCESS
             quit
       idx += 32
-      if idx & 511 == 0
+      if idx & SECTOR_MASK == 0
         readNextSector(BUF_DIR)
     if p_entry <> SUCCESS
       p_entry := E_FILE_NOT_FOUND
@@ -5385,10 +5450,10 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
       debug("  [do_attempt_high_speed] Read FAILED at 50 MHz")
       hs_ok := false
     else
-      bytemove(@dir_buf, @buf, 512)                                                ' Save original to dir_buf
+      bytemove(@dir_buf, @buf, SECTOR_SIZE)                                                ' Save original to dir_buf
 
       writeSector(root_sec, BUF_DATA)                                              ' Write same data back
-      bytefill(@buf, $AA, 512)                                                     ' Poison buf
+      bytefill(@buf, $AA, SECTOR_SIZE)                                                     ' Poison buf
 
       if readSector(root_sec, BUF_DATA) < 0                                        ' Re-read into buf
         debug("  [do_attempt_high_speed] Verify read FAILED at 50 MHz")
@@ -5397,14 +5462,14 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
       ' Compare dir_buf (original) vs buf (re-read) long-by-long
       else
         mismatch := 0
-        repeat idx from 0 to 127
+        repeat idx from 0 to SECTOR_LONGS - 1
           if LONG[@dir_buf][idx] <> LONG[@buf][idx]
             mismatch++
 
         if mismatch > 0
           debug("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
           debug("  [do_attempt_high_speed] Falling back to 25 MHz")
-          do_set_spi_speed(25_000_000)
+          do_set_spi_speed(SD_FALLBACK_SPEED_HZ)
           dir_sec_in_buf := -1                                                       ' Invalidate dir cache (we borrowed dir_buf)
           hs_ok := false
 
@@ -5520,7 +5585,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
   pinl(sck)                                                                        ' SCK LOW (SPI mode 0 idle)
   pinf(miso)                                                                       ' MISO as floating input
 
-  repeat 4096                                                                      ' Flush a full 512-byte sector worth
+  repeat GPIO_FLUSH_CYCLES                                                                      ' Flush a full 512-byte sector worth
     pinh(sck)
     waitus(10)
     pinl(sck)
@@ -5531,7 +5596,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
   ' STEP 2: Initialize smart pins at slow clock (400 kHz)
   ' ----------------------------------------------------------
   initSPIPins()
-  do_set_spi_speed(400_000)
+  do_set_spi_speed(SD_INIT_SPEED_HZ)
   waitus(100)
 
   ' Send dummy clocks via smart pins
@@ -5571,7 +5636,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     ' ----------------------------------------------------------
     ' STEP 5: ACMD41 - SD_SEND_OP_COND (loop until ready)
     ' ----------------------------------------------------------
-    timeout := getct() + clkfreq * 2                                                       ' 2 second timeout
+    timeout := getct() + clkfreq * INIT_TIMEOUT_SEC                                                       ' 2 second timeout
 
     repeat
       resp := cmd(55, 0)
@@ -5610,7 +5675,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     if saved_freq > 0
       do_set_spi_speed(saved_freq)
     else
-      do_set_spi_speed(25_000_000)                                                        ' Fallback to 25 MHz
+      do_set_spi_speed(SD_FALLBACK_SPEED_HZ)                                                        ' Fallback to 25 MHz
 
     ' Stabilize at new clock rate
     pinh(cs)
@@ -5770,10 +5835,10 @@ PRI fl_program_block(block_address, p_buffer, cycle_bits) | pageIndex
 
   fl_wait()                                                                       ' Wait for erase (~45ms)
 
-  repeat 16 with pageIndex                                                        ' Program 16 pages (256 bytes each)
+  repeat PAGES_PER_FLASH_BLOCK with pageIndex                                      ' Program 16 pages (256 bytes each)
     fl_command($06, 1)                                                            ' Enable write
     fl_command($02 | (FIRST_BLOCK + block_address) << 20 | pageIndex << 16, 4)    ' Program page
-    fl_send(p_buffer + pageIndex << 8, 256)                                       ' Send 256 bytes
+    fl_send(p_buffer + pageIndex << 8, FLASH_PAGE_SIZE)                           ' Send 256 bytes
     fl_wait()                                                                     ' Wait for program (~400us)
 
 PRI fl_activate_block(block_address, cycle_bits)
@@ -6133,20 +6198,26 @@ PRI fl_prepend_cwd(p_dest, p_name) | p_cwd, cwd_len, name_len
 ' @local cwd_len - Length of CWD path string
 ' @local name_len - Length of filename string
 
-  p_cwd := fl_get_cwd()
-  cwd_len := strsize(p_cwd)
-  name_len := strsize(p_name)
   bytefill(p_dest, 0, FL_FILENAME_SIZE)
 
-  if cwd_len == 0
-    ' At root -- just copy the filename
-    strcopy(p_dest, p_name, FL_FILENAME_SIZE - 1)
+  ' Absolute path (starts with "/") -- strip leading "/" and use directly, skip CWD
+  if BYTE[p_name] == "/"
+    strcopy(p_dest, p_name + 1, FL_FILENAME_SIZE - 1)
   else
-    ' Build: CWD + "/" + name
-    strcopy(p_dest, p_cwd, FL_FILENAME_SIZE - 1)
-    if cwd_len + 1 + name_len < FL_FILENAME_SIZE
-      BYTE[p_dest][cwd_len] := "/"
-      strcopy(p_dest + cwd_len + 1, p_name, FL_FILENAME_SIZE - cwd_len - 2)
+    ' Relative path -- prepend CWD as before
+    p_cwd := fl_get_cwd()
+    cwd_len := strsize(p_cwd)
+    name_len := strsize(p_name)
+
+    if cwd_len == 0
+      ' At root -- just copy the filename
+      strcopy(p_dest, p_name, FL_FILENAME_SIZE - 1)
+    else
+      ' Build: CWD + "/" + name
+      strcopy(p_dest, p_cwd, FL_FILENAME_SIZE - 1)
+      if cwd_len + 1 + name_len < FL_FILENAME_SIZE
+        BYTE[p_dest][cwd_len] := "/"
+        strcopy(p_dest + cwd_len + 1, p_name, FL_FILENAME_SIZE - cwd_len - 2)
 
 PRI fl_change_cwd(p_path) | p_cwd, cwd_len, path_len, idx
 ' Change the calling cog's Flash CWD prefix.
@@ -7691,7 +7762,7 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
           bytemove(@entry_buffer + 8,@entry_buffer + idx,3)                       '   move extension to byte 8
           bytefill(@entry_buffer + idx-1," ",9-idx)                                 '   fill space between name and extension
     bytefill(@entry_buffer + strsize(@entry_buffer)," ",12-strsize(@entry_buffer)) ' fill remaining space (in case extension < 3 characters)
-    BYTE[@entry_buffer][11] := $00                                              '  append null
+    BYTE[@entry_buffer][DIR_ATTR_OFFSET] := $00                                  '  append null
 
     found := true                                                                '  assume found until proven otherwise
     idx := 0
@@ -7701,17 +7772,17 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
       found := false
       quit                                                                        '  exit outer loop on read failure
     else
-      debug("  [searchDir] After read: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
+      debug("  [searchDir] After read: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
       entry_address := 0
       repeat
-        p_entry := @dir_buf + (idx & 511)                                           '  locate entry in directory (FIXED precedence)
+        p_entry := @dir_buf + (idx & SECTOR_MASK)                                           '  locate entry in directory (FIXED precedence)
         bytemove(p_temp,p_entry,11)                                               '  copy short filename into p_temp
-        byte[p_temp + 11] := 0                                                    '  null terminate for comparison
-        repeat jdx from 0 to 10                                                     '  uppercase on-disk entry for case-insensitive match
+        byte[p_temp + DIR_ATTR_OFFSET] := 0                                        '  null terminate for comparison
+        repeat jdx from 0 to FILENAME_83_LEN - 1                                                     '  uppercase on-disk entry for case-insensitive match
           case byte[p_temp + jdx]
             "a".."z" : byte[p_temp + jdx] -= $20
         if strcomp(@entry_buffer,p_temp)                                          '  if matching entry located
-          entry_address := (n_sec << 9) | (idx & 511)                               '   store the byte-level address of the entry
+          entry_address := (n_sec << SECTOR_BITS) | (idx & SECTOR_MASK)                               '   store the byte-level address of the entry
           bytemove(@entry_buffer,p_entry,32)                                      '   copy entire entry into entry_buffer
           debug("  [searchDir] FOUND at idx=", udec_(idx), " firstCluster=", udec_(firstCluster()), " n_sec will be ", udec_(clus2sec(firstCluster())))
           if firstCluster() == 0                                                  '  exception if ".." points to root directory
@@ -7721,7 +7792,7 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
           quit
         elseif byte[name_ptr] == $00                                              '  if end of path reached
           if (entry_address == 0) and (byte[p_temp] == $E5 or byte[p_temp] == $00) '  if entry_address not set, and 1st byte is $E5 or $00
-            entry_address := (n_sec << 9) | (idx & 511)                             '    set entry_address to 1st unused entry (for newFile / newDirectory)
+            entry_address := (n_sec << SECTOR_BITS) | (idx & SECTOR_MASK)                             '    set entry_address to 1st unused entry (for newFile / newDirectory)
             debug("  [searchDir] Free slot at n_sec=", udec_(n_sec), " idx=", udec_(idx), " entry_address=$", uhex_(entry_address))
 
         if byte[p_temp] == $00                                                    '  entry not found in directory
@@ -7729,7 +7800,7 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
           quit
         else
           idx += 32                                                                   '  increment to next entry
-          if idx & 511 == 0                                                           '  read new directory sector/cluster if needed
+          if idx & SECTOR_MASK == 0                                                           '  read new directory sector/cluster if needed
             readNextSector(BUF_DIR)
       if not found                                                                '  if inner loop ended without match
         quit                                                                      '   exit outer loop too
@@ -7753,7 +7824,7 @@ PRI readFat(cluster) : p_fat_entry | contents, p_contents
     debug("  [readFat] FAT read FAILED for cluster ", udec_(cluster))
     p_fat_entry := @fat_buf  '  Return valid pointer but caller gets stale data
   else
-    p_fat_entry := @fat_buf + ((cluster << 2) & 511)
+    p_fat_entry := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
 
 PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits
 ' Search FAT for an empty cluster, allocate it, and return cluster number.
@@ -7772,17 +7843,17 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits
   '   if cluster parameter <> 0, writes newly allocated cluster number in parameter cell
   else
     repeat
-      if fat_idx & 511 == 0 and fat_idx > 0                                       '  if at sector boundary (but not first iteration)
-        if readSector(fat_sec + fat_idx >> 9, BUF_FAT) < 0                        '   load next sector of FAT
+      if fat_idx & SECTOR_MASK == 0 and fat_idx > 0                                       '  if at sector boundary (but not first iteration)
+        if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0                        '   load next sector of FAT
           debug("  [allocateCluster] FAT scan read FAILED")
           cluster_num := -1
           quit
-      buf_idx := fat_idx & 511
+      buf_idx := fat_idx & SECTOR_MASK
       cluster_num := long[@fat_buf + buf_idx]                                          '  read a cluster cell
-      if (cluster_num & $0FFF_FFFF) == $0000_0000                                      '  if cluster cell is empty (check only low 28 bits)
-        high_bits := cluster_num & $F000_0000                                          '  preserve high 4 bits
-        long[@fat_buf + buf_idx] := high_bits | $0FFF_FFFF                        '  mark as end-of-chain, preserve high bits
-        cluster_num := fat_idx >> 2                                                    '  store cluster number in cluster_num
+      if (cluster_num & FAT_EOC_MASK) == $0000_0000                                      '  if cluster cell is empty (check only low 28 bits)
+        high_bits := cluster_num & FAT_HIGH_BITS_MASK                                   '  preserve high 4 bits
+        long[@fat_buf + buf_idx] := high_bits | FAT_EOC_MASK                       '  mark as end-of-chain, preserve high bits
+        cluster_num := fat_idx >> FAT_ENTRY_SHIFT                                      '  store cluster number in cluster_num
         writeSector(fat_sec + cluster_num >> 7, BUF_FAT)                               '  write FAT1 sector
         writeSector(fat2_sec + cluster_num >> 7, BUF_FAT)                              '  write FAT2 sector (MIRROR)
         if cluster <> 0                                                           '  if allocateCluster was called with a non-zero cluster parameter
@@ -7791,9 +7862,9 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits
             cluster_num := -1
             quit
           else
-            buf_idx := (cluster << 2) & 511
-            high_bits := long[@fat_buf + buf_idx] & $F000_0000                      '  preserve high 4 bits
-            long[@fat_buf + buf_idx] := high_bits | (cluster_num & $0FFF_FFFF)           '  link to new cluster, preserve high bits
+            buf_idx := (cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK
+            high_bits := long[@fat_buf + buf_idx] & FAT_HIGH_BITS_MASK               '  preserve high 4 bits
+            long[@fat_buf + buf_idx] := high_bits | (cluster_num & FAT_EOC_MASK)          '  link to new cluster, preserve high bits
             writeSector(fat_sec + cluster >> 7, BUF_FAT)                            '  write FAT1 sector
             writeSector(fat2_sec + cluster >> 7, BUF_FAT)                           '  write FAT2 sector (MIRROR)
         if fsi_free_count <> $FFFF_FFFF                                          '  track free count incrementally
@@ -7808,7 +7879,7 @@ PRI clearCluster(cluster)
 ' @param cluster - Cluster number to clear
 
   n_sec := clus2sec(cluster)                                                    '  set n_sec to 1st sector of specified cluster
-  bytefill(@dir_buf, 0, 512)                                                    '  clear directory buffer
+  bytefill(@dir_buf, 0, SECTOR_SIZE)                                                    '  clear directory buffer
   repeat sec_per_clus                                                           '  repeat for all sectors in the cluster
     writeSector(n_sec++, BUF_DIR)                                               '   overwrite sector
   dir_sec_in_buf := n_sec - 1
@@ -7828,17 +7899,17 @@ PRI readNextSector(buf_type) | cluster, address, contents, p_buf
     if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0                          '   read sector of FAT containing cluster number (128 cluster entries in each FAT sector)
       debug("  [readNextSector] FAT read FAILED for cluster ", udec_(cluster))
     else
-      address := @fat_buf + ((cluster << 2) & 511)                              '   find long within FAT buffer for current cluster
+      address := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)                              '   find long within FAT buffer for current cluster
       contents := long[address]                                                 '   read contents to determine next cluster number
       if contents +>= $0FFF_FFF8                                                '   end-of-chain marker detected
         ' Fill appropriate buffer with zeros based on buf_type
         case buf_type
           BUF_DIR:
-            bytefill(@dir_buf, 0, 512)
+            bytefill(@dir_buf, 0, SECTOR_SIZE)
           BUF_FAT:
-            bytefill(@fat_buf, 0, 512)
+            bytefill(@fat_buf, 0, SECTOR_SIZE)
           other:
-            bytefill(@buf, 0, 512)
+            bytefill(@buf, 0, SECTOR_SIZE)
       else
         n_sec := clus2sec(contents)                                             '   convert next cluster number into sector number
         if readSector(n_sec, buf_type) < 0
@@ -7861,7 +7932,7 @@ PRI followFatChain() | cluster, address, contents
   if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0                            '  read sector of FAT containing cluster number
     debug("  [followFatChain] FAT read FAILED for cluster ", udec_(cluster))
   else
-    address := @fat_buf + ((cluster << 2) & 511)                                '  find long within FAT buffer for current cluster
+    address := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)                                '  find long within FAT buffer for current cluster
     contents := long[address]                                                   '  read contents to determine next cluster number
     if contents +< $0FFF_FFF8                                                   '  if not end-of-chain marker
       n_sec := clus2sec(contents)                                               '   convert next cluster number into sector number
@@ -7915,14 +7986,14 @@ PRI countFreeClusters() : count | fat_idx, entry
   count := 0
   fat_idx := 8                                                                  '  start at cluster 2 (skip reserved entries 0,1)
   repeat
-    if fat_idx & 511 == 0                                                       '  if at sector boundary
-      if fat_idx >> 9 >= sec_per_fat                                            '  if past end of FAT
+    if fat_idx & SECTOR_MASK == 0                                                       '  if at sector boundary
+      if fat_idx >> SECTOR_BITS >= sec_per_fat                                            '  if past end of FAT
         quit
-      if readSector(fat_sec + fat_idx >> 9, BUF_FAT) < 0                         '  read next FAT sector
+      if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0                         '  read next FAT sector
         debug("  [countFreeClusters] FAT read FAILED, returning partial count")
         quit
-    entry := long[@fat_buf + (fat_idx & 511)]
-    if (entry & $0FFF_FFFF) == 0                                                '  check only low 28 bits
+    entry := long[@fat_buf + (fat_idx & SECTOR_MASK)]
+    if (entry & FAT_EOC_MASK) == 0                                               '  check only low 28 bits
       count++
     fat_idx += 4
   fat_sec_in_buf := -1                                                          '  invalidate FAT buffer
@@ -7937,7 +8008,7 @@ PRI byte2clus(byte_address) : cluster_num
 ' @param byte_address - Byte address to convert
 ' @returns cluster_num - Cluster number containing that byte
 
-  cluster_num := (sec2clus(byte_address >> 9))
+  cluster_num := (sec2clus(byte_address >> SECTOR_BITS))
 
 PRI sec2clus(sector) : cluster_num
 ' Convert sector number to cluster number.
@@ -7953,7 +8024,7 @@ PRI clus2byte(cluster) : byte_addr
 ' @param cluster - Cluster number to convert
 ' @returns byte_addr - Byte address of first byte in that cluster
 
-  byte_addr := clus2sec(cluster) << 9
+  byte_addr := clus2sec(cluster) << SECTOR_BITS
 
 PRI clus2sec(cluster) : sector_num
 ' Convert cluster number to sector number.
@@ -8279,7 +8350,7 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
   ' Then send 74+ clocks per spec for power-on init
   ' ============================================
   debug("    [initCard] Step 3: Recovery flush (4096 clocks to clear stuck transfer)...")
-  repeat 4096                                                                     '  Enough to flush a full 512-byte sector
+  repeat GPIO_FLUSH_CYCLES                                                                     '  Enough to flush a full 512-byte sector
     pinh(sck)
     waitus(10)
     pinl(sck)
@@ -8292,7 +8363,7 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
   ' ============================================
   debug("    [initCard] Step 3.5: Initializing smart pins (ManAtWork pattern)...")
   initSPIPins()
-  do_set_spi_speed(400_000)                                                          ' 400 kHz for init
+  do_set_spi_speed(SD_INIT_SPEED_HZ)                                                          ' 400 kHz for init
   waitus(100)                                                                   ' Let smart pins settle
 
   ' Send dummy clocks using smart pins
@@ -8367,7 +8438,7 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
     ' Expected R1: 0x00 when ready, 0x01 while initializing
     ' ============================================
     debug("    [initCard] Step 6: ACMD41 init loop (arg=$", uhex_long(acmd41_arg), ")...")
-    timeout := getct() + clkfreq * 2                                                    '  2 second timeout
+    timeout := getct() + clkfreq * INIT_TIMEOUT_SEC                                                    '  2 second timeout
 
     repeat
       resp := cmd(55, 0)                                                          '  APP_CMD prefix
@@ -8522,8 +8593,8 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
     ' Pre-compute streamer constants (invariant across retries)
     _sck := sck
     _miso := miso
-    stream_mode := STREAM_RX_BASE | (_miso << 17) | (512 * 8)                     ' RX mode + MISO pin + bit count
-    clk_count := 512 * 8 * 2                                                      ' 8192 clock transitions
+    stream_mode := STREAM_RX_BASE | (_miso << 17) | (SECTOR_SIZE * 8)                     ' RX mode + MISO pin + bit count
+    clk_count := SECTOR_SIZE * 8 * 2                                                      ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                               ' One sample per full clock period
     init_phase := $4000_0000                                                      ' Sample mid-bit for stability
     align_delay := spi_period                                                     ' Wait one half-period before streamer
@@ -8615,7 +8686,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       diag_recv_crc |= sp_transfer_8($FF)
 
       ' CRC-16 validation: always validate received data against card's CRC
-      diag_calc_crc := calcDataCRC(p_buf, 512)
+      diag_calc_crc := calcDataCRC(p_buf, SECTOR_SIZE)
       ' TEST HOOK: Force CRC mismatch for error injection testing
       if test_force_read_crc_error > 0
         diag_calc_crc ^= $FFFF
@@ -8711,8 +8782,8 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
   else
     _sck := sck
     _miso := miso
-    stream_mode := STREAM_RX_BASE | (_miso << 17) | (512 * 8)                     ' RX mode + MISO pin + 4096 bits
-    clk_count := 512 * 8 * 2                                                      ' 8192 clock transitions
+    stream_mode := STREAM_RX_BASE | (_miso << 17) | (SECTOR_SIZE * 8)                     ' RX mode + MISO pin + 4096 bits
+    clk_count := SECTOR_SIZE * 8 * 2                                                      ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                               ' One sample per full clock period
     init_phase := $4000_0000                                                      ' Sample mid-bit for stability
     align_delay := spi_period                                                     ' Wait one half-period before streamer
@@ -8729,7 +8800,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
     else
       sectors_read := 0
       repeat count
-        p_buf := p_buffer + (sectors_read * 512)                                    ' Calculate buffer position
+        p_buf := p_buffer + (sectors_read * SECTOR_SIZE)                                    ' Calculate buffer position
 
         ' Wait for data token ($FE) for this sector
         if waitDataToken() < 0
@@ -8762,7 +8833,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
         diag_recv_crc |= sp_transfer_8($FF)
 
         if diag_crc_enabled
-          diag_calc_crc := calcDataCRC(p_buf, 512)
+          diag_calc_crc := calcDataCRC(p_buf, SECTOR_SIZE)
           if diag_calc_crc == diag_recv_crc
             diag_crc_matches++
           else
@@ -8861,8 +8932,8 @@ PRI writeSector(sector, buf_type) : ok | _sck, _mosi, p_buf, stream_mode, clk_co
     ' ============================================================================
     ' Mode word format: base_mode | (pin << 17) | bit_count
     ' For 512 bytes: 512 * 8 = 4096 bits = $1000
-    stream_mode := STREAM_TX_BASE | (_mosi << 17) | (512 * 8)                     ' TX mode + MOSI pin + bit count
-    clk_count := 512 * 8 * 2                                                      ' 8192 clock transitions
+    stream_mode := STREAM_TX_BASE | (_mosi << 17) | (SECTOR_SIZE * 8)                     ' TX mode + MOSI pin + bit count
+    clk_count := SECTOR_SIZE * 8 * 2                                                      ' 8192 clock transitions
 
     ' Calculate streamer NCO frequency to match SPI clock
     ' Same formula as readSector: one bit per full clock period
@@ -8905,7 +8976,7 @@ PRI writeSector(sector, buf_type) : ok | _sck, _mosi, p_buf, stream_mode, clk_co
 
     ' Calculate CRC-16 of the data we just sent and transmit it
     ' SD protocol: CRC high byte first, then low byte
-    diag_sent_crc := calcDataCRC(p_buf, 512)
+    diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
     ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
     if test_force_write_crc_error
       diag_sent_crc ^= $FFFF
@@ -8915,7 +8986,7 @@ PRI writeSector(sector, buf_type) : ok | _sck, _mosi, p_buf, stream_mode, clk_co
     sp_transfer_8(diag_sent_crc & $FF)                                            ' CRC low byte
 
     ' Wait for data-response token (should be immediate, within a few bytes)
-    timeout := getct() + clkfreq / 10                                                   ' 100ms timeout for response
+    timeout := getct() + clkfreq / RESPONSE_TIMEOUT_DIV                                  ' 100ms timeout for response
     repeat
       resp := sp_transfer_8($FF)
       if resp <> $FF
@@ -9012,8 +9083,8 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
   else
     _sck := sck
     _mosi := mosi
-    stream_mode := STREAM_TX_BASE | (_mosi << 17) | (512 * 8)                     ' TX mode + MOSI pin + 4096 bits
-    clk_count := 512 * 8 * 2                                                      ' 8192 clock transitions
+    stream_mode := STREAM_TX_BASE | (_mosi << 17) | (SECTOR_SIZE * 8)                     ' TX mode + MOSI pin + 4096 bits
+    clk_count := SECTOR_SIZE * 8 * 2                                                      ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                               ' One output per full clock period
     align_delay := spi_period - 2                                                  ' NCO ramp delay minus 2 instruction cycles
 
@@ -9056,7 +9127,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         pinh(_mosi)
 
         ' Calculate and send CRC-16 for this sector's data
-        diag_sent_crc := calcDataCRC(p_buf, 512)
+        diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
         sp_transfer_8(diag_sent_crc >> 8)                                           ' CRC high byte
         sp_transfer_8(diag_sent_crc & $FF)                                          ' CRC low byte
 
@@ -9107,7 +9178,7 @@ PRI waitR1Response() : response | timeout, resp
 ' @local timeout - Timeout deadline
 ' @local resp - Received response byte
 
-  timeout := getct() + clkfreq / 10                                                   ' 100ms timeout
+  timeout := getct() + clkfreq / RESPONSE_TIMEOUT_DIV                                 ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
     if resp <> $FF
@@ -9153,7 +9224,7 @@ PRI waitDataResponse() : response | timeout, resp
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
-  timeout := getct() + clkfreq / 10                                                   ' 100ms timeout
+  timeout := getct() + clkfreq / RESPONSE_TIMEOUT_DIV                                 ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
     if resp <> $FF
@@ -9360,7 +9431,7 @@ PRI readCSD(p_csd) : ok | timeout, idx
 
     if ok == $FE
       ' Read 16 bytes of CSD data
-      repeat idx from 0 to 15
+      repeat idx from 0 to CSD_CID_BYTES - 1
         byte[p_csd + idx] := sp_transfer_8($FF)
 
       ' Read and discard 2-byte CRC
@@ -9421,7 +9492,7 @@ PRI readCID(p_cid) : ok | timeout, idx
       ' Layout: MID[1] OID[2] PNM[5] PRV[1] PSN[4] MDT[2] CRC[1]
       ' TODO: With {Spin2_v52}+STRUCT, callers can use ENDIANL/ENDIANW on
       '   multi-byte fields (PSN, MDT) instead of manual shift/OR patterns
-      repeat idx from 0 to 15
+      repeat idx from 0 to CSD_CID_BYTES - 1
         byte[p_cid + idx] := sp_transfer_8($FF)
 
       ' Read and discard 2-byte CRC
@@ -9595,7 +9666,7 @@ PRI identifyCard() | cid[4], csd[4]
     parseTimeouts(@csd)
   else
     debug("  [identifyCard] WARNING: Could not read CSD")
-    card_max_speed_hz := 25_000_000                                             ' Default to 25 MHz
+    card_max_speed_hz := SD_FALLBACK_SPEED_HZ                                    ' Default to 25 MHz
     card_read_timeout_ms := 100                                                 ' Safe defaults
     card_write_timeout_ms := 500
 
@@ -9609,8 +9680,8 @@ PRI setOptimalSpeed()
     debug("  [setOptimalSpeed] Limited to 20 MHz for slow card")
   else
     ' Use card's reported max speed, capped at 25 MHz for SPI mode
-    if card_max_speed_hz > 25_000_000
-      do_set_spi_speed(25_000_000)
+    if card_max_speed_hz > SD_FALLBACK_SPEED_HZ
+      do_set_spi_speed(SD_FALLBACK_SPEED_HZ)
     else
       do_set_spi_speed(card_max_speed_hz)
     debug("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
@@ -9801,7 +9872,7 @@ PRI readSDStatus(p_buf) : ok | timeout, idx
         debug("  [readSDStatus] Got data token, reading 64 bytes")
 
         ' Read 64 bytes of SD Status data
-        repeat idx from 0 to 63
+        repeat idx from 0 to SD_STATUS_BYTES - 1
           byte[p_buf + idx] := sp_transfer_8($FF)
 
         ' Read and discard 2-byte CRC
@@ -9866,7 +9937,7 @@ PRI sendCMD6(arg, p_status) : ok | timeout, idx
 
     if ok == $FE
       ' Read 64 bytes of status data
-      repeat idx from 0 to 63
+      repeat idx from 0 to SD_STATUS_BYTES - 1
         byte[p_status + idx] := sp_transfer_8($FF)
 
       ' Read and discard 2-byte CRC

@@ -55,7 +55,6 @@ CON
 
     NUM_TEST_SECTORS = 5
 
-    SECTOR_SIZE      = 512       ' SD card sector size in bytes
 
     ' Boundary marker offsets
     HEAD_MARKER_END  = 8         ' Head marker occupies bytes 0-7
@@ -84,8 +83,8 @@ OBJ
     utils : "isp_rt_utilities"
 
 VAR
-    BYTE    write_buf[SECTOR_SIZE]
-    BYTE    read_buf[SECTOR_SIZE]
+    BYTE    write_buf[dfs.SECTOR_SIZE]
+    BYTE    read_buf[dfs.SECTOR_SIZE]
     BYTE    read_buf_guard[16]
     LONG    pass_count
     LONG    fail_count
@@ -125,7 +124,7 @@ PUB go() | workerCog, result, i, sector
         ' Write Pattern A: Sequential bytes
         sector := TEST_SECTOR_A
         debug("* Test: Write Pattern A (sequential) to sector ", udec_(sector))
-        repeat i from 0 to SECTOR_SIZE - 1
+        repeat i from 0 to dfs.SECTOR_SIZE - 1
             write_buf[i] := i & $FF
         addBoundaryMarkers(sector, $A0)
         if writeAndVerify(sector, $A0)
@@ -136,7 +135,7 @@ PUB go() | workerCog, result, i, sector
         ' Write Pattern B: Alternating AA/55
         sector := TEST_SECTOR_B
         debug("* Test: Write Pattern B (AA/55) to sector ", udec_(sector))
-        repeat i from 0 to SECTOR_SIZE - 1
+        repeat i from 0 to dfs.SECTOR_SIZE - 1
             write_buf[i] := (i & 1) ? $55 : $AA
         addBoundaryMarkers(sector, $B0)
         if writeAndVerify(sector, $B0)
@@ -147,7 +146,7 @@ PUB go() | workerCog, result, i, sector
         ' Write Pattern C: All FF (except markers)
         sector := TEST_SECTOR_C
         debug("* Test: Write Pattern C (all FF) to sector ", udec_(sector))
-        bytefill(@write_buf, $FF, SECTOR_SIZE)
+        bytefill(@write_buf, $FF, dfs.SECTOR_SIZE)
         addBoundaryMarkers(sector, $C0)
         if writeAndVerify(sector, $C0)
             recordPass()
@@ -157,7 +156,7 @@ PUB go() | workerCog, result, i, sector
         ' Write Pattern D: All 00 (except markers)
         sector := TEST_SECTOR_D
         debug("* Test: Write Pattern D (all 00) to sector ", udec_(sector))
-        bytefill(@write_buf, $00, SECTOR_SIZE)
+        bytefill(@write_buf, $00, dfs.SECTOR_SIZE)
         addBoundaryMarkers(sector, $D0)
         if writeAndVerify(sector, $D0)
             recordPass()
@@ -167,7 +166,7 @@ PUB go() | workerCog, result, i, sector
         ' Write Pattern E: Incrementing with sector offset
         sector := TEST_SECTOR_E
         debug("* Test: Write Pattern E (offset) to sector ", udec_(sector))
-        repeat i from 0 to SECTOR_SIZE - 1
+        repeat i from 0 to dfs.SECTOR_SIZE - 1
             write_buf[i] := (i + $E0) & $FF          ' Offset by $E0 to distinguish from pattern A
         addBoundaryMarkers(sector, $E0)
         if writeAndVerify(sector, $E0)

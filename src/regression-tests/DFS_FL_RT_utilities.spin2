@@ -40,7 +40,7 @@ CON
   GUARD_SIZE    = 16          ' Guard bytes after each buffer
   GUARD_BYTE    = $CC         ' Sentinel value (distinct from $00, $FF, $AA, $55)
 
-  MAX_P2_COGS         = 8    ' P2 has 8 cogs
+
   HEXDUMP_LINE_BYTES  = 16   ' Bytes per hex dump row
   ASCII_PRINTABLE_MIN = 32   ' Space - first printable ASCII
   ASCII_PRINTABLE_MAX = 126  ' Tilde - last printable ASCII
@@ -57,14 +57,14 @@ OBJ
 
 VAR { test stats vars }
 
-  LONG    numberTests[MAX_P2_COGS]
-  LONG    subTestPer[MAX_P2_COGS]
-  LONG    passCount[MAX_P2_COGS]
-  LONG    failCount[MAX_P2_COGS]
-  LONG    passCountSub[MAX_P2_COGS]
-  LONG    failCountSub[MAX_P2_COGS]
+  LONG    numberTests[dfs.MAX_P2_COGS]
+  LONG    subTestPer[dfs.MAX_P2_COGS]
+  LONG    passCount[dfs.MAX_P2_COGS]
+  LONG    failCount[dfs.MAX_P2_COGS]
+  LONG    passCountSub[dfs.MAX_P2_COGS]
+  LONG    failCountSub[dfs.MAX_P2_COGS]
 
-  LONG    varSignature[MAX_P2_COGS]
+  LONG    varSignature[dfs.MAX_P2_COGS]
 
   byte    filename[128]
 
@@ -154,7 +154,7 @@ PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail
     totalTests := 0
     totalPass := 0
     totalFail := 0
-    repeat cogIdx from 0 to MAX_P2_COGS - 1
+    repeat cogIdx from 0 to dfs.MAX_P2_COGS - 1
         totalTests += numberTests[cogIdx]
         totalPass += passCount[cogIdx]
         totalFail += failCount[cogIdx]

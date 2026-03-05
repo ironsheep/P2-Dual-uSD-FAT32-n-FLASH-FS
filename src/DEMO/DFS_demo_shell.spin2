@@ -59,7 +59,6 @@ CON { constants }
   #false, NO, YES
 
   MAX_PATH    = 128                                             ' max path length
-  SECTOR_SIZE = 512                                             ' SD sector size
   BUFFER_SIZE = 512                                             ' read/write buffer
 
   ' Device aliases
@@ -230,7 +229,7 @@ VAR { card info - driver receive buffers }
 
 VAR { card info / bench }
 
-  byte  buf2[SECTOR_SIZE]                                       ' card info / detect buffer
+  byte  buf2[dfs.SECTOR_SIZE]                                       ' card info / detect buffer
 
   ' Struct overlay pointers (set before use, overlaid on buf2)
   long  pVBR                                                    ' ^dfs.vbr_t overlay
@@ -1455,13 +1454,13 @@ PUB do_card_info() | wasMounted, cardOk, ...
         bytemove(@oemBuf, @"n/a", 4)
 
       if sizeMB < MB_PER_GB
-        nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dMB [%s] %s", p_mfr, @pnm, p_type, sizeMB, p_fs, p_spec)
+        nLen := fmt.sFormatStr6(@buf2, dfs.SECTOR_SIZE, @"%s %s %s %dMB [%s] %s", p_mfr, @pnm, p_type, sizeMB, p_fs, p_spec)
       else
-        nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dGB [%s] %s", p_mfr, @pnm, p_type, sizeMB / MB_PER_GB, p_fs, p_spec)
-      fmt.sFormatStr5(@BYTE[@buf2][nLen], SECTOR_SIZE - nLen, @" rev%d.%d SN:%.8x %d/%.2d\r\n", cid.prv >> 4, cid.prv & NIBBLE_MASK, psn, mdtYear, mdtMonth)
+        nLen := fmt.sFormatStr6(@buf2, dfs.SECTOR_SIZE, @"%s %s %s %dGB [%s] %s", p_mfr, @pnm, p_type, sizeMB / MB_PER_GB, p_fs, p_spec)
+      fmt.sFormatStr5(@BYTE[@buf2][nLen], dfs.SECTOR_SIZE - nLen, @" rev%d.%d SN:%.8x %d/%.2d\r\n", cid.prv >> 4, cid.prv & NIBBLE_MASK, psn, mdtYear, mdtMonth)
       serial.str(@buf2)
 
-      fmt.sFormatStr3(@buf2, SECTOR_SIZE, @"SPI %d.%d MHz  [%s]\r\n", spiHz / HZ_PER_MHZ, (spiHz / HZ_PER_100KHZ) // DECIMAL_BASE, @oemBuf)
+      fmt.sFormatStr3(@buf2, dfs.SECTOR_SIZE, @"SPI %d.%d MHz  [%s]\r\n", spiHz / HZ_PER_MHZ, (spiHz / HZ_PER_100KHZ) // DECIMAL_BASE, @oemBuf)
       serial.str(@buf2)
 
     if (not wasMounted)
@@ -1727,7 +1726,7 @@ PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, i, rate, readResu
         sector++
       tElapsed := getct() - tStart
 
-      rate := (BENCH_SINGLE_READS * SECTOR_SIZE * msPerTick) / tElapsed
+      rate := (BENCH_SINGLE_READS * dfs.SECTOR_SIZE * msPerTick) / tElapsed
       serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
       ' Multi-sector x8
@@ -1739,7 +1738,7 @@ PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, i, rate, readResu
         sector += BENCH_X8_SECTORS
       tElapsed := getct() - tStart
 
-      rate := (BENCH_X8_READS * BENCH_X8_SECTORS * SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
+      rate := (BENCH_X8_READS * BENCH_X8_SECTORS * dfs.SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
       serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
       ' Multi-sector x32
@@ -1751,7 +1750,7 @@ PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, i, rate, readResu
         sector += BENCH_X32_SECTORS
       tElapsed := getct() - tStart
 
-      rate := (BENCH_X32_READS * BENCH_X32_SECTORS * SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
+      rate := (BENCH_X32_READS * BENCH_X32_SECTORS * dfs.SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
       serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
       ' Multi-sector x64
@@ -1763,7 +1762,7 @@ PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, i, rate, readResu
         sector += BENCH_X64_SECTORS
       tElapsed := getct() - tStart
 
-      rate := (BENCH_X64_READS * BENCH_X64_SECTORS * SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
+      rate := (BENCH_X64_READS * BENCH_X64_SECTORS * dfs.SECTOR_SIZE * (msPerTick / BENCH_RATE_SCALE)) / (tElapsed / BENCH_RATE_SCALE)
       serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
       serial.fstr0(@"\r\nBenchmark complete.\r\n")
