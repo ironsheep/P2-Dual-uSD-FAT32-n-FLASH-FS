@@ -30,7 +30,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     ' P2 Edge module SD slot pins (needed for dfs.init)
@@ -49,13 +49,7 @@ testfile5       BYTE    "apLongsHeadBody.bin", 0
 testfile6       BYTE    "apLongsHead2xBody.bin", 0
 testfile7       BYTE    "apLongsHead3xBody.bin", 0
 
-handle          LONG    0
-testValue       LONG    0
-status          LONG    0
-expectedValue   LONG    0
-
-
-PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog
+PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog, handle, status
 '' Run Flash append operation regression tests.
 ''
 ' @local hundreds - Hundreds digit of serial number
@@ -70,11 +64,11 @@ PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog
 
     status := dfs.format(dfs.DEV_FLASH)
     if status < 0
-        utils.showError(@"format()", status)
+        utils.showErrorCode(@"format()", status)
     else
         status := dfs.mount(dfs.DEV_FLASH)
         if status < 0
-            utils.showError(@"mount()", status)
+            utils.showErrorCode(@"mount()", status)
         else
             utils.ShowStats()                   ' should have empty filesystem
             utils.showFiles()
@@ -161,7 +155,7 @@ PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog
     dfs.stop()
 
 
-pri testAppendWithIntermedFlush(initialLongsCount, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded
+pri testAppendWithIntermedFlush(initialLongsCount, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded, handle, status
 
     ' --- special case - flush() testing
     utils.startTestGroup(@"Certifying Flush - appends to existing file with flush() for each")
@@ -213,7 +207,7 @@ pri testAppendWithIntermedFlush(initialLongsCount, startingFileCount, startingBl
     utils.evaluateFSStats(@"post file write", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testNewAppendBytes(pFilename, count, startingFileCount, startingBlockCount) | bExists, startLength, bytesUsed, blocksUsed, blocksAdded, pBlock
+pri testNewAppendBytes(pFilename, count, startingFileCount, startingBlockCount) | bExists, startLength, bytesUsed, blocksUsed, blocksAdded, pBlock, handle, testValue, status
 
     utils.startTest(@"Ensure file doesn't exist")
     utils.setCheckCountPerTest(2)
@@ -256,7 +250,7 @@ pri testNewAppendBytes(pFilename, count, startingFileCount, startingBlockCount) 
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + 1)
 
 
-pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | bytesUsed, blocksUsed
+pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | bytesUsed, blocksUsed, handle, testValue, status
     '  open file for write
     '  ensure returns SUCCESS
     utils.startTest(@"Open File for write")
@@ -293,14 +287,14 @@ pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | by
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendBytes(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, pBlock, blocksAdded
+pri testAppendBytes(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, pBlock, blocksAdded, handle, testValue, status
 
     utils.startTest(@"Get starting length before append of BYTEs")
     utils.setCheckCountPerTest(2)
     startLength := dfs.file_size(dfs.DEV_FLASH, pFilename)
     status := dfs.error()
     utils.evaluateSubValue(startLength, @"file_size()", initialCount)
-    utils.evaluateSubStatus(handle, @"file_size()",dfs.SUCCESS)
+    utils.evaluateSubStatus(status, @"file_size()", dfs.SUCCESS)
 
     '  open file for append
     utils.startTest(@"Open File for append")
@@ -340,7 +334,7 @@ pri testAppendBytes(pFilename, initialCount, count, startingFileCount, startingB
     utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testWriteWords(pFilename, count, startingFileCount, startingBlockCount) | blocksUsed, bytesUsed
+pri testWriteWords(pFilename, count, startingFileCount, startingBlockCount) | blocksUsed, bytesUsed, handle, testValue, status
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -378,7 +372,7 @@ pri testWriteWords(pFilename, count, startingFileCount, startingBlockCount) | bl
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendWords(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, pBlock, blocksAdded, blocksUsed
+pri testAppendWords(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, pBlock, blocksAdded, blocksUsed, handle, testValue, status
 
     utils.startTest(@"Get starting length before append of WORDs")
     utils.setCheckCountPerTest(2)
@@ -425,7 +419,7 @@ pri testAppendWords(pFilename, initialCount, count, startingFileCount, startingB
     utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testWriteLongs(pFilename, count, startingFileCount, startingBlockCount) | bytesUsed, blocksUsed
+pri testWriteLongs(pFilename, count, startingFileCount, startingBlockCount) | bytesUsed, blocksUsed, handle, testValue, status
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -463,7 +457,7 @@ pri testWriteLongs(pFilename, count, startingFileCount, startingBlockCount) | by
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendLongs(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded
+pri testAppendLongs(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded, handle, testValue, status
 
     utils.startTest(@"Get starting length before append of LONGs")
     utils.setCheckCountPerTest(2)
@@ -512,7 +506,7 @@ pri testAppendLongs(pFilename, initialCount, count, startingFileCount, startingB
     utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testFlushAppendLongs(appendHandle, pFilename, initialLongCount, count) | startLength, bytesUsed, blocksUsed, blocksAdded
+pri testFlushAppendLongs(appendHandle, pFilename, initialLongCount, count) | startLength, bytesUsed, blocksUsed, blocksAdded, testValue, status
 
     utils.showFileDetails(pFilename)
 
@@ -591,7 +585,7 @@ testStrBuffer       BYTE    0[MAX_STRING_SIZE]
 idxStringWritten    BYTE    0[MAX_STRINGS_WRITTEN]               ' index to strings in order written
 expectedStrFileSize LONG    0
 
-pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): strFileSize | strIdx, pString, readWriteIdx, blocksUsed, pBlock
+pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): strFileSize | strIdx, pString, readWriteIdx, blocksUsed, pBlock, handle, status
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -631,7 +625,7 @@ pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): s
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendStrings(pFilename, count, initialFileSize, startingFileCount, startingBlockCount) : strFileSize | startLength, readWriteIdx, strIdx, pString, pBlock, blocksAdded, blocksUsed
+pri testAppendStrings(pFilename, count, initialFileSize, startingFileCount, startingBlockCount) : strFileSize | startLength, readWriteIdx, strIdx, pString, pBlock, blocksAdded, blocksUsed, handle, status
 
     utils.startTest(@"Get starting length before append of STRINGs")
     utils.setCheckCountPerTest(2)
@@ -680,7 +674,7 @@ pri testAppendStrings(pFilename, count, initialFileSize, startingFileCount, star
     utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testVerifyAllStrings(pFilename, stringCount) | foundFileSize, strIdx, pString, readWriteIdx, expectedLength, rdLength, compareResult
+pri testVerifyAllStrings(pFilename, stringCount) | foundFileSize, strIdx, pString, readWriteIdx, expectedLength, rdLength, compareResult, handle, status
     '  open file for read
     utils.startTest(@"Open File for read")
     handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)

@@ -30,7 +30,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     ' P2 Edge module SD slot pins (needed for dfs.init)
@@ -46,16 +46,7 @@ testfile2           BYTE    "seekLongs2blk.bin", 0
 testfile3           BYTE    "seekLongs3blk.bin", 0
 testfile4           BYTE    "seekLongs3blkFull.bin", 0
 
-pBlock              LONG    0
-expectedFileSize    LONG    0
-status              LONG    0
-handle              LONG    0
-longValue           LONG    0
-byteOffset          LONG    0
-fileSizeBlocks      LONG    0
-endPosition         LONG    0
-
-PUB go() | nbrLongs, workerCog
+PUB go() | nbrLongs, workerCog, status, handle
 '' Run Flash seek operation regression tests.
 ''
 ' @local nbrLongs - Number of longs in file
@@ -65,11 +56,11 @@ PUB go() | nbrLongs, workerCog
 
     status := dfs.format(dfs.DEV_FLASH)
     if status <> dfs.SUCCESS
-        utils.showError(@"format()", status)
+        utils.showErrorCode(@"format()", status)
     else
         status := dfs.mount(dfs.DEV_FLASH)
         if status <> dfs.SUCCESS
-            utils.showError(@"mount()", status)
+            utils.showErrorCode(@"mount()", status)
         else
             utils.ShowStats()                   ' should have empty filesystem
             utils.showFiles()
@@ -125,7 +116,7 @@ PUB go() | nbrLongs, workerCog
     debug("END_SESSION")
 
 
-pri writeAddressedLongs(pFilename, count, startingFileCount, startingBlockCount) | dumpSize
+pri writeAddressedLongs(pFilename, count, startingFileCount, startingBlockCount) | dumpSize, handle, status, endPosition, longValue, expectedFileSize, fileSizeBlocks
     ' ----------------------------------
     ' TEST
     '  open file for read
@@ -184,7 +175,7 @@ pri writeAddressedLongs(pFilename, count, startingFileCount, startingBlockCount)
 
 
 
-pri verifyAddressedLongs(pFilename, count) | relativeOfs
+pri verifyAddressedLongs(pFilename, count) | relativeOfs, handle, status, endPosition, longValue, byteOffset
     '  open file for read
     utils.startTest(@"Open File for read")
     utils.setCheckCountPerTest(2)
@@ -252,7 +243,7 @@ pri verifyAddressedLongs(pFilename, count) | relativeOfs
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-pri verifyRelativeSeekLongs(pFilename, longsInFile) | priorByteOfs, newByteOfs, relativeOfs
+pri verifyRelativeSeekLongs(pFilename, longsInFile) | priorByteOfs, newByteOfs, relativeOfs, handle, status, endPosition, longValue
 
     utils.startTest(@"Open File for read")
     utils.setCheckCountPerTest(2)
@@ -331,7 +322,7 @@ pri verifyRelativeSeekLongs(pFilename, longsInFile) | priorByteOfs, newByteOfs, 
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-pri verifyMaxSeek(pFilename) | lenBytes, hLenBytes
+pri verifyMaxSeek(pFilename) | lenBytes, hLenBytes, handle, status, endPosition
 
     utils.startTest(@"Open File for read")
     utils.setCheckCountPerTest(2)

@@ -103,7 +103,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 

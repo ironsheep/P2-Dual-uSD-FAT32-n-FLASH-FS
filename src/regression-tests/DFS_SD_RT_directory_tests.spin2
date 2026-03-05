@@ -44,7 +44,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -362,15 +362,13 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         ' ----------------------------------
         utils.startTestGroup(@"Many File Stress Test")
 
-        ' Create stress test directory
+        ' Create stress test directory and 20 files
+        utils.startTest(@"Create 20 files in stress directory")
         dfs.changeDirectory(dfs.DEV_SD, @"/")
         dfs.deleteFile(dfs.DEV_SD, @stressDir)
         status := dfs.newDirectory(dfs.DEV_SD, @stressDir)
         utils.evaluateSubValue(status, @"create stress dir", dfs.SUCCESS)
         dfs.changeDirectory(dfs.DEV_SD, @stressDir)
-
-        ' Create 20 files: STR00.TXT through STR19.TXT
-        utils.startTest(@"Create 20 files in stress directory")
         created := 0
         repeat idx from 0 to STRESS_COUNT - 1
             makeStressName(idx)
@@ -379,7 +377,7 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
                 dfs.writeHandle(handle, @stressContent, strsize(@stressContent))
                 dfs.closeFileHandle(handle)
                 created++
-        utils.evaluateSingleValue(created, @"files created", STRESS_COUNT)
+        utils.evaluateSubValue(created, @"files created", STRESS_COUNT)
 
         ' Enumerate and count files
         utils.startTest(@"Enumerate finds all 20 files")

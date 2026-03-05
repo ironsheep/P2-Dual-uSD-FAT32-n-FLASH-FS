@@ -58,7 +58,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -87,7 +87,7 @@ hp_fl_file4     BYTE    "HPFL4", 0
 readBuffer      BYTE    0[512]
 readBuf_guard   BYTE    0[16]
 
-PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo, h1, h2, h3, h4, h5, h6, h7
+PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo, h1, h2, h3, h4, h5, h6, h7, errorCount
 '' Main entry point for dual-device verification tests
 ''
 '' Tests dual_sd_fat32_flash_fs.spin2 Flash mount, serial number, bus switching,
@@ -259,25 +259,37 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     ' ----------------------------------
     utils.startTestGroup(@"SD integrity after Flash file ops")
 
-    ' Untracked setup: write an SD file, then do heavy Flash I/O
+    ' Setup: write an SD file, then do heavy Flash I/O
     dfs.deleteFile(dfs.DEV_SD, @sd_regfile)
     handle := dfs.createFileNew(dfs.DEV_SD, @sd_regfile)
-    if handle >= 0
-      dfs.writeHandle(handle, @sd_regdata, strsize(@sd_regdata))
+    if handle < 0
+      debug("SETUP ERROR: createFileNew(SD) failed: ", sdec_(handle))
+      errorCount++
+    else
+      bytesWritten := dfs.writeHandle(handle, @sd_regdata, strsize(@sd_regdata))
+      if bytesWritten <> strsize(@sd_regdata)
+        debug("SETUP ERROR: writeHandle(SD) wrote ", sdec_(bytesWritten), " expected ", udec_(strsize(@sd_regdata)))
+        errorCount++
       dfs.closeFileHandle(handle)
 
-    ' Untracked: create Flash file, write data, seek, delete, rename
+    ' Setup: create Flash file, write data, seek, delete, rename
     dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile)
     dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile2)
     dfs.deleteFile(dfs.DEV_FLASH, @fl_renamed)
 
     handle := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_WRITE)
-    if handle >= 0
+    if handle < 0
+      debug("SETUP ERROR: open(Flash, WRITE) failed: ", sdec_(handle))
+      errorCount++
+    else
       dfs.writeHandle(handle, @fl_testdata, strsize(@fl_testdata))
       dfs.closeFileHandle(handle)
 
     handle := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_READ)
-    if handle >= 0
+    if handle < 0
+      debug("SETUP ERROR: open(Flash, READ) failed: ", sdec_(handle))
+      errorCount++
+    else
       dfs.seekHandle(handle, 6)
       bytefill(@readBuffer, 0, FL_READ_BUF_SIZE)
       dfs.readHandle(handle, @readBuffer, FL_READ_COUNT)
@@ -286,7 +298,13 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile)
 
     status := dfs.create_file(dfs.DEV_FLASH, @fl_testfile2, $00, FL_TEST_FILE_SIZE)
-    dfs.rename(dfs.DEV_FLASH, @fl_testfile2, @fl_renamed)
+    if status < 0
+      debug("SETUP ERROR: create_file(Flash) failed: ", sdec_(status))
+      errorCount++
+    status := dfs.rename(dfs.DEV_FLASH, @fl_testfile2, @fl_renamed)
+    if status < 0
+      debug("SETUP ERROR: rename(Flash) failed: ", sdec_(status))
+      errorCount++
     dfs.deleteFile(dfs.DEV_FLASH, @fl_renamed)
 
     ' Tracked: Verify SD file is still intact after all that Flash activity

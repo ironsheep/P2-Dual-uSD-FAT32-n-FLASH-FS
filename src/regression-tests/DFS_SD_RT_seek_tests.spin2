@@ -42,7 +42,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -225,14 +225,14 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
         utils.setCheckCountPerTest(2)
 
         ' Test several random positions
-        testSeekPosition(1500)
-        testSeekPosition(200)
-        testSeekPosition(1999)
-        testSeekPosition(0)
-        testSeekPosition(750)
-        testSeekPosition(2000)
-        testSeekPosition(512)
-        testSeekPosition(1024)
+        testSeekPosition(handle, 1500)
+        testSeekPosition(handle, 200)
+        testSeekPosition(handle, 1999)
+        testSeekPosition(handle, 0)
+        testSeekPosition(handle, 750)
+        testSeekPosition(handle, 2000)
+        testSeekPosition(handle, 512)
+        testSeekPosition(handle, 1024)
 
         dfs.closeFileHandle(handle)
 
@@ -407,7 +407,7 @@ PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte
     debug("END_SESSION")
 
 
-PRI testSeekPosition(position) | result, bytesRead, expectedByte, handle
+PRI testSeekPosition(handle, position) | result, bytesRead, expectedByte
 ' Helper to test seek to a position and verify content
 '
 ' @param position - file position to seek to and verify

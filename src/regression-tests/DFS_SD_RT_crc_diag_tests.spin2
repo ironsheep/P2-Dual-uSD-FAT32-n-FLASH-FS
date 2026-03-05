@@ -59,7 +59,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -242,9 +242,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, matchCount, misma
         utils.startTest(@"getLastCMD13() returns valid value")
         cmd13val := dfs.getLastCMD13()
         debug("   Last CMD13: $", uhex_(cmd13val))
-        ' CMD13 R2 response: $0000 means no error, $FFFF means timeout
-        ' Any value is valid - just check it's accessible
-        utils.recordPass()
+        ' CMD13 R2 response: $0000 means no error on healthy card
+        utils.evaluateSingleValue(cmd13val, @"getLastCMD13()", 0)
 
         ' Test: getLastCMD13Error() == 0 on healthy card
         utils.startTest(@"getLastCMD13Error() == 0 on healthy card")

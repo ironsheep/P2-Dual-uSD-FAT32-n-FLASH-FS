@@ -1,24 +1,18 @@
 '' =================================================================================================
 ''
-''   File....... DFS_FL_RT_utilities.spin2
-''   Purpose.... Regression test utilities for Flash tests against dual_sd_fat32_flash_fs unified driver
+''   File....... DFS_RT_utilities.spin2
+''   Purpose.... Unified regression test utilities for SD and Flash tests
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... FEB 2026
-''   Updated.... 27 FEB 2026
+''   Updated.... 04 MAR 2026
 ''
 '' =================================================================================================
 ''
-'' Based on isp_rt_utilities.spin2 (SD framework) extended with Flash-specific evaluation methods
-'' adapted from RT_utilities.spin2 (Flash reference test utility).
-''
-'' Key differences from RT_utilities.spin2:
-''   - Uses dfs : "dual_sd_fat32_flash_fs" instead of flash : "flash_fs"
-''   - Per-cog VAR arrays (indexed by cogid()) for multi-cog test safety
-''   - All flash.* calls replaced with dfs.* equivalents
-''   - Error codes use unified dfs.E_* namespace
-''   - Includes buffer pattern/guard utilities from isp_rt_utilities
+'' Consolidated from isp_rt_utilities.spin2 (SD) and DFS_FL_RT_utilities.spin2 (Flash).
+'' Per-cog VAR arrays (indexed by cogid()) for multi-cog test safety.
+'' Uses dfs : "dual_sd_fat32_flash_fs" for error-string lookup and Flash-specific evaluation.
 ''
 '' =================================================================================================
 
@@ -313,6 +307,19 @@ PUB evaluateStringMatch(pResult, pMessage, pExpected) | bPassed, pPassFail
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
+PUB evaluateSubStringMatch(pResult, pMessage, pExpected) | bPassed
+'' Evaluate that two strings match as a sub-test
+
+    bPassed := strcomp(pResult, pExpected)
+    ifnot bPassed
+        debug("  Sub-Test: ", zstr_(pMessage), ": [", zstr_(pResult), "] (expected [", zstr_(pExpected), "])")
+        debug("   -> Sub-FAIL")
+        failCountSub[cogid()]++
+    else
+        debug("  ", zstr_(pMessage), ": [", zstr_(pResult), "]")
+        debug("   -> pass")
+        passCountSub[cogid()]++
+
 PUB evaluateBufferMatch(pBuffer1, pBuffer2, length, pMessage) | bPassed, pPassFail, idx, mismatchIdx
 '' Evaluate that two buffers match
 
@@ -401,6 +408,22 @@ PUB evaluateHandle(resultHandle, pMessage) | bPassed, pPassFail
         debug("  ", zstr_(pMessage), ": ", sdec_long_(resultHandle))
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
+
+PUB evaluateSubHandle(resultHandle, pMessage) | bPassed
+'' Evaluate that a handle is valid (>= 0) as a sub-test
+''
+'' @param resultHandle - handle returned from open/create
+'' @param pMessage - pointer to description string
+
+    bPassed := resultHandle >= 0
+    ifnot bPassed
+        debug("  Sub-Test: ", zstr_(pMessage), ": ", sdec_long_(resultHandle), " (expected >= 0)")
+        debug("   -> Sub-FAIL")
+        failCountSub[cogid()]++
+    else
+        debug("  ", zstr_(pMessage), ": ", sdec_long_(resultHandle))
+        debug("   -> pass")
+        passCountSub[cogid()]++
 
 PUB evaluateFSStats(pMessage, expectedFileCount, expectedBlocksUsed) | blocksUsed, blocksFree, fileCount, bPassed, pPassFail
 '' Report on expected vs. actual filesystem stats
@@ -498,8 +521,19 @@ PUB showChipAndDriverVersion() | sn_hi, sn_lo
     debug("  Flash Serial: $", uhex_long_(sn_hi), "_$", uhex_long_(sn_lo))
     debug("  Driver Version: ", udec_(dfs.version(dfs.DEV_FLASH)))
 
-PUB showError(pCaller, errorCode)
-'' Display an error with human-readable name
+PUB showError(pCaller, bResult)
+'' Display an error message based on boolean result (SD-style)
+''
+'' @param pCaller - pointer to caller name string
+'' @param bResult - boolean result (false shows error)
+
+    if bResult == false
+        debug("ERROR: ", zstr_(pCaller), " failed!")
+    else
+        debug("OK: ", zstr_(pCaller), " succeeded")
+
+PUB showErrorCode(pCaller, errorCode)
+'' Display an error with human-readable name (Flash-style)
 ''
 '' @param pCaller - pointer to caller name string
 '' @param errorCode - error code to display
@@ -722,7 +756,7 @@ PUB ReadFile(pFilename, pStr, maxlen) | handle, byteCount
         if handle >= 0
             byteCount := dfs.rd_str(handle, pStr, maxlen)
             if byteCount < 0
-                showError(@"rd_str()", byteCount)
+                showErrorCode(@"rd_str()", byteCount)
             dfs.close(handle)
     else
         bytefill(pStr, $ff, maxlen)
@@ -840,6 +874,7 @@ PUB checkGuard(pGuardStart, pMessage) : bIntact | idx
             quit
     ifnot bIntact
         debug("   -> GUARD FAIL")
+        failCount[cogid()]++
 
 PUB initAndCheckGuard(pGuardStart, pMessage) : bIntact
 '' Combined check + re-init for use inside loops

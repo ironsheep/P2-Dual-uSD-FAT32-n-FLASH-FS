@@ -30,7 +30,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     RECORD_LEN = 1024  ' just for fun, tiny but even number of longs
@@ -82,23 +82,7 @@ secRecordData      LONG    0[SEC_RECORD_DATA_LEN/4]
 secRecordCRC       LONG    0
 secRecordEnd
 
-status          LONG    0
-bValue          LONG    0
-handle          LONG    0
-testValue       LONG    0
-recordNbr       LONG    0
-rdLength        LONG    0
-pBlock          LONG    0
-calcCRC         LONG    0
-sizeUnused      LONG    0
-endPosition     LONG    0
-writeLength     LONG    0
-
-expectedFileSize    LONG    0
-expectedFileBlocks  LONG    0
-allocatedFileSize   LONG    0
-
-PUB go() | workerCog
+PUB go() | workerCog, status, bValue
 '' Run Flash circular file regression tests.
 ''
 ' @local workerCog - Driver worker cog ID
@@ -278,7 +262,7 @@ PUB go() | workerCog
     debug("* Test Complete")
     debug("END_SESSION")
 
-PRI testAppendRecords(pFilename, recordCount, initialFileCount, initialBlocks) | lenBytes, startingRcdCt, maxAllocatedBytes, minWrittenBytes, filesAdded, blocksAdded, startingBlocks, pEffortMsg
+PRI testAppendRecords(pFilename, recordCount, initialFileCount, initialBlocks) | lenBytes, startingRcdCt, maxAllocatedBytes, minWrittenBytes, filesAdded, blocksAdded, startingBlocks, pEffortMsg, status, handle, testValue, recordNbr, writeLength, expectedFileSize, expectedFileBlocks
 
     startingRcdCt := 1
     lenBytes := 0
@@ -356,7 +340,7 @@ PRI testAppendRecords(pFilename, recordCount, initialFileCount, initialBlocks) |
     utils.evaluateFileStatsRange(pFilename, expectedFileBlocks, minWrittenBytes, expectedFileSize)
 
 
-PRI testAppendSecRecords(pFilename, recordCount, initialFileCount, initialBlocks) | lenBytes, startingRcdCt, maxAllocatedBytes, minWrittenBytes, filesAdded, blocksAdded, startingBlocks, pEffortMsg, totalBytes, bytesInLastBlock
+PRI testAppendSecRecords(pFilename, recordCount, initialFileCount, initialBlocks) | lenBytes, startingRcdCt, maxAllocatedBytes, minWrittenBytes, filesAdded, blocksAdded, startingBlocks, pEffortMsg, totalBytes, bytesInLastBlock, status, handle, testValue, recordNbr, writeLength, expectedFileSize, expectedFileBlocks
 
     startingRcdCt := 1
     lenBytes := 0
@@ -479,7 +463,7 @@ PRI setMsgRcdNbr(rcdNumber) | units, tens
     BYTE[@crcNbr][0] := tens
     BYTE[@crcNbr][1] := units
 
-PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular
+PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC
 
     '  get total file size
     utils.startTest(@"Determine size of file in records")
@@ -546,7 +530,7 @@ PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, s
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI testVerifySecRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular
+PRI testVerifySecRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC
 
     '  get total file size
     utils.startTest(@"Determine size of file in records")
@@ -614,7 +598,7 @@ PRI testVerifySecRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular
+PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC, endPosition
 
     '  get total file size
     utils.startTest(@"Determine size of file in records")
@@ -688,7 +672,7 @@ PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenByte
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI verifyRecord(pRcd, rcdSize, expectedId, readLength)
+PRI verifyRecord(pRcd, rcdSize, expectedId, readLength) | calcCRC
     ' ensure length is same as expected
     Debug("   -- Verifying Rcd # ", udec_(expectedId))
     utils.evaluateSubValue(readLength, @"read()", rcdSize)

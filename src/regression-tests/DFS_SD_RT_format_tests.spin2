@@ -135,7 +135,7 @@ CON
 
 OBJ
 
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
     fmt   : "isp_format_utility"
     dfs   : "dual_sd_fat32_flash_fs"
 

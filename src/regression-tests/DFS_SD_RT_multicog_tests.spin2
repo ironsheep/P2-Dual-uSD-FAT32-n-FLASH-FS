@@ -53,7 +53,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -288,9 +288,9 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
 
         utils.startTest(@"error() returns value for calling cog")
         ' This tests that error() uses COGID() correctly
-        result := dfs.error()  ' Should return 0 (SUCCESS) or last error
+        result := dfs.error()  ' Should return 0 (SUCCESS) after clean operations
         debug("  Main cog error(): ", sdec_(result))
-        utils.recordPass()
+        utils.evaluateSingleValue(result, @"error()", dfs.SUCCESS)
 
         ' ----------------------------------
         ' TEST GROUP: Cleanup

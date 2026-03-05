@@ -12,7 +12,7 @@
 ''   with CWD filtering, and CWD-aware file operations (open, exists, delete, rename).
 ''   Flash has no real directories -- CWD is emulated by prepending a prefix to filenames.
 ''
-''   20 tests across 6 groups
+''   30 tests across 8 groups
 ''
 '' =================================================================================================
 
@@ -34,7 +34,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     ' P2 Edge module SD slot pins (needed for dfs.init)
@@ -69,13 +69,21 @@ fullPathDirA    BYTE    "dirA/alpha.dat", 0
 cwdTestData     BYTE    "CWD-TEST-DATA", 0
 cwdRenameTarget BYTE    "renamed.dat", 0
 
-handle          LONG    0
-status          LONG    0
-testValue       LONG    0
-expectedValue   LONG    0
+' Absolute path test strings
+absPathDirATest BYTE    "/dirA/abstest.dat", 0
+absPathDirBFile BYTE    "/dirB/absfile.dat", 0
+absPathRootFile BYTE    "/rootabs.dat", 0
+absPathDirAAlph BYTE    "/dirA/alpha.dat", 0
+absPathDirBGamm BYTE    "/dirB/gamma.dat", 0
+absPathRename   BYTE    "/dirA/absrename.dat", 0
+absTestFile     BYTE    "abstest.dat", 0
+absFile         BYTE    "absfile.dat", 0
+rootAbsFile     BYTE    "rootabs.dat", 0
+absRenameFile   BYTE    "absrename.dat", 0
+absTestData     BYTE    "ABS-PATH-DATA", 0
+absVerifyData   BYTE    "ABS-VERIFY", 0
 
-
-PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_FILENAME_SIZE]
+PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_FILENAME_SIZE], handle, status, testValue
 '' Run Flash current working directory regression tests.
 ''
 ' @local workerCog - Driver worker cog ID
@@ -89,11 +97,11 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
 
     status := dfs.format(dfs.DEV_FLASH)
     if status < 0
-        utils.showError(@"format()", status)
+        utils.showErrorCode(@"format()", status)
     else
         status := dfs.mount(dfs.DEV_FLASH)
         if status < 0
-            utils.showError(@"mount()", status)
+            utils.showErrorCode(@"mount()", status)
         else
             utils.ShowStats()
             utils.showFiles()
@@ -131,9 +139,9 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
 
             utils.startTest(@"cd to root restores root view")
             status := dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-            utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
+            utils.evaluateSubValue(status, @"changeDirectory(/)", dfs.SUCCESS)
             found := dfs.exists(dfs.DEV_FLASH, @rootFile1)
-            utils.evaluateBool(found, @"exists(rootfile.dat) at root", true)
+            utils.evaluateSubBool(found, @"exists(rootfile.dat) at root", true)
 
             ' ==============================================================
             ' GROUP 2: changeDirectory("..") parent navigation (4 tests)
@@ -143,16 +151,16 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             utils.startTest(@"cd dirA then .. returns to root")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
             status := dfs.changeDirectory(dfs.DEV_FLASH, @cwdDotDot)
-            utils.evaluateSingleValue(status, @"changeDirectory(..)", dfs.SUCCESS)
+            utils.evaluateSubValue(status, @"changeDirectory(..)", dfs.SUCCESS)
             found := dfs.exists(dfs.DEV_FLASH, @rootFile1)
-            utils.evaluateBool(found, @"root file visible after ..", true)
+            utils.evaluateSubBool(found, @"root file visible after ..", true)
 
             utils.startTest(@".. from root is no-op")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
             status := dfs.changeDirectory(dfs.DEV_FLASH, @cwdDotDot)
-            utils.evaluateSingleValue(status, @"changeDirectory(..) at root", dfs.SUCCESS)
+            utils.evaluateSubValue(status, @"changeDirectory(..) at root", dfs.SUCCESS)
             found := dfs.exists(dfs.DEV_FLASH, @rootFile1)
-            utils.evaluateBool(found, @"root file still visible", true)
+            utils.evaluateSubBool(found, @"root file still visible", true)
 
             utils.startTest(@"nested cd deep1/deep2 then .. goes to deep1")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
@@ -160,12 +168,12 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirDeep2)
             ' Now at deep1/deep2 -- alpha.dat should be visible
             found := dfs.exists(dfs.DEV_FLASH, @cwdFileAlpha)
-            utils.evaluateBool(found, @"alpha.dat at deep1/deep2", true)
+            utils.evaluateSubBool(found, @"alpha.dat at deep1/deep2", true)
             ' Go up one level to deep1
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDotDot)
             ' deep1/deep2/alpha.dat should NOT be visible (it has a "/" after deep1 prefix)
             found := dfs.exists(dfs.DEV_FLASH, @cwdFileAlpha)
-            utils.evaluateBool(found, @"alpha.dat not at deep1", false)
+            utils.evaluateSubBool(found, @"alpha.dat not at deep1", false)
 
             utils.startTest(@"multiple .. from deep navigates to root")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
@@ -185,9 +193,9 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirDeep1)
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirDeep2)
             status := dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-            utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
+            utils.evaluateSubValue(status, @"changeDirectory(/)", dfs.SUCCESS)
             found := dfs.exists(dfs.DEV_FLASH, @rootFile1)
-            utils.evaluateBool(found, @"root file visible after /", true)
+            utils.evaluateSubBool(found, @"root file visible after /", true)
 
             utils.startTest(@"directory() at root shows only root files")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
@@ -248,10 +256,10 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
             handle := dfs.open(dfs.DEV_FLASH, @cwdFileAlpha, dfs.FILEMODE_READ)
-            utils.evaluateHandle(handle, @"open(alpha.dat) in dirA")
+            utils.evaluateSubHandle(handle, @"open(alpha.dat) in dirA")
             if handle >= 0
                 lenBytes := dfs.rd_str(handle, @filename, dfs.FL_FILENAME_SIZE)
-                utils.evaluateStringMatch(@filename, @"rd_str()", @cwdTestData)
+                utils.evaluateSubStringMatch(@filename, @"rd_str()", @cwdTestData)
                 dfs.close(handle)
 
             ' Test: delete via CWD
@@ -259,28 +267,28 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
             status := dfs.deleteFile(dfs.DEV_FLASH, @cwdFileBeta)
-            utils.evaluateSingleValue(status, @"deleteFile(beta.dat) in dirA", dfs.SUCCESS)
+            utils.evaluateSubValue(status, @"deleteFile(beta.dat) in dirA", dfs.SUCCESS)
             ' Verify beta gone from dirA
             found := dfs.exists(dfs.DEV_FLASH, @cwdFileBeta)
-            utils.evaluateBool(found, @"beta.dat gone from dirA", false)
+            utils.evaluateSubBool(found, @"beta.dat gone from dirA", false)
             ' Verify dirB file still exists
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
             found := dfs.exists(dfs.DEV_FLASH, @cwdFileGamma)
-            utils.evaluateBool(found, @"gamma.dat still in dirB", true)
+            utils.evaluateSubBool(found, @"gamma.dat still in dirB", true)
 
             ' Test: rename via CWD
             utils.startTest(@"rename file respects CWD prefix")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
             status := dfs.rename(dfs.DEV_FLASH, @cwdFileAlpha, @cwdRenameTarget)
-            utils.evaluateSingleValue(status, @"rename(alpha->renamed) in dirA", dfs.SUCCESS)
+            utils.evaluateSubValue(status, @"rename(alpha->renamed) in dirA", dfs.SUCCESS)
             ' Verify renamed file exists in dirA
             found := dfs.exists(dfs.DEV_FLASH, @cwdRenameTarget)
-            utils.evaluateBool(found, @"renamed.dat exists in dirA", true)
+            utils.evaluateSubBool(found, @"renamed.dat exists in dirA", true)
             ' Verify old name gone
             found := dfs.exists(dfs.DEV_FLASH, @cwdFileAlpha)
-            utils.evaluateBool(found, @"alpha.dat gone from dirA", false)
+            utils.evaluateSubBool(found, @"alpha.dat gone from dirA", false)
 
             ' Test: exists on non-existent file in valid CWD
             utils.startTest(@"exists returns false for missing file in valid CWD")
@@ -288,6 +296,117 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
             found := dfs.exists(dfs.DEV_FLASH, @rootFile1)
             utils.evaluateBool(found, @"rootfile.dat NOT in dirA", false)
+
+            ' ==============================================================
+            ' GROUP 7: Absolute path basics (5 tests)
+            ' ==============================================================
+            utils.startTestGroup(@"Absolute path basics")
+
+            ' Re-setup: recreate dirA/alpha.dat (was renamed in group 6)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            handle := dfs.open(dfs.DEV_FLASH, @cwdFileAlpha, dfs.FILEMODE_WRITE)
+            if handle >= 0
+                dfs.wr_str(handle, @cwdTestData)
+                dfs.close(handle)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+            utils.startTest(@"exists() via absolute path from root CWD")
+            found := dfs.exists(dfs.DEV_FLASH, @absPathDirAAlph)
+            utils.evaluateBool(found, @"exists(/dirA/alpha.dat) from root", true)
+
+            utils.startTest(@"exists() via absolute path ignores CWD")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            found := dfs.exists(dfs.DEV_FLASH, @absPathDirAAlph)
+            utils.evaluateBool(found, @"exists(/dirA/alpha.dat) from dirB", true)
+
+            utils.startTest(@"file_size() via absolute path from any CWD")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            fileSize := dfs.file_size(dfs.DEV_FLASH, @absPathDirAAlph)
+            status := dfs.error()
+            utils.evaluateSubValue(fileSize, @"file_size(/dirA/alpha.dat)", strsize(@cwdTestData) + 1)
+            utils.evaluateSubStatus(status, @"file_size() status", dfs.SUCCESS)
+
+            utils.startTest(@"create file via absolute path while CWD is different")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            handle := dfs.open(dfs.DEV_FLASH, @absPathDirBFile, dfs.FILEMODE_WRITE)
+            utils.evaluateSubHandle(handle, @"open(/dirB/absfile.dat) from dirA")
+            if handle >= 0
+                dfs.wr_str(handle, @absTestData)
+                dfs.close(handle)
+            ' Verify it's in dirB
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            found := dfs.exists(dfs.DEV_FLASH, @absFile)
+            utils.evaluateSubBool(found, @"absfile.dat visible in dirB", true)
+
+            utils.startTest(@"deleteFile() via absolute path from any CWD")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            status := dfs.deleteFile(dfs.DEV_FLASH, @absPathDirBFile)
+            utils.evaluateSubValue(status, @"deleteFile(/dirB/absfile.dat)", dfs.SUCCESS)
+            ' Verify it's gone
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            found := dfs.exists(dfs.DEV_FLASH, @absFile)
+            utils.evaluateSubBool(found, @"absfile.dat gone from dirB", false)
+
+            ' ==============================================================
+            ' GROUP 8: Absolute path edge cases (5 tests)
+            ' ==============================================================
+            utils.startTestGroup(@"Absolute path edge cases")
+
+            utils.startTest(@"Root absolute path /rootabs.dat")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            handle := dfs.open(dfs.DEV_FLASH, @absPathRootFile, dfs.FILEMODE_WRITE)
+            utils.evaluateSubHandle(handle, @"open(/rootabs.dat)")
+            if handle >= 0
+                dfs.wr_str(handle, @absTestData)
+                dfs.close(handle)
+            ' Verify visible at root
+            found := dfs.exists(dfs.DEV_FLASH, @rootAbsFile)
+            utils.evaluateSubBool(found, @"rootabs.dat visible at root", true)
+
+            utils.startTest(@"Absolute path ignores CWD - no double prefix")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            ' Opening /dirB/gamma.dat from dirA should NOT look for dirA/dirB/gamma.dat
+            found := dfs.exists(dfs.DEV_FLASH, @absPathDirBGamm)
+            utils.evaluateBool(found, @"exists(/dirB/gamma.dat) from dirA", true)
+
+            utils.startTest(@"Absolute vs relative isolation")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            ' Create abstest.dat in dirA via absolute path
+            handle := dfs.open(dfs.DEV_FLASH, @absPathDirATest, dfs.FILEMODE_WRITE)
+            if handle >= 0
+                dfs.wr_str(handle, @absTestData)
+                dfs.close(handle)
+            ' Verify via CWD (relative) -- cd to dirA, check abstest.dat
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            found := dfs.exists(dfs.DEV_FLASH, @absTestFile)
+            utils.evaluateSubBool(found, @"abstest.dat visible via relative in dirA", true)
+            ' Verify NOT visible in dirB
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            found := dfs.exists(dfs.DEV_FLASH, @absTestFile)
+            utils.evaluateSubBool(found, @"abstest.dat NOT visible in dirB", false)
+
+            utils.startTest(@"Rename via absolute paths from non-root CWD")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            status := dfs.rename(dfs.DEV_FLASH, @absPathDirATest, @absPathRename)
+            utils.evaluateSubValue(status, @"rename(/dirA/abstest->/dirA/absrename)", dfs.SUCCESS)
+            ' Verify new name exists
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            found := dfs.exists(dfs.DEV_FLASH, @absRenameFile)
+            utils.evaluateSubBool(found, @"absrename.dat visible in dirA", true)
+
+            utils.startTest(@"Round-trip: write via absolute, read via absolute")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            handle := dfs.open(dfs.DEV_FLASH, @absPathRename, dfs.FILEMODE_READ)
+            utils.evaluateSubHandle(handle, @"open(/dirA/absrename.dat) from dirB")
+            if handle >= 0
+                lenBytes := dfs.rd_str(handle, @filename, dfs.FL_FILENAME_SIZE)
+                utils.evaluateSubStringMatch(@filename, @"rd_str() content", @absTestData)
+                dfs.close(handle)
 
             ' --------------------------------------------------------------
             ' Cleanup: return to root

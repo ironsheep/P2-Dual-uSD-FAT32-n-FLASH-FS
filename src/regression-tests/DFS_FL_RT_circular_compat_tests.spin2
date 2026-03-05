@@ -32,7 +32,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     RECORD_LEN = 1024  ' just for fun, tiny but even number of longs
@@ -70,23 +70,7 @@ recordData      LONG    0[RECORD_DATA_LEN/4]
 recordCRC       LONG    0
 recordEnd
 
-status          LONG    0
-bValue          LONG    0
-handle          LONG    0
-testValue       LONG    0
-recordNbr       LONG    0
-rdLength        LONG    0
-pBlock          LONG    0
-calcCRC         LONG    0
-sizeUnused      LONG    0
-endPosition     LONG    0
-writeLength     LONG    0
-
-expectedFileSize    LONG    0
-expectedFileBlocks  LONG    0
-allocatedFileSize   LONG    0
-
-PUB go() | workerCog
+PUB go() | workerCog, status, bValue
 '' Run Flash circular file compatibility regression tests.
 ''
 ' @local workerCog - Driver worker cog ID
@@ -282,7 +266,7 @@ PRI setMsgRcdNbr(rcdNumber) | units, tens
     BYTE[@crcNbr][1] := units
 
 
-PUB testCopyFile(pOldFilename, pNewFilename) | rdHandle, wrHandle, rdStatus, wrStatus, wrLength, totalWritten, totalRead
+PUB testCopyFile(pOldFilename, pNewFilename) | rdHandle, wrHandle, rdStatus, wrStatus, wrLength, totalWritten, totalRead, status, rdLength
 '' copy existing file to new name
 ''
 '' @param pOldFilename - address of zstring with existing file name
@@ -367,7 +351,7 @@ PUB testCopyFile(pOldFilename, pNewFilename) | rdHandle, wrHandle, rdStatus, wrS
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular
+PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC
 
     '  get total file size
     utils.startTest(@"Determine size of file in records")
@@ -435,7 +419,7 @@ PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, s
 
 
 
-PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular
+PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC, endPosition
 
     utils.startTestGroup(@"Exercise seeks in new format circular file")
 
@@ -517,7 +501,7 @@ PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenByte
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI verifyRecord(pRcd, rcdSize, expectedId, readLength) : bStatus
+PRI verifyRecord(pRcd, rcdSize, expectedId, readLength) : bStatus | calcCRC
     ' ensure length is same as expected
     Debug("   -- Verifying Rcd # ", udec_(expectedId))
     bStatus := false

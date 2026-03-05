@@ -29,10 +29,9 @@ The suite uses two separate test frameworks, one for each device type:
 
 | Framework | File | Used By | Key Difference |
 |-----------|------|---------|----------------|
-| SD framework | `isp_rt_utilities.spin2` | SD tests, dual/cross tests | Single-cog VAR counters |
-| Flash framework | `DFS_FL_RT_utilities.spin2` | Flash tests | Per-cog VAR arrays (indexed by `cogid()`) for multi-cog safety |
+| Unified framework | `DFS_RT_utilities.spin2` | All tests (SD, Flash, dual/cross) | Per-cog VAR arrays (indexed by `cogid()`) for multi-cog safety |
 
-Both frameworks provide the same core assertion API:
+The unified framework provides the core assertion API:
 
 | Method | Purpose |
 |--------|---------|
@@ -156,8 +155,7 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 
 | File | Purpose |
 |------|---------|
-| `isp_rt_utilities.spin2` | SD test framework (assertions, patterns, memory dump) |
-| `DFS_FL_RT_utilities.spin2` | Flash test framework (per-cog counters, Flash helpers) |
+| `DFS_RT_utilities.spin2` | Unified test framework (assertions, patterns, memory dump, Flash helpers) |
 
 ---
 
@@ -459,7 +457,7 @@ Tests specifically target these boundary conditions:
 ```spin2
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 PUB go() | status, handle
     dfs.init(utils.SD_CS, utils.SD_MOSI, utils.SD_MISO, utils.SD_SCK)
@@ -482,7 +480,7 @@ PUB go() | status, handle
 
 ```spin2
 OBJ
-    ut : "DFS_FL_RT_utilities"
+    ut : "DFS_RT_utilities"
 
 PUB go() | status
     ut.mountFlash()

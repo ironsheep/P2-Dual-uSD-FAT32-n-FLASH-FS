@@ -80,14 +80,12 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 VAR
     BYTE    write_buf[dfs.SECTOR_SIZE]
     BYTE    read_buf[dfs.SECTOR_SIZE]
     BYTE    read_buf_guard[16]
-    LONG    pass_count
-    LONG    fail_count
 
 PUB go() | workerCog, result, i, sector
 '' Main entry point for raw sector round-trip tests
@@ -95,13 +93,9 @@ PUB go() | workerCog, result, i, sector
 '' Tests readSectorRaw/writeSectorRaw operations with various patterns
 
     debug(" ")
-    debug("============================================================")
-    debug("  SD Raw Sector Round-Trip Test (V2 Driver)")
-    debug("============================================================")
-    debug(" ")
-
-    pass_count := 0
-    fail_count := 0
+    debug("==============================================")
+    debug("  Dual FS (SD) - Raw Sector Tests")
+    debug("==============================================")
 
     ' Initialize worker cog
     workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
@@ -113,181 +107,98 @@ PUB go() | workerCog, result, i, sector
         debug("ERROR: Card init failed!")
     else
         debug("Card initialized successfully")
-        debug(" ")
 
         ' ========================================
         ' PHASE 1: Write all test patterns
         ' ========================================
-        debug("--- PHASE 1: Writing test patterns ---")
-        debug(" ")
+        utils.startTestGroup(@"Write test patterns")
 
         ' Write Pattern A: Sequential bytes
         sector := TEST_SECTOR_A
-        debug("* Test: Write Pattern A (sequential) to sector ", udec_(sector))
+        utils.startTest(@"Write Pattern A (sequential)")
         repeat i from 0 to dfs.SECTOR_SIZE - 1
             write_buf[i] := i & $FF
         addBoundaryMarkers(sector, $A0)
-        if writeAndVerify(sector, $A0)
-            recordPass()
-        else
-            recordFail()
+        utils.evaluateBool(writeAndVerify(sector, $A0), @"writeAndVerify()", true)
 
         ' Write Pattern B: Alternating AA/55
         sector := TEST_SECTOR_B
-        debug("* Test: Write Pattern B (AA/55) to sector ", udec_(sector))
+        utils.startTest(@"Write Pattern B (AA/55)")
         repeat i from 0 to dfs.SECTOR_SIZE - 1
             write_buf[i] := (i & 1) ? $55 : $AA
         addBoundaryMarkers(sector, $B0)
-        if writeAndVerify(sector, $B0)
-            recordPass()
-        else
-            recordFail()
+        utils.evaluateBool(writeAndVerify(sector, $B0), @"writeAndVerify()", true)
 
         ' Write Pattern C: All FF (except markers)
         sector := TEST_SECTOR_C
-        debug("* Test: Write Pattern C (all FF) to sector ", udec_(sector))
+        utils.startTest(@"Write Pattern C (all FF)")
         bytefill(@write_buf, $FF, dfs.SECTOR_SIZE)
         addBoundaryMarkers(sector, $C0)
-        if writeAndVerify(sector, $C0)
-            recordPass()
-        else
-            recordFail()
+        utils.evaluateBool(writeAndVerify(sector, $C0), @"writeAndVerify()", true)
 
         ' Write Pattern D: All 00 (except markers)
         sector := TEST_SECTOR_D
-        debug("* Test: Write Pattern D (all 00) to sector ", udec_(sector))
+        utils.startTest(@"Write Pattern D (all 00)")
         bytefill(@write_buf, $00, dfs.SECTOR_SIZE)
         addBoundaryMarkers(sector, $D0)
-        if writeAndVerify(sector, $D0)
-            recordPass()
-        else
-            recordFail()
+        utils.evaluateBool(writeAndVerify(sector, $D0), @"writeAndVerify()", true)
 
         ' Write Pattern E: Incrementing with sector offset
         sector := TEST_SECTOR_E
-        debug("* Test: Write Pattern E (offset) to sector ", udec_(sector))
+        utils.startTest(@"Write Pattern E (offset)")
         repeat i from 0 to dfs.SECTOR_SIZE - 1
-            write_buf[i] := (i + $E0) & $FF          ' Offset by $E0 to distinguish from pattern A
+            write_buf[i] := (i + $E0) & $FF
         addBoundaryMarkers(sector, $E0)
-        if writeAndVerify(sector, $E0)
-            recordPass()
-        else
-            recordFail()
-
-        debug(" ")
+        utils.evaluateBool(writeAndVerify(sector, $E0), @"writeAndVerify()", true)
 
         ' ========================================
         ' PHASE 2: Read back in REVERSE order
         ' ========================================
-        debug("--- PHASE 2: Verify by reading in REVERSE order ---")
-        debug("(Tests that correct sectors were written, not just cached)")
-        debug(" ")
+        utils.startTestGroup(@"Verify by reading in REVERSE order")
 
-        ' Read Pattern E first (was written last)
-        sector := TEST_SECTOR_E
-        debug("* Test: Read sector ", udec_(sector), " (expect pattern E=$E0)")
-        if verifyPattern(sector, $E0)
-            recordPass()
-        else
-            recordFail()
+        utils.startTest(@"Read sector E (last written)")
+        utils.evaluateBool(verifyPattern(TEST_SECTOR_E, $E0), @"verifyPattern(E)", true)
 
-        ' Read Pattern D
-        sector := TEST_SECTOR_D
-        debug("* Test: Read sector ", udec_(sector), " (expect pattern D=$D0)")
-        if verifyPattern(sector, $D0)
-            recordPass()
-        else
-            recordFail()
+        utils.startTest(@"Read sector D")
+        utils.evaluateBool(verifyPattern(TEST_SECTOR_D, $D0), @"verifyPattern(D)", true)
 
-        ' Read Pattern C
-        sector := TEST_SECTOR_C
-        debug("* Test: Read sector ", udec_(sector), " (expect pattern C=$C0)")
-        if verifyPattern(sector, $C0)
-            recordPass()
-        else
-            recordFail()
+        utils.startTest(@"Read sector C")
+        utils.evaluateBool(verifyPattern(TEST_SECTOR_C, $C0), @"verifyPattern(C)", true)
 
-        ' Read Pattern B
-        sector := TEST_SECTOR_B
-        debug("* Test: Read sector ", udec_(sector), " (expect pattern B=$B0)")
-        if verifyPattern(sector, $B0)
-            recordPass()
-        else
-            recordFail()
+        utils.startTest(@"Read sector B")
+        utils.evaluateBool(verifyPattern(TEST_SECTOR_B, $B0), @"verifyPattern(B)", true)
 
-        ' Read Pattern A last (was written first)
-        sector := TEST_SECTOR_A
-        debug("* Test: Read sector ", udec_(sector), " (expect pattern A=$A0)")
-        if verifyPattern(sector, $A0)
-            recordPass()
-        else
-            recordFail()
-
-        debug(" ")
+        utils.startTest(@"Read sector A (first written)")
+        utils.evaluateBool(verifyPattern(TEST_SECTOR_A, $A0), @"verifyPattern(A)", true)
 
         ' ========================================
         ' PHASE 3: Full data verification
         ' ========================================
-        debug("--- PHASE 3: Full 512-byte data verification ---")
-        debug(" ")
+        utils.startTestGroup(@"Full 512-byte data verification")
 
-        ' Verify all 512 bytes of Pattern A (sequential)
-        debug("* Test: Full verify Pattern A (512 sequential bytes)")
-        if verifyFullPattern(TEST_SECTOR_A, $A0, 0)
-            recordPass()
-        else
-            recordFail()
+        utils.startTest(@"Full verify Pattern A (512 sequential bytes)")
+        utils.evaluateBool(verifyFullPattern(TEST_SECTOR_A, $A0, 0), @"verifyFullPattern(A)", true)
 
-        ' Verify all 512 bytes of Pattern B (AA/55)
-        debug("* Test: Full verify Pattern B (alternating AA/55)")
-        if verifyFullPatternAlt(TEST_SECTOR_B, $B0)
-            recordPass()
-        else
-            recordFail()
-
-        debug(" ")
+        utils.startTest(@"Full verify Pattern B (alternating AA/55)")
+        utils.evaluateBool(verifyFullPatternAlt(TEST_SECTOR_B, $B0), @"verifyFullPattern(B)", true)
 
         ' ========================================
         ' PHASE 4: Sector Address Boundary Tests
         ' ========================================
-        debug("--- PHASE 4: Sector Address Boundary Tests ---")
-        debug(" ")
+        utils.startTestGroup(@"Sector Address Boundary Tests")
 
-        ' Test: Sector 0 (MBR) - verify MBR signature
-        debug("* Test: Read sector 0 (MBR) and verify signature $55 $AA")
+        utils.startTest(@"Read sector 0 (MBR) and verify signature")
         utils.initGuard(@read_buf_guard)
         dfs.readSectorRaw(0, @read_buf)
         utils.checkGuard(@read_buf_guard, @"read_buf guard")
-        if read_buf[510] == $55 and read_buf[511] == $AA
-            debug("  MBR signature verified: $55 $AA at bytes 510-511")
-            debug("  -> pass")
-            recordPass()
-        else
-            debug("  ERROR: Expected $55 $AA, got $", uhex_byte_(read_buf[510]), " $", uhex_byte_(read_buf[511]))
-            debug("  -> FAIL")
-            recordFail()
+        utils.evaluateBool(read_buf[510] == $55 and read_buf[511] == $AA, @"MBR signature $55 $AA", true)
 
-        ' Test: High sector number (1,000,000) - verify large LBA addressing
-        debug("* Test: Read high sector number 1,000,000 (large LBA)")
+        utils.startTest(@"Read high sector number 1,000,000 (large LBA)")
         utils.initGuard(@read_buf_guard)
         result := dfs.readSectorRaw(HIGH_SECTOR_NUM, @read_buf)
         utils.checkGuard(@read_buf_guard, @"read_buf guard")
-        ' This tests that the driver can address high sector numbers
-        ' The read may or may not succeed depending on card size, but it shouldn't crash
-        if result == dfs.SUCCESS or result == dfs.E_TIMEOUT
-            debug("  High sector read completed (result=", sdec_(result), ")")
-            debug("  First bytes: $", uhex_byte_(read_buf[0]), " $", uhex_byte_(read_buf[1]), " $", uhex_byte_(read_buf[2]), " $", uhex_byte_(read_buf[3]))
-            debug("  -> pass (driver handled large LBA)")
-            recordPass()
-        else
-            debug("  High sector read returned: ", sdec_(result))
-            debug("  -> pass (driver returned error for out-of-range sector)")
-            recordPass()
-
-    debug(" ")
-    debug("============================================================")
-    debug("  Raw Sector Tests - Pass: ", udec_(pass_count), ", Fail: ", udec_(fail_count))
-    debug("============================================================")
+        debug("  High sector read result: ", sdec_(result))
+        utils.evaluateBool(result == dfs.SUCCESS or result == dfs.E_TIMEOUT, @"large LBA read", true)
 
 #IFDEF SD_INCLUDE_STACK_CHECK
     debug(" ")
@@ -295,7 +206,11 @@ PUB go() | workerCog, result, i, sector
 #ENDIF
 
     dfs.stop()
+
+    utils.ShowTestEndCounts()
+
     debug(" ")
+    debug("* Raw Sector Tests Complete")
     debug("END_SESSION")
 
 PRI addBoundaryMarkers(sector, patternId) | secLow
@@ -348,10 +263,6 @@ PRI writeAndVerify(sector, expectedPattern) : success
 
         ' Quick verify of markers
         success := verifyMarkers(sector, expectedPattern)
-        if success
-            debug("  -> pass (write + immediate readback)")
-        else
-            debug("  -> FAIL (readback mismatch)")
 
 PRI verifyPattern(sector, expectedPattern) : success
 ' Read sector and verify boundary markers match expected pattern
@@ -364,10 +275,6 @@ PRI verifyPattern(sector, expectedPattern) : success
     dfs.readSectorRaw(sector, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     success := verifyMarkers(sector, expectedPattern)
-    if success
-        debug("  -> pass")
-    else
-        debug("  -> FAIL")
 
 PRI verifyMarkers(sector, expectedPattern) : success | secLow
 ' Verify head and tail markers in read_buf
@@ -426,9 +333,6 @@ PRI verifyFullPattern(sector, patternId, baseOffset) : success | i, expected, ac
             success := false
             quit  ' Report first error only
 
-    if success
-        debug("  -> pass (", udec_(TAIL_MARKER_START - HEAD_MARKER_END), " data bytes verified)")
-
 PRI verifyFullPatternAlt(sector, patternId) : success | i, expected, actual
 ' Verify all bytes of alternating AA/55 pattern sector
 '
@@ -448,19 +352,6 @@ PRI verifyFullPatternAlt(sector, patternId) : success | i, expected, actual
             debug("  ERROR at byte ", udec_(i), ": expected $", uhex_byte_(expected), ", got $", uhex_byte_(actual))
             success := false
             quit  ' Report first error only
-
-    if success
-        debug("  -> pass (", udec_(TAIL_MARKER_START - HEAD_MARKER_END), " data bytes verified)")
-
-PRI recordPass()
-' Record a passing test
-
-    pass_count++
-
-PRI recordFail()
-' Record a failing test
-
-    fail_count++
 
 CON { license }
 

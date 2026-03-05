@@ -65,7 +65,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -174,7 +174,7 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         utils.startTest(@"checkHighSpeedCapability() returns boolean")
         hsCap := dfs.checkHighSpeedCapability()
         debug("   HS capability: ", sdec_(hsCap))
-        utils.evaluateSubBool(hsCap == true or hsCap == false, @"HS cap is boolean", true)
+        utils.evaluateBool(hsCap == 0 or hsCap == -1, @"HS cap is boolean", true)
 
         ' Test: attemptHighSpeed() consistency with isHighSpeedActive()
         utils.startTest(@"attemptHighSpeed() consistent with isHighSpeedActive()")

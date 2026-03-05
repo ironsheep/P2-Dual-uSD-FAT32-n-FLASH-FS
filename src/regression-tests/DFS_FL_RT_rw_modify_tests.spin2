@@ -30,7 +30,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     RECORD_LEN = 384 ' just for fun, tiny but even number of longs
@@ -56,11 +56,7 @@ recordData       LONG    0[RECORD_DATA_LEN/4]
 recordCRC        LONG    0
 recordEnd
 
-writeLength     LONG    0
-recordsThisTest LONG    0
-
-
-PUB go() | status, handle, testValue, expectedValue, bytePattern, endPosn, recordOffset, expectedFileBlocks, expectedFileSize, workerCog
+PUB go() | status, handle, testValue, expectedValue, bytePattern, endPosn, recordOffset, expectedFileBlocks, expectedFileSize, workerCog, recordsThisTest
 '' Run Flash read/write/modify regression tests.
 ''
 ' @local status - Operation status code
@@ -78,11 +74,11 @@ PUB go() | status, handle, testValue, expectedValue, bytePattern, endPosn, recor
 
     status := dfs.format(dfs.DEV_FLASH)
     if status <> dfs.SUCCESS
-        utils.showError(@"format()", status)
+        utils.showErrorCode(@"format()", status)
     else
         status := dfs.mount(dfs.DEV_FLASH)
         if status <> dfs.SUCCESS
-            utils.showError(@"mount()", status)
+            utils.showErrorCode(@"mount()", status)
         else
             utils.ShowStats()                                   ' should have empty filesystem
             utils.showFiles()
@@ -232,7 +228,7 @@ PRI buildRecord(recordNbr) | testValue
     recordCRC := utils.record_crc(@record, RECORD_LEN)
 
 
-PRI replaceRecord(handle, rcdNumber) | endPosn, recordOffset, status
+PRI replaceRecord(handle, rcdNumber) | endPosn, recordOffset, status, writeLength
     utils.setCheckCountPerTest(4)
     recordOffset := (rcdNumber - 1) * RECORD_LEN
     setMsgRcdNbr(rcdNumber)
@@ -288,7 +284,7 @@ PRI setMsgRcdNbr(rcdNumber) | units, tens
     BYTE[@crcNbr][1] := units
 
 
-PRI testWriteRecords(pFilename, recordCount, initialFiles, initialBlocks) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize
+PRI testWriteRecords(pFilename, recordCount, initialFiles, initialBlocks) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize, writeLength
     ' ----------------------------------
     ' TEST
         '  open file for write

@@ -30,7 +30,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs" | MAX_FLASH_BUFFERS = 6
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     ' P2 Edge module SD slot pins (needed for dfs.init)
@@ -49,24 +49,9 @@ testfile5           BYTE   "handle4Test.bin", 0
 testfile6           BYTE   "handle5Test.bin", 0
 testfileX           BYTE   "noHandlesTest.bin", 0
 
-usedBlocks          LONG    0
-freeBlocks          LONG    0
-fileCount           LONG    0
-handle              LONG    0
-handle1             LONG    0
-badHandle           LONG    0
-status              LONG    0
-desiredId           LONG    0
-fileSize            LONG    0
-rdCount             LONG    0
-rdValue             LONG    0
-snHi                LONG    0
-snLo                LONG    0
-endPosition         LONG    0
-writeLength         LONG    0
 filename            BYTE    0[127+1]
 
-PUB go() | workerCog
+PUB go() | workerCog, usedBlocks, freeBlocks, fileCount, handle, handle1, badHandle, status, desiredId, fileSize, rdCount, rdValue, snHi, snLo, endPosition, writeLength
 '' Run Flash mount and handle basics regression tests.
 ''
 ' @local workerCog - Driver worker cog ID

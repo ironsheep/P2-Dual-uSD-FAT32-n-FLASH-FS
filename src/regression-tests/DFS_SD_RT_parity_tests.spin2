@@ -58,7 +58,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -372,8 +372,8 @@ PUB go() | workerCog, status, handle, size, sn_hi, sn_lo, used, free_ct, file_co
         if handle >= 0
             pos := dfs.seek(handle, 9999, dfs.SK_FILE_START)
             debug("   seek(9999) returned: ", sdec(pos))
-            ' Behavior may vary - just verify it doesn't crash
-            utils.evaluateBool(true, @"seek past end no crash", true)
+            ' Driver returns E_END_OF_FILE (-46) or clamped position
+            utils.evaluateBool(pos >= 0 or pos == dfs.E_END_OF_FILE, @"seek past end handled", true)
             dfs.closeFileHandle(handle)
         else
             utils.evaluateBool(false, @"open failed", true)

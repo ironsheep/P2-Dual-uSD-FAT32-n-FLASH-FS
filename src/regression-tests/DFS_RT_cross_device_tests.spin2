@@ -53,7 +53,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -274,8 +274,12 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
             utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $A5)
             dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
             handle := dfs.createFileNew(dfs.DEV_SD, @sdFileLarge)
-            if handle >= 0
-                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+            if handle < 0
+                debug("SETUP ERROR: createFileNew failed: ", sdec_(handle))
+            else
+                bytesWritten := dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                if bytesWritten <> BUFFER_SIZE
+                    debug("SETUP ERROR: writeHandle wrote ", sdec_(bytesWritten))
                 dfs.closeFileHandle(handle)
 
             ' Copy to Flash
@@ -303,8 +307,12 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
             utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $B7)
             dfs.deleteFile(dfs.DEV_SD, @sdFileLarge)
             handle := dfs.createFileNew(dfs.DEV_SD, @sdFileLarge)
-            if handle >= 0
-                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+            if handle < 0
+                debug("SETUP ERROR: createFileNew failed: ", sdec_(handle))
+            else
+                bytesWritten := dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                if bytesWritten <> BUFFER_SIZE
+                    debug("SETUP ERROR: writeHandle wrote ", sdec_(bytesWritten))
                 dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
                 dfs.closeFileHandle(handle)
 
@@ -358,8 +366,12 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
             utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $C3)
             dfs.deleteFile(dfs.DEV_FLASH, @flFileLarge)
             handle := dfs.open(dfs.DEV_FLASH, @flFileLarge, dfs.FILEMODE_WRITE)
-            if handle >= 0
-                dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+            if handle < 0
+                debug("SETUP ERROR: open(Flash, WRITE) failed: ", sdec_(handle))
+            else
+                bytesWritten := dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+                if bytesWritten <> BUFFER_SIZE
+                    debug("SETUP ERROR: writeHandle wrote ", sdec_(bytesWritten))
                 dfs.closeFileHandle(handle)
 
             ' Copy to SD

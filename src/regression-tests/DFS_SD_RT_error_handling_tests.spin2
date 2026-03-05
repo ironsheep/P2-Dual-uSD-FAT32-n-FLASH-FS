@@ -61,7 +61,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "isp_rt_utilities"
+    utils : "DFS_RT_utilities"
 
 DAT
 
@@ -159,7 +159,7 @@ PUB go() | workerCog, status, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
         ' Try to create same directory again - should fail with E_FILE_EXISTS
         status := dfs.newDirectory(dfs.DEV_SD, @testdir1)
         debug("  Second newDirectory: ", sdec_(status))
-        utils.evaluateSingleValue(status, @"second newDirectory()", dfs.E_FILE_EXISTS)
+        utils.evaluateSubValue(status, @"second newDirectory()", dfs.E_FILE_EXISTS)
 
         ' Test: Create file in non-existent directory
         ' NOTE: This tests path handling - trying to create "NONEXIST/FILE.TXT"
@@ -239,7 +239,7 @@ PUB go() | workerCog, status, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
         debug("  Read handle: ", sdec_(h2))
         ' Reader should see original data (before any new writes)
         if h2 >= 0
-            utils.evaluateSubBool(true, @"read handle obtained", true)
+            utils.evaluateSubBool(h2 >= 0, @"read handle obtained", true)
             dfs.closeFileHandle(h2)
         else
             ' Document if driver doesn't allow this
@@ -353,7 +353,7 @@ PUB go() | workerCog, status, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
             status := dfs.deleteFile(dfs.DEV_SD, @testfile1)
             debug("  deleteFile while read-open: ", sdec_(status))
             ' Document behavior: driver may succeed or return an error
-            utils.evaluateBool(status == dfs.SUCCESS or status < 0, @"returns SUCCESS or error", true)
+            utils.evaluateSingleValue(status, @"deleteFile while read-open", dfs.SUCCESS)
             dfs.closeFileHandle(h1)
 
         ' Test: rename on file with open read handle
@@ -368,7 +368,7 @@ PUB go() | workerCog, status, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritte
         if h1 >= 0
             status := dfs.rename(dfs.DEV_SD, @testfile1, @testfile2)
             debug("  rename while read-open: ", sdec_(status))
-            utils.evaluateBool(status == dfs.SUCCESS or status < 0, @"returns SUCCESS or error", true)
+            utils.evaluateSingleValue(status, @"rename while read-open", dfs.SUCCESS)
             dfs.closeFileHandle(h1)
 
         ' Test: mount() with invalid device code returns E_BAD_DEVICE

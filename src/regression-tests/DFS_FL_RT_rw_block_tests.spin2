@@ -30,7 +30,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     RECORD_LEN = 88 ' just for fun, tiny but even number of longs
@@ -55,9 +55,6 @@ recordData       LONG    0[RECORD_DATA_LEN/4]
 recordCRC        LONG    0
 recordEnd
 
-writeLength     LONG    0
-
-
 PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, workerCog
 '' Run Flash read/write block-level regression tests.
 ''
@@ -73,11 +70,11 @@ PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, wor
 
     status := dfs.format(dfs.DEV_FLASH)
     if status <> dfs.SUCCESS
-        utils.showError(@"format()", status)
+        utils.showErrorCode(@"format()", status)
     else
         status := dfs.mount(dfs.DEV_FLASH)
         if status <> dfs.SUCCESS
-            utils.showError(@"mount()", status)
+            utils.showErrorCode(@"mount()", status)
         else
             utils.ShowStats()                                   ' should have empty filesystem
             utils.showFiles()
@@ -100,7 +97,7 @@ PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, wor
     debug("* Test Complete")
     debug("END_SESSION")
 
-pri testWriteRecords(pFilename, recordCount, fileCount, blocksAllocated) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize
+pri testWriteRecords(pFilename, recordCount, fileCount, blocksAllocated) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize, writeLength
     ' ----------------------------------
     ' TEST
         '  open file for write

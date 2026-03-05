@@ -40,7 +40,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_FL_RT_utilities"
+    utils : "DFS_RT_utilities"
 
 CON
     RECORD_LEN = 88 ' just for fun, tiny but even number of longs
@@ -75,8 +75,6 @@ bufferLock      LONG    -1
 stack           LONG    0[STACK_SIZE_PER_COG * NUM_WORKER_COGS]
 
 fileCountAr     BYTE    0[dfs.MAX_P2_COGS]
-
-fileNbr         BYTE    0
 
 PUB go() | cogIdx, totalFiles, status, workerCog
 '' Run 8-cog Flash filesystem stress tests.
@@ -168,12 +166,12 @@ pri genTwoFiles(pByteFileCountAr) | myId, fileType, delayMS, fType1, fType2, sta
 
     utils.startTestGroup(@"Cog write file #1")
     fType1 := (GETRND() +// NUM_FILE_TYPES)
-    writeAndVerifyATestFile(fType1, myId)
+    writeAndVerifyATestFile(fType1, myId, 0)
     BYTE[pByteFileCountAr][myId]++
 
     utils.startTestGroup(@"Cog write file #2")
     fType2 := (GETRND() +// NUM_FILE_TYPES)
-    writeAndVerifyATestFile(fType2, myId)
+    writeAndVerifyATestFile(fType2, myId, 1)
     BYTE[pByteFileCountAr][myId]++
 
     if myId <> 0
@@ -746,33 +744,33 @@ pri openWaitOnHandle(pFilename, mode) : handle, status | pErr
         debug("openWaitOnHandle() - ", sdec(handle), " [", zstr_(pErr), "]")
 
 
-pri writeAndVerifyATestFile(fileType, myId) | BYTE filename[FILE_NAME_LEN], fileCount, blockCount
+pri writeAndVerifyATestFile(fileType, myId, fileIndex) | BYTE filename[FILE_NAME_LEN], fileCount, blockCount
     case fileType
       0:
-        fillinFilename(@filename, myId, @"by", @"file.bin", FILE_NAME_LEN)
+        fillinFilename(@filename, myId, fileIndex, @"by", @"file.bin", FILE_NAME_LEN)
         testWriteBytes(@filename, 5)
         testVerifyBytes(@filename, 5)
       1:
-        fillinFilename(@filename, myId, @"wd", @"file.bin", FILE_NAME_LEN)
+        fillinFilename(@filename, myId, fileIndex, @"wd", @"file.bin", FILE_NAME_LEN)
         testWriteWords(@filename, 5)
         testVerifyWords(@filename, 5)
       2:
-        fillinFilename(@filename, myId, @"ln", @"file.bin", FILE_NAME_LEN)
+        fillinFilename(@filename, myId, fileIndex, @"ln", @"file.bin", FILE_NAME_LEN)
         testWriteLongs(@filename, 5)
         testVerifyLongs(@filename, 5)
       3:
-        fillinFilename(@filename, myId, @"zs", @"file.str", FILE_NAME_LEN)
+        fillinFilename(@filename, myId, fileIndex, @"zs", @"file.str", FILE_NAME_LEN)
         testWriteStrings(@filename, 5)
         testVerifyStrings(@filename, 5)
       4:
-        fillinFilename(@filename, myId, @"rc", @"file.bin", FILE_NAME_LEN)
+        fillinFilename(@filename, myId, fileIndex, @"rc", @"file.bin", FILE_NAME_LEN)
         testWriteRecords(@filename, 5)
         testVerifyRecords(@filename, 5)
 
 
-pri fillinFilename(pFilename, cogIdNbr, pType2ltr, pSuffix, bffrLen) | fileID
+pri fillinFilename(pFilename, cogIdNbr, fileIndex, pType2ltr, pSuffix, bffrLen) | fileID
 
-    fileID := ++fileNbr ' yeah don't let this get past 99
+    fileID := cogIdNbr * 2 + fileIndex + 1 ' unique per cog+file, 1-based
     strcopy(pFilename, pType2ltr, 2)
     BYTE[pFilename][2] := $2d
     BYTE[pFilename][3] := cogIdNbr + $30
