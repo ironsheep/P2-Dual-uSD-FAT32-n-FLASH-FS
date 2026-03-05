@@ -28,7 +28,7 @@ Completed plans are in `archive/` (gitignored, local-only). Kept for reference b
 | Phase3-Flash-File-Operations-Plan.md | Phase 3: Flash file operations integration |
 | Phase-5b-Post-v1.0.0-SD-Updates-Plan.md | Phase 5b: post-v1.0.0 SD driver updates |
 | Feature-Parity-Plan.md | Feature parity: SD/Flash API alignment, utilities, docs |
-| Regression-Test-Coverage-Gaps.md | Regression test coverage expansion (32 suites, 912 tests) |
+| Regression-Test-Coverage-Gaps.md | Regression test coverage expansion (32 suites, 1,335 tests) |
 | Decouple-Flash-Block-Buffers.md | Flash buffer pool decoupling (~12 KB savings) |
 | PENDING-api-tutorial-mount-patterns.md | Multi-cog mount/unmount best practices |
 

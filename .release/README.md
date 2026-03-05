@@ -15,6 +15,7 @@ dual-fs-driver/
 ├── CHANGELOG.md                        Release history
 │
 ├── DOCs/                               Reference documentation
+│   ├── CONDITIONAL-COMPILATION-GUIDE.md     SD driver build options and pragmas
 │   ├── DUAL-DRIVER-THEORY.md              Architecture and driver internals
 │   ├── DUAL-DRIVER-TUTORIAL.md            Getting started guide with examples
 │   ├── DUAL-UTILITIES.md                  Utility program documentation
@@ -31,7 +32,8 @@ dual-fs-driver/
     ├── EXAMPLES/                          Compilable example programs
     │   ├── DFS_example_basic.spin2           Mount, read, write both devices
     │   ├── DFS_example_cross_copy.spin2      Copy files between SD and Flash
-    │   └── DFS_example_data_logger.spin2     Log to Flash, archive to SD
+    │   ├── DFS_example_data_logger.spin2     Log to Flash, archive to SD
+    │   └── DFS_example_sd_manifest.spin2     Read manifest from SD, copy files to Flash
     ├── UTILS/                             Standalone utilities
     │   ├── DFS_SD_format_card.spin2          SD FAT32 card formatter
     │   ├── DFS_SD_card_characterize.spin2    SD card register reader
@@ -48,8 +50,7 @@ dual-fs-driver/
         ├── DFS_SD_RT_*_tests.spin2           SD test suites (20)
         ├── DFS_FL_RT_*_tests.spin2           Flash test suites (10)
         ├── DFS_RT_*_tests.spin2              Cross-device test suites (2)
-        ├── DFS_FL_RT_utilities.spin2         Flash test framework
-        └── isp_rt_utilities.spin2            SD test framework
+        └── DFS_RT_utilities.spin2             Unified test framework
 ```
 
 ## Prerequisites
@@ -150,7 +151,7 @@ See `src/UTILS/README.md` for all available utilities.
 
 ## Regression Tests
 
-The regression test suite (912+ tests across 32 suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (1,300+ tests across 32 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 

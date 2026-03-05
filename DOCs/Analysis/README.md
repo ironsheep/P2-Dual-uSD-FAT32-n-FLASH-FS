@@ -7,6 +7,7 @@ Engineering analysis documents produced during driver development.
 | Document | Description |
 |----------|-------------|
 | [SPI-BUS-STATE-ANALYSIS.md](SPI-BUS-STATE-ANALYSIS.md) | SPI bus state transitions between SD (Mode 0) and Flash (Mode 3) |
+| [REGRESSION-TEST-ANALYSIS.md](REGRESSION-TEST-ANALYSIS.md) | Pre-release regression test quality audit and hardening results |
 
 ---
 

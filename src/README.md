@@ -7,10 +7,11 @@ Unified dual-filesystem driver and associated programs for the Parallax Propelle
 | Path | Description |
 |------|-------------|
 | `dual_sd_fat32_flash_fs.spin2` | Unified dual-FS driver (SD FAT32 + Flash) |
+| `isp_stack_check.spin2` | Stack depth measurement utility (conditional via SD_INCLUDE_STACK_CHECK) |
 | [DEMO/](DEMO/) | Interactive dual-device filesystem shell |
 | [EXAMPLES/](EXAMPLES/) | Compilable example programs |
 | [UTILS/](UTILS/) | Standalone utilities (format, audit, fsck, characterize) |
-| [regression-tests/](regression-tests/) | Regression test suites (35 suites, 912+ tests) |
+| [regression-tests/](regression-tests/) | Regression test suites (32 standard suites, 1,300+ tests) |
 
 ## Building
 

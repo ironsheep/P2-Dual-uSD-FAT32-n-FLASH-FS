@@ -8,7 +8,7 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 
 | File | Tests | Description |
 |------|:-----:|-------------|
-| `DFS_RT_dual_device_tests.spin2` | 37 | Flash mount, bus switching, SD integrity, handle pool |
+| `DFS_RT_dual_device_tests.spin2` | 36 | Flash mount, bus switching, SD integrity, handle pool |
 | `DFS_RT_cross_device_tests.spin2` | 21 | Interleaved I/O, copyFile() SD<->Flash, edge cases |
 
 ### SD Regression Tests
@@ -24,12 +24,12 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | `DFS_SD_RT_seek_tests.spin2` | 37 | Seek and tell operations |
 | `DFS_SD_RT_multihandle_tests.spin2` | 19 | Multiple simultaneous file handles |
 | `DFS_SD_RT_multicog_tests.spin2` | 14 | Multi-cog concurrent access, lock serialization |
-| `DFS_SD_RT_multiblock_tests.spin2` | 13 | Multi-sector streamer DMA transfers (CMD18/CMD25) |
-| `DFS_SD_RT_raw_sector_tests.spin2` | 8 | Raw sector read/write round-trips |
+| `DFS_SD_RT_multiblock_tests.spin2` | 6 | Multi-sector streamer DMA transfers (CMD18/CMD25) |
+| `DFS_SD_RT_raw_sector_tests.spin2` | 14 | Raw sector read/write round-trips |
 | `DFS_SD_RT_volume_tests.spin2` | 23 | Volume label, VBR access, sync, setDate |
-| `DFS_SD_RT_register_tests.spin2` | 18 | Card register access (CID/CSD/SCR/OCR/SD Status) |
+| `DFS_SD_RT_register_tests.spin2` | 6 | Card register access (CID/CSD/SCR/OCR/SD Status) |
 | `DFS_SD_RT_speed_tests.spin2` | 14 | SPI speed control, CMD6 high-speed mode |
-| `DFS_SD_RT_error_handling_tests.spin2` | 16 | Error conditions, invalid handles, state errors |
+| `DFS_SD_RT_error_handling_tests.spin2` | 17 | Error conditions, invalid handles, state errors |
 | `DFS_SD_RT_recovery_tests.spin2` | 7 | Recovery from CRC errors |
 | `DFS_SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks |
 | `DFS_SD_RT_crc_diag_tests.spin2` | 14 | CRC diagnostic counters |
@@ -47,14 +47,14 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | File | Tests | Description |
 |------|:-----:|-------------|
 | `DFS_FL_RT_mount_handle_basics_tests.spin2` | 50 | Flash mount, format, handle basics |
-| `DFS_FL_RT_rw_tests.spin2` | 70 | Flash read/write operations |
-| `DFS_FL_RT_rw_block_tests.spin2` | 13 | Flash block-level read/write |
-| `DFS_FL_RT_rw_modify_tests.spin2` | 36 | Flash read/modify/write patterns |
-| `DFS_FL_RT_append_tests.spin2` | 78 | Flash append and flush() |
-| `DFS_FL_RT_seek_tests.spin2` | 33 | Flash seek operations |
-| `DFS_FL_RT_circular_tests.spin2` | 37 | Flash circular file operations |
-| `DFS_FL_RT_circular_compat_tests.spin2` | 27 | Flash circular file compatibility |
-| `DFS_FL_RT_cwd_tests.spin2` | 20 | Flash CWD emulation |
+| `DFS_FL_RT_rw_tests.spin2` | 118 | Flash read/write operations |
+| `DFS_FL_RT_rw_block_tests.spin2` | 39 | Flash block-level read/write |
+| `DFS_FL_RT_rw_modify_tests.spin2` | 102 | Flash read/modify/write patterns |
+| `DFS_FL_RT_append_tests.spin2` | 114 | Flash append and flush() |
+| `DFS_FL_RT_seek_tests.spin2` | 81 | Flash seek operations |
+| `DFS_FL_RT_circular_tests.spin2` | 262 | Flash circular file operations |
+| `DFS_FL_RT_circular_compat_tests.spin2` | 79 | Flash circular file compatibility |
+| `DFS_FL_RT_cwd_tests.spin2` | 31 | Flash CWD emulation, absolute paths |
 
 **Optional stress test:**
 
@@ -66,20 +66,18 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 
 | File | Description |
 |------|-------------|
-| `isp_rt_utilities.spin2` | SD test framework (startTest, evaluateBool, patterns) |
-| `DFS_FL_RT_utilities.spin2` | Flash test framework (per-cog counters, Flash helpers) |
+| `DFS_RT_utilities.spin2` | Unified test framework (assertions, patterns, Flash helpers, per-cog counters) |
 
 ## Test Counts
 
 | Category | Suites | Tests |
 |----------|:------:|------:|
-| Dual/Cross-device | 2 | 58 |
-| SD (standard) | 20 | 424 |
-| Flash (standard) | 9 | 364 |
-| Flash CWD | 1 | 20 |
-| **Total (standard)** | **32** | **912** |
+| Dual/Cross-device | 2 | 57 |
+| SD (standard) | 20 | 402 |
+| Flash (standard) | 10 | 876 |
+| **Total (standard)** | **32** | **1,335** |
 
-Optional suites add: format (+46), 8-cog stress (+66).
+Optional suites add: format (+46), 8-cog stress.
 
 ## Prerequisites
 
@@ -115,7 +113,7 @@ cd ../../tools/
 ```bash
 cd ../../tools/
 
-# Standard suite (32 suites, 912+ tests)
+# Standard suite (32 suites, 1,335 tests)
 ./run_all_regression.sh
 
 # Include 8-cog stress test
@@ -167,6 +165,7 @@ Default SD pins (P2 Edge Module): CS=P60, MOSI=P59, MISO=P58, SCK=P61. The Flash
 
 - [THEORY-OF-OPERATIONS.md](THEORY-OF-OPERATIONS.md) -- Detailed theory of operations for each test suite
 - [TEST-CARD-SPECIFICATION.md](TEST-CARD-SPECIFICATION.md) -- SD test card file layout and contents
+- [REGRESSION-TEST-ANALYSIS.md](../../DOCs/Analysis/REGRESSION-TEST-ANALYSIS.md) -- Pre-release quality audit and hardening results
 
 ---
 

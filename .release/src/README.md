@@ -49,6 +49,7 @@ Compilable, self-contained example programs demonstrating common dual-FS driver 
 | `DFS_example_basic.spin2` | Mount both devices, write/read files on each, show stats -- the "hello world" |
 | `DFS_example_cross_copy.spin2` | Copy a file from SD to Flash and back, verify round-trip data integrity |
 | `DFS_example_data_logger.spin2` | Log sensor data to Flash, then archive the log to SD |
+| `DFS_example_sd_manifest.spin2` | Read manifest from SD, copy listed files/folders to Flash |
 
 See [EXAMPLES/README.md](EXAMPLES/README.md) for build instructions and what each example teaches.
 

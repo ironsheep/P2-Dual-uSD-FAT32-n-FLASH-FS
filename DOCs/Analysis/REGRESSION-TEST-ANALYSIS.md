@@ -1,6 +1,6 @@
 # Regression Test Suite Analysis
 
-A comprehensive quality analysis of the project's 32 regression test suites (912+ tests) evaluated against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../procedures/REGRESSION-TESTING-BEST-PRACTICES.md).
+A comprehensive quality analysis of the project's 32 regression test suites (1,335 tests post-hardening) evaluated against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../procedures/REGRESSION-TESTING-BEST-PRACTICES.md).
 
 **Date:** 2026-03-04
 **Scope:** All test suites in `src/regression-tests/`
@@ -28,7 +28,7 @@ A comprehensive quality analysis of the project's 32 regression test suites (912
 The regression suite is **strong for a 1.0 release**. It covers the full API surface, uses round-trip verification extensively, tests error paths systematically, and has caught real bugs during development. The suite runs on real hardware with 100% pass rate across all 32 suites.
 
 **Key metrics:**
-- 32 suites, 912+ tests, 0 failures
+- 32 suites, 1,335 tests, 0 failures
 - All 71 always-compiled PUB methods have at least one test
 - Round-trip verification in 25+ suites
 - Negative/error-path tests in 20+ suites
@@ -618,4 +618,4 @@ The suite's core strengths -- round-trip verification, boundary testing, error-p
 
 ---
 
-*Analysis performed 2026-03-04 against 32 regression suites (912+ tests) using the principles from [REGRESSION-TESTING-BEST-PRACTICES.md](../procedures/REGRESSION-TESTING-BEST-PRACTICES.md).*
+*Analysis performed 2026-03-04 against 32 regression suites (1,335 tests) using the principles from [REGRESSION-TESTING-BEST-PRACTICES.md](../procedures/REGRESSION-TESTING-BEST-PRACTICES.md).*

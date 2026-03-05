@@ -91,6 +91,7 @@ jobs:
           cp src/EXAMPLES/DFS_example_basic.spin2 "${DEST}/src/EXAMPLES/"
           cp src/EXAMPLES/DFS_example_cross_copy.spin2 "${DEST}/src/EXAMPLES/"
           cp src/EXAMPLES/DFS_example_data_logger.spin2 "${DEST}/src/EXAMPLES/"
+          cp src/EXAMPLES/DFS_example_sd_manifest.spin2 "${DEST}/src/EXAMPLES/"
 
           # src/UTILS/ - utility programs and support libraries
           mkdir -p "${DEST}/src/UTILS"
@@ -113,8 +114,6 @@ jobs:
           cp src/regression-tests/DFS_SD_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_FL_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_RT_*.spin2 "${DEST}/src/regression-tests/"
-          cp src/regression-tests/DFS_FL_RT_utilities.spin2 "${DEST}/src/regression-tests/"
-          cp src/regression-tests/isp_rt_utilities.spin2 "${DEST}/src/regression-tests/"
 
           # Remove any macOS artifacts
           find "${DEST}" -name '.DS_Store' -delete
