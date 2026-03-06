@@ -1575,14 +1575,21 @@ CON ' ---- Error Reporting ----
 CON ' ---- Directory Methods ----
     ' DIRECTORY METHODS
     ' =============================================================================
+PUB getFlashCwd() : p_cwd
+'' Return pointer to calling cog's Flash CWD prefix string.
+'' Empty string means root directory. Example: "dir1" or "dir1/dir2".
+''
+'' @returns p_cwd - Pointer to null-terminated CWD string
+
+  p_cwd := fl_get_cwd()
+
 PUB openDirectory(dev, p_path) : handle
 '' Open directory for enumeration (multi-cog safe) - returns handle for iterating entries.
-'' SD only. Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
+'' Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
 '' Pass "" or "." to enumerate calling cog's current working directory.
 '' Handles share the existing file handle pool (MAX_OPEN_FILES total).
-'' Flash: Not supported -- use directory() for Flash file iteration with CWD filtering.
 ''
-'' @param dev - Target device (DEV_SD only)
+'' @param dev - Target device (DEV_SD or DEV_FLASH)
 '' @param p_path - Pointer to null-terminated path string
 '' @returns handle - Handle on success, negative error code on failure
 
@@ -1591,8 +1598,7 @@ PUB openDirectory(dev, p_path) : handle
       send_command(CMD_OPEN_DIR, p_path, 0, 0, 0)
       handle := LONG[@saved_data0][COGID()]
     DEV_FLASH:
-      set_error(E_NOT_SUPPORTED)
-      handle := E_NOT_SUPPORTED
+      handle := fl_open_directory(p_path)
     other:
       set_error(E_BAD_DEVICE)
       handle := E_BAD_DEVICE
@@ -1605,17 +1611,32 @@ PUB readDirectoryHandle(handle) : p_entry
 '' @param handle - Valid directory handle
 '' @returns p_entry - Pointer to entry_buffer on success, 0 at end of directory
 
-  if send_command(CMD_READ_DIR_H, handle, 0, 0, 0) == SUCCESS
-    p_entry := @entry_buffer
-  else
+  if handle < 0 or handle >= MAX_OPEN_FILES or h_flags[handle] == HF_FREE
     p_entry := 0
+  elseif h_device[handle] == DEV_FLASH
+    if fl_read_dir_handle(handle) == SUCCESS
+      p_entry := @entry_buffer
+    else
+      p_entry := 0
+  else
+    ' SD path (existing)
+    if send_command(CMD_READ_DIR_H, handle, 0, 0, 0) == SUCCESS
+      p_entry := @entry_buffer
+    else
+      p_entry := 0
 
 PUB closeDirectoryHandle(handle)
 '' Close directory handle (multi-cog safe) - releases handle back to pool.
 ''
 '' @param handle - Valid directory handle
 
-  send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
+  if handle >= 0 and handle < MAX_OPEN_FILES
+    if h_device[handle] == DEV_FLASH
+      repeat until locktry(api_lock)
+      freeHandle(handle)
+      lockrel(api_lock)
+    else
+      send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
 
 CON ' ---- Unified Device-Level Methods ----
     ' UNIFIED DEVICE-LEVEL METHODS (ADR-9)
@@ -1865,15 +1886,20 @@ PUB deleteFile(dev, name_ptr) : status | fl_path[32]
   if status <> SUCCESS
     set_error(status)
 
-PUB moveFile(dev, name_ptr, dest_folder) : status
+PUB moveFile(dev, name_ptr, dest_folder) : status | fl_new_path[32], p_bare, idx, dest_len, bare_len
 '' Move file to another directory (multi-cog safe).
 '' SD: moves file via FAT32 directory manipulation.
-'' Flash: not supported (use rename with full path instead).
+'' Flash: constructs new path from dest_folder + bare filename, then renames.
 ''
 '' @param dev - Target device (DEV_SD or DEV_FLASH)
 '' @param name_ptr - Pointer to filename to move
-'' @param dest_folder - Pointer to destination folder name
+'' @param dest_folder - Pointer to destination folder name (empty string for root)
 '' @returns status - SUCCESS or negative error code
+' @local fl_new_path - Buffer for constructed destination path
+' @local p_bare - Pointer to bare filename (after last "/")
+' @local idx - Loop index for scanning filename
+' @local dest_len - Length of destination folder string
+' @local bare_len - Length of bare filename
 
   case dev
     DEV_SD:
@@ -1881,7 +1907,30 @@ PUB moveFile(dev, name_ptr, dest_folder) : status
       if status <> SUCCESS
         set_error(status)
     DEV_FLASH:
-      status := set_error(E_NOT_SUPPORTED)
+      ifnot flash_mounted
+        status := set_error(E_NOT_MOUNTED)
+      else
+        ' Extract bare filename (strip any path prefix)
+        p_bare := name_ptr
+        idx := 0
+        repeat strsize(name_ptr)
+          if BYTE[name_ptr][idx] == "/"
+            p_bare := name_ptr + idx + 1
+          idx++
+        ' Build absolute destination path: "/dest_folder/bare_filename"
+        ' Leading "/" makes fl_prepend_cwd skip CWD prefix for the new name
+        bytefill(@fl_new_path, 0, FL_FILENAME_SIZE)
+        dest_len := strsize(dest_folder)
+        bare_len := strsize(p_bare)
+        idx := 0
+        BYTE[@fl_new_path][idx++] := "/"                                        ' Absolute path marker
+        if dest_len > 0
+          bytemove(@fl_new_path + idx, dest_folder, dest_len)
+          idx += dest_len
+          BYTE[@fl_new_path][idx++] := "/"                                      ' Separator after folder
+        bytemove(@fl_new_path + idx, p_bare, bare_len)
+        ' Delegate to rename which handles CWD prepending for old name
+        status := rename(DEV_FLASH, name_ptr, @fl_new_path)
     other:
       status := set_error(E_BAD_DEVICE)
 
@@ -6314,6 +6363,265 @@ PRI fl_cwd_matches(p_stored_name, p_bare_name) : matches | p_cwd, cwd_len, name_
         ' It's a direct child -- extract the bare name
         if matches
           strcopy(p_bare_name, p_stored_name + cwd_len + 1, FL_FILENAME_SIZE - 1)
+
+
+CON ' ---- Flash Directory Handle Support ----
+    ' FLASH DIRECTORY HANDLE SUPPORT (caller-cog methods)
+    ' Implements openDirectory/readDirectoryHandle/closeDirectoryHandle for Flash.
+    ' Uses per-handle 512-byte buffer for prefix storage (bytes 0-127) and
+    ' subdirectory dedup tracking (bytes 128-383).
+    ' ===========================================================================
+
+  ' Flash directory handle buffer layout constants
+  FL_DH_PREFIX_OFFSET   = 0         ' Offset in handle buffer for stored prefix
+  FL_DH_PREFIX_SIZE     = 128       ' Max prefix length including null
+  FL_DH_DEDUP_OFFSET    = 128       ' Offset in handle buffer for dedup area
+  FL_DH_DEDUP_SIZE      = 256       ' Size of dedup area (fits ~28 names at 9 bytes each)
+  FL_DH_MAX_DIR_NAME    = 8         ' Max directory name length (FAT32 8.3 convention)
+
+PRI fl_open_directory(p_path) : handle | p_buf, p_prefix, p_cwd, cwd_len, path_len
+' Open a Flash directory for handle-based enumeration.
+' Allocates a handle, resolves the path to an absolute prefix, and stores it
+' in the handle's buffer for use by fl_read_dir_handle().
+'
+' Path resolution:
+'   "" or "." -- copy caller's CWD as prefix
+'   "/"       -- empty prefix (root)
+'   "/dirA"   -- strip leading "/", use "dirA"
+'   "subdir"  -- prepend CWD via fl_prepend_cwd()
+'
+' @param p_path - Pointer to null-terminated path string
+' @returns handle - Handle index on success, negative error code on failure
+' @local p_buf - Pointer to handle's 512-byte buffer
+' @local p_prefix - Pointer to prefix area within handle buffer
+' @local p_cwd - Pointer to caller's CWD string
+' @local cwd_len - Length of CWD string
+' @local path_len - Length of path argument
+
+  ' Check Flash is mounted
+  if cog_id == -1
+    handle := set_error(E_NOT_MOUNTED)
+  elseifnot flash_mounted
+    handle := set_error(E_NOT_MOUNTED)
+  else
+    ' Allocate handle under lock
+    repeat until locktry(api_lock)
+    handle := allocateHandle()
+    if handle >= 0
+      h_device[handle] := DEV_FLASH
+      h_flags[handle] := HF_DIR
+    lockrel(api_lock)
+
+    if handle >= 0
+      ' Initialize handle state
+      h_position[handle] := 0         ' block_id counter starts at 0
+
+      ' Get buffer pointer and initialize
+      p_buf := getHandleBuffer(handle)
+      p_prefix := p_buf + FL_DH_PREFIX_OFFSET
+
+      ' Zero the prefix and dedup areas
+      bytefill(p_prefix, 0, FL_DH_PREFIX_SIZE)
+      bytefill(p_buf + FL_DH_DEDUP_OFFSET, 0, FL_DH_DEDUP_SIZE)
+
+      ' Resolve path to absolute prefix
+      path_len := strsize(p_path)
+      if path_len == 0 or (BYTE[p_path] == "." and path_len == 1)
+        ' "" or "." -- use caller's CWD
+        p_cwd := fl_get_cwd()
+        strcopy(p_prefix, p_cwd, FL_DH_PREFIX_SIZE - 1)
+      elseif BYTE[p_path] == "/" and path_len == 1
+        ' "/" -- root (empty prefix, already zeroed)
+      elseif BYTE[p_path] == "/"
+        ' "/dirA" -- absolute path, strip leading "/"
+        strcopy(p_prefix, p_path + 1, FL_DH_PREFIX_SIZE - 1)
+      else
+        ' "subdir" -- relative path, prepend CWD
+        fl_prepend_cwd(p_prefix, p_path)
+
+PRI fl_read_dir_handle(handle) : status | p_buf, p_prefix, prefix_len, tmpName[32], fsize, remainder_len, seg_len, idx, attr
+' Read next entry from a Flash directory handle.
+' Iterates Flash files via CMD_FLASH_DIRECTORY using the handle's stored prefix
+' (NOT the caller's CWD). Returns files as ATTR_ARCHIVE entries and subdirectories
+' as DIR_ATTR_DIRECTORY pseudo-entries with dedup tracking.
+'
+' @param handle - Valid Flash directory handle
+' @returns status - SUCCESS if entry found (entry_buffer populated), E_FILE_NOT_FOUND at end
+' @local p_buf - Pointer to handle's 512-byte buffer
+' @local p_prefix - Pointer to stored prefix in handle buffer
+' @local prefix_len - Length of the stored prefix
+' @local tmpName - Temporary buffer for Flash filename
+' @local fsize - File size from Flash directory iteration
+' @local remainder_len - Length of filename portion after prefix
+' @local seg_len - Length of first path segment (subdirectory name)
+' @local idx - Loop index
+' @local attr - Entry attribute byte
+
+  p_buf := getHandleBuffer(handle)
+  p_prefix := p_buf + FL_DH_PREFIX_OFFSET
+  prefix_len := strsize(p_prefix)
+
+  ' Iterate Flash files starting from current block_id position
+  repeat
+    send_command(CMD_FLASH_DIRECTORY, @h_position[handle], @tmpName, @fsize, 0)
+
+    ' No more files -- end of enumeration
+    if BYTE[@tmpName][0] == 0
+      status := E_FILE_NOT_FOUND
+      quit
+
+    ' Check if this file matches the handle's prefix
+    if prefix_len == 0
+      ' Root prefix -- check if filename has no "/" (direct child at root)
+      idx := 0
+      seg_len := strsize(@tmpName)
+      repeat idx from 0 to seg_len - 1
+        if BYTE[@tmpName][idx] == "/"
+          quit
+      if idx < seg_len
+        ' Has "/" -- this is a subdirectory entry at root
+        ' Extract first segment as directory name
+        if fl_dh_dedup_check(handle, @tmpName, idx)
+          fl_populate_entry_buffer(@tmpName, idx, DIR_ATTR_DIRECTORY, 0)
+          status := SUCCESS
+          quit
+        ' Already seen this subdir, continue to next file
+      else
+        ' No "/" -- direct file at root
+        fl_populate_entry_buffer(@tmpName, seg_len, $20, fsize)
+        status := SUCCESS
+        quit
+
+    else
+      ' Non-root prefix -- check if filename starts with prefix + "/"
+      remainder_len := strsize(@tmpName)
+      if remainder_len > prefix_len + 1
+        ' Check prefix match
+        idx := 0
+        repeat idx from 0 to prefix_len - 1
+          if BYTE[@tmpName][idx] <> BYTE[p_prefix][idx]
+            idx := -1
+            quit
+        if idx >= 0 and BYTE[@tmpName][prefix_len] == "/"
+          ' Prefix matches. Check remainder after prefix + "/"
+          ' Find next "/" in remainder to distinguish file vs subdir
+          seg_len := 0
+          repeat idx from prefix_len + 1 to remainder_len - 1
+            if BYTE[@tmpName][idx] == "/"
+              quit
+            seg_len++
+          if idx < remainder_len
+            ' Has another "/" -- subdirectory entry
+            if fl_dh_dedup_check(handle, @tmpName + prefix_len + 1, seg_len)
+              fl_populate_entry_buffer(@tmpName + prefix_len + 1, seg_len, DIR_ATTR_DIRECTORY, 0)
+              status := SUCCESS
+              quit
+            ' Already seen, continue
+          else
+            ' No more "/" -- direct child file
+            fl_populate_entry_buffer(@tmpName + prefix_len + 1, seg_len, $20, fsize)
+            status := SUCCESS
+            quit
+
+PRI fl_populate_entry_buffer(p_name, name_len, attr, fsize) | idx, dot_pos, copy_len
+' Build a FAT32-compatible entry_buffer from a Flash filename.
+' Makes fileName(), attributes(), and fileSize() work transparently.
+'
+' @param p_name - Pointer to filename (not necessarily null-terminated, length given)
+' @param name_len - Number of characters in the name
+' @param attr - Attribute byte ($10=directory, $20=archive)
+' @param fsize - File size in bytes (0 for directories)
+' @local idx - Loop index
+' @local dot_pos - Position of "." separator (-1 if none)
+' @local copy_len - Number of characters to copy
+
+  ' Zero-fill entry_buffer (32 bytes)
+  bytefill(@entry_buffer, 0, 32)
+
+  ' Find "." separator position
+  dot_pos := -1
+  repeat idx from 0 to name_len - 1
+    if BYTE[p_name][idx] == "."
+      dot_pos := idx
+      quit
+
+  ' Fill name field (bytes 0-7) with space padding
+  bytefill(@entry_buffer, " ", 8)
+  if dot_pos < 0
+    ' No extension -- copy entire name (up to 8 chars)
+    copy_len := name_len
+    if copy_len > 8
+      copy_len := 8
+    bytemove(@entry_buffer, p_name, copy_len)
+  else
+    ' Has extension -- copy name part (up to 8 chars)
+    copy_len := dot_pos
+    if copy_len > 8
+      copy_len := 8
+    bytemove(@entry_buffer, p_name, copy_len)
+
+  ' Fill extension field (bytes 8-10) with space padding
+  bytefill(@entry_buffer + 8, " ", 3)
+  if dot_pos >= 0
+    ' Copy extension (up to 3 chars after ".")
+    copy_len := name_len - dot_pos - 1
+    if copy_len > 3
+      copy_len := 3
+    bytemove(@entry_buffer + 8, p_name + dot_pos + 1, copy_len)
+
+  ' Set attribute byte (byte 11)
+  BYTE[@entry_buffer][11] := attr
+
+  ' Set file size (bytes 28-31, little-endian LONG)
+  LONG[@entry_buffer][7] := fsize
+
+PRI fl_dh_dedup_check(handle, p_name, name_len) : is_new | p_buf, p_dedup, p_scan, scan_len, total_used, idx, matches
+' Check if a subdirectory name has been seen before for this handle.
+' If new, adds it to the dedup list. Returns TRUE if the name is new (first time seen).
+'
+' @param handle - Directory handle
+' @param p_name - Pointer to subdirectory name (not null-terminated, length given)
+' @param name_len - Length of the name to check
+' @returns is_new - TRUE if this name was not previously seen
+' @local p_buf - Pointer to handle's 512-byte buffer
+' @local p_dedup - Pointer to start of dedup area
+' @local p_scan - Current scan position in dedup area
+' @local scan_len - Length of current entry being scanned
+' @local total_used - Total bytes used in dedup area
+' @local idx - Loop index
+' @local matches - Whether current entry matches
+
+  p_buf := getHandleBuffer(handle)
+  p_dedup := p_buf + FL_DH_DEDUP_OFFSET
+
+  ' Scan existing entries for a match
+  total_used := 0
+  p_scan := p_dedup
+  repeat while total_used < FL_DH_DEDUP_SIZE
+    scan_len := strsize(p_scan)
+    if scan_len == 0
+      quit  ' End of entries (empty slot)
+
+    ' Compare this entry with the name
+    if scan_len == name_len
+      matches := true
+      repeat idx from 0 to name_len - 1
+        if BYTE[p_scan][idx] <> BYTE[p_name][idx]
+          matches := false
+          quit
+      if matches
+        is_new := false
+        return
+
+    ' Advance past this entry + null terminator
+    total_used += scan_len + 1
+    p_scan += scan_len + 1
+
+  ' Name not found -- add it if there's room
+  if total_used + name_len + 1 <= FL_DH_DEDUP_SIZE
+    bytemove(p_scan, p_name, name_len)
+    BYTE[p_scan][name_len] := 0  ' Null terminate
+  is_new := true
 
 CON ' ---- Flash File Operations (Worker Cog) ----
     ' PHASE 3: FLASH FILE OPERATIONS (worker cog internal methods)

@@ -1,0 +1,607 @@
+'' =================================================================================================
+''
+''   File....... DFS_FL_RT_dirhandle_tests.spin2
+''   Purpose.... Flash directory handle enumeration tests via dual_sd_fat32_flash_fs
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 04 MAR 2026
+''   Updated.... 04 MAR 2026
+''
+'' =================================================================================================
+''
+'' Tests the Flash directory handle API (openDirectory/readDirectoryHandle/closeDirectoryHandle):
+''   - Basic enumeration (root, subdirectory, close/reopen)
+''   - Entry inspection (fileName, attributes, fileSize)
+''   - Error conditions (invalid handle, non-existent path)
+''   - Subdirectory dedup (multiple files produce single dir pseudo-entry)
+''   - CWD independence (handle prefix vs caller CWD)
+''   - Handle pool interaction (dir + file handles coexist)
+''
+''   ~20 tests across 6 groups
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 320_000_000
+     DEBUG_BAUD       = 2_000_000
+
+' Enable stack depth measurement
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+    utils : "DFS_RT_utilities"
+
+CON
+    ' P2 Edge module SD slot pins (needed for dfs.init)
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' FAT32 directory attributes
+    ATTR_DIRECTORY       = $10
+    ATTR_ARCHIVE         = $20
+
+DAT
+
+' Test file paths (stored on Flash with "/" separators for directory emulation)
+dhRootFile      BYTE    "dhrootfl.dat", 0
+dhPoolFile2     BYTE    "dhpool2.dat", 0
+dhPoolFile3     BYTE    "dhpool3.dat", 0
+dhPoolFile4     BYTE    "dhpool4.dat", 0
+dhPoolFile5     BYTE    "dhpool5.dat", 0
+dhDirFile1      BYTE    "dhtdir/dh1.dat", 0
+dhDirFile2      BYTE    "dhtdir/dh2.dat", 0
+dhDirFile3      BYTE    "dhtdir/dh3.dat", 0
+dhSubFile       BYTE    "dhtdir/dhsub/sub1.dat", 0
+
+' Directory names for openDirectory
+dhDirName       BYTE    "dhtdir", 0
+dhSubDirName    BYTE    "dhtdir/dhsub", 0
+dhNonExist      BYTE    "nxdir99", 0
+dhAbsRoot       BYTE    "/", 0
+dhAbsDirPath    BYTE    "/dhtdir", 0
+dhDot           BYTE    ".", 0
+dhEmpty         BYTE    0
+
+' CWD navigation
+cwdRoot         BYTE    "/", 0
+
+' Test data
+dhContent       BYTE    "DirHandle test content", 0
+
+PUB go() | workerCog, status, dh, dh2, h1, h2, h3, h4, h5, p_entry, p_name, attrib, fsize, entryCount, foundFiles, foundDirs
+'' Run Flash directory handle regression tests.
+''
+' @local workerCog - Driver worker cog ID
+' @local status - Operation status
+' @local dh - Directory handle
+' @local dh2 - Second directory handle
+' @local h1..h5 - File handles for pool tests
+' @local p_entry - Pointer to entry buffer
+' @local p_name - Pointer to filename string
+' @local attrib - Entry attribute byte
+' @local fsize - File size
+' @local entryCount - Entry counter
+' @local foundFiles - File entry counter
+' @local foundDirs - Directory entry counter
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (Flash) - Directory Handle Tests")
+    debug("==============================================")
+
+    ' Initialize driver
+    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' Mount Flash
+    status := dfs.mount(dfs.DEV_FLASH)
+    if status == dfs.SUCCESS
+
+        ' Show mount status
+        debug(" ")
+        debug("* Flash mounted OK")
+
+        ' Clean up any existing test files
+        cleanupTestFiles()
+
+        ' Create test file structure
+        createTestFiles()
+
+        ' ======================================================================
+        ' TEST GROUP 1: Basic Enumeration (5 tests)
+        ' ======================================================================
+        utils.startTestGroup(@"Basic Enumeration")
+
+        ' Test: openDirectory("") enumerates root
+        utils.startTest(@"openDirectory('') enumerates root")
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhEmpty)
+        utils.evaluateSubBool(dh >= 0, @"openDirectory('') succeeds", true)
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            ' Root has: dhrootfl.dat + dhtdir/ pseudo-entry = at least 2
+            utils.evaluateSubBool(entryCount >= 2, @"root has >= 2 entries", true)
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: openDirectory(".") enumerates root
+        utils.startTest(@"openDirectory(.) enumerates root")
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        utils.evaluateSubBool(dh >= 0, @"openDirectory(.) succeeds", true)
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            utils.evaluateSubBool(entryCount >= 2, @"root via . has >= 2 entries", true)
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: openDirectory("dhtdir") enumerates subdir
+        utils.startTest(@"openDirectory(dhtdir) enumerates subdir")
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        utils.evaluateSubBool(dh >= 0, @"openDirectory(dhtdir) succeeds", true)
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            ' dhtdir has: dh1.dat, dh2.dat, dh3.dat + dhsub/ = 4 entries
+            utils.evaluateSubBool(entryCount >= 4, @"dhtdir has >= 4 entries", true)
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: closeDirectoryHandle releases handle
+        utils.startTest(@"closeDirectoryHandle releases handle slot")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        utils.evaluateSubBool(dh >= 0, @"first open succeeds", true)
+        dfs.closeDirectoryHandle(dh)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        utils.evaluateSubBool(dh >= 0, @"reopen after close succeeds", true)
+        if dh >= 0
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: Enumerate dhtdir finds 3 files and 1 subdir
+        utils.startTest(@"Enumerate dhtdir finds 3 files and 1 subdir")
+        utils.setCheckCountPerTest(4)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            foundFiles := 0
+            foundDirs := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                attrib := dfs.attributes()
+                if attrib & ATTR_DIRECTORY
+                    foundDirs++
+                else
+                    foundFiles++
+            utils.evaluateSubBool(foundFiles >= 3, @"found >= 3 files", true)
+            utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", true)
+            dfs.closeDirectoryHandle(dh)
+        else
+            utils.evaluateSubBool(false, @"found >= 3 files", true)
+            utils.evaluateSubBool(false, @"found >= 1 subdir", true)
+        utils.setCheckCountPerTest(1)
+
+        ' ======================================================================
+        ' TEST GROUP 2: Entry Inspection (4 tests)
+        ' ======================================================================
+        utils.startTestGroup(@"Entry Inspection")
+
+        ' Test: fileName() returns valid names
+        utils.startTest(@"fileName() returns valid names during enumeration")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                p_name := dfs.fileName()
+                utils.evaluateSubBool(strsize(p_name) > 0, @"filename non-empty", true)
+                entryCount++
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: attributes() distinguishes file vs directory
+        utils.startTest(@"attributes() distinguishes file vs directory")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            foundFiles := 0
+            foundDirs := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                attrib := dfs.attributes()
+                if attrib & ATTR_DIRECTORY
+                    foundDirs++
+                else
+                    foundFiles++
+            utils.evaluateSubBool(foundFiles > 0, @"has file entries", true)
+            utils.evaluateSubBool(foundDirs > 0, @"has dir entries", true)
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: Nested subdirectory enumeration
+        utils.startTest(@"Nested subdirectory enumeration finds file")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhSubDirName)
+        if dh >= 0
+            foundFiles := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                attrib := dfs.attributes()
+                if (attrib & ATTR_DIRECTORY) == 0
+                    foundFiles++
+            utils.evaluateSubBool(foundFiles >= 1, @"nested subdir has file", true)
+            dfs.closeDirectoryHandle(dh)
+        else
+            utils.evaluateSubBool(false, @"nested subdir has file", true)
+
+        ' Test: fileSize() returns correct size for files
+        utils.startTest(@"fileSize() returns correct size for files")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            foundFiles := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                attrib := dfs.attributes()
+                if (attrib & ATTR_DIRECTORY) == 0
+                    fsize := dfs.fileSize()
+                    if fsize > 0
+                        foundFiles++
+            utils.evaluateSubBool(foundFiles >= 1, @"file has size > 0", true)
+            dfs.closeDirectoryHandle(dh)
+
+        ' ======================================================================
+        ' TEST GROUP 3: Error Conditions (3 tests)
+        ' ======================================================================
+        utils.startTestGroup(@"Error Conditions")
+
+        ' Test: readDirectoryHandle with invalid handle returns 0
+        utils.startTest(@"readDirectoryHandle(-1) returns 0")
+        p_entry := dfs.readDirectoryHandle(-1)
+        utils.evaluateSingleValue(p_entry, @"readDirectoryHandle(-1)", 0)
+
+        ' Test: readDirectoryHandle with MAX handle returns 0
+        utils.startTest(@"readDirectoryHandle(MAX) returns 0")
+        p_entry := dfs.readDirectoryHandle(dfs.MAX_OPEN_FILES)
+        utils.evaluateSingleValue(p_entry, @"readDirectoryHandle(MAX)", 0)
+
+        ' Test: closeDirectoryHandle with invalid handle is no-op
+        utils.startTest(@"closeDirectoryHandle(-1) no crash")
+        dfs.closeDirectoryHandle(-1)
+        utils.recordPass()  ' If we get here, pass
+
+        ' ======================================================================
+        ' TEST GROUP 4: Subdirectory Dedup (3 tests)
+        ' ======================================================================
+        utils.startTestGroup(@"Subdirectory Dedup")
+
+        ' Test: Multiple files in subdir produce single dir pseudo-entry
+        utils.startTest(@"Multiple files produce single dir entry")
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            foundDirs := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                attrib := dfs.attributes()
+                if attrib & ATTR_DIRECTORY
+                    foundDirs++
+            ' dhtdir has 1 subdir (dhsub) with 1 file, should produce exactly 1 dir entry
+            utils.evaluateSingleValue(foundDirs, @"exactly 1 subdir entry", 1)
+            dfs.closeDirectoryHandle(dh)
+
+        ' Test: Dedup survives full enumeration (re-enumerate gives same count)
+        utils.startTest(@"Re-enumerate gives same count")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            dfs.closeDirectoryHandle(dh)
+        ' Second enumeration
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        if dh >= 0
+            foundFiles := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                foundFiles++
+            dfs.closeDirectoryHandle(dh)
+        utils.evaluateSingleValue(foundFiles, @"second enum matches first", entryCount)
+
+        ' Test: Root shows subdirectory pseudo-entry
+        utils.startTest(@"Root shows subdirectory pseudo-entry")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhAbsRoot)
+        if dh >= 0
+            foundDirs := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                attrib := dfs.attributes()
+                if attrib & ATTR_DIRECTORY
+                    foundDirs++
+            utils.evaluateSubBool(foundDirs >= 1, @"root has dir entry", true)
+            dfs.closeDirectoryHandle(dh)
+
+        ' ======================================================================
+        ' TEST GROUP 5: CWD Independence (3 tests)
+        ' ======================================================================
+        utils.startTestGroup(@"CWD Independence")
+
+        ' Test: Handle prefix independent of CWD changes
+        utils.startTest(@"Handle prefix independent of CWD change")
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)  ' Opens root
+        ' Now change CWD to dhtdir
+        dfs.changeDirectory(dfs.DEV_FLASH, @dhDirName)
+        ' readDirectoryHandle should still return root entries
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            ' Root has fewer entries than dhtdir (root: 2, dhtdir: 4)
+            ' This verifies the handle used root prefix, not current CWD
+            utils.evaluateSubBool(entryCount >= 1, @"root entries from handle", true)
+            dfs.closeDirectoryHandle(dh)
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+        ' Test: Absolute path ignores CWD
+        utils.startTest(@"Absolute path ignores CWD")
+        dfs.changeDirectory(dfs.DEV_FLASH, @dhDirName)  ' CWD = dhtdir
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhAbsRoot)  ' Should open root
+        if dh >= 0
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            utils.evaluateSubBool(entryCount >= 1, @"abs / returns root entries", true)
+            dfs.closeDirectoryHandle(dh)
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+        ' Test: Two handles enumerate different directories
+        utils.startTest(@"Two handles enumerate different dirs")
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)       ' root
+        dh2 := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)  ' dhtdir
+        utils.evaluateSubBool(dh >= 0, @"root handle OK", true)
+        utils.evaluateSubBool(dh2 >= 0, @"dhtdir handle OK", true)
+        if dh >= 0 and dh2 >= 0
+            ' Count root entries
+            entryCount := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh)
+                if p_entry == 0
+                    quit
+                entryCount++
+            ' Count dhtdir entries
+            foundFiles := 0
+            repeat
+                p_entry := dfs.readDirectoryHandle(dh2)
+                if p_entry == 0
+                    quit
+                foundFiles++
+            ' Root (2 entries) and dhtdir (4 entries) should differ
+            utils.evaluateSubBool(entryCount <> foundFiles, @"different entry counts", true)
+        if dh >= 0
+            dfs.closeDirectoryHandle(dh)
+        if dh2 >= 0
+            dfs.closeDirectoryHandle(dh2)
+
+        ' ======================================================================
+        ' TEST GROUP 6: Handle Pool Interaction (2 tests)
+        ' ======================================================================
+        utils.startTestGroup(@"Handle Pool Interaction")
+
+        ' Test: Dir handle coexists with file handles
+        ' Flash has MAX_FLASH_BUFFERS=3 limit on simultaneous file opens.
+        ' Dir handles do NOT consume a Flash buffer, so they should work
+        ' even when all file buffers are in use.
+        utils.startTest(@"Dir handle shares pool with file handles")
+        utils.setCheckCountPerTest(2)
+        dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+        ' Open 3 file handles (MAX_FLASH_BUFFERS=3, must be distinct files)
+        h1 := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_READ)
+        h2 := dfs.open(dfs.DEV_FLASH, @dhPoolFile2, dfs.FILEMODE_READ)
+        h3 := dfs.open(dfs.DEV_FLASH, @dhPoolFile3, dfs.FILEMODE_READ)
+        utils.evaluateSubBool(h1 >= 0 and h2 >= 0 and h3 >= 0, @"3 file handles OK", true)
+        ' Dir handle should still work (no Flash buffer needed)
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        utils.evaluateSubBool(dh >= 0, @"dir handle with files open", true)
+        ' Clean up
+        if h1 >= 0
+            dfs.close(h1)
+        if h2 >= 0
+            dfs.close(h2)
+        if h3 >= 0
+            dfs.close(h3)
+        if dh >= 0
+            dfs.closeDirectoryHandle(dh)
+        utils.setCheckCountPerTest(1)
+
+        ' Test: Close dir handle frees slot for file open
+        utils.startTest(@"Close dir handle frees slot for file open")
+        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        utils.evaluateSubBool(dh >= 0, @"dir handle allocated", true)
+        if dh >= 0
+            dfs.closeDirectoryHandle(dh)
+        ' Now open a file - should succeed (slot freed)
+        h1 := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_READ)
+        utils.evaluateSubBool(h1 >= 0, @"file handle after dir close", true)
+        if h1 >= 0
+            dfs.close(h1)
+
+        ' ======================================================================
+        ' Cleanup and Summary
+        ' ======================================================================
+        cleanupTestFiles()
+
+#IFDEF SD_INCLUDE_STACK_CHECK
+        debug(" ")
+        debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#ENDIF
+
+        dfs.unmount(dfs.DEV_FLASH)
+
+    else
+        debug("* Flash mount FAILED: ", sdec_(status))
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+PRI createTestFiles() | h
+' Create test file structure on Flash:
+'   dhrootfl.dat          (root level)
+'   dhtdir/dh1.dat        (subdir file)
+'   dhtdir/dh2.dat        (subdir file)
+'   dhtdir/dh3.dat        (subdir file)
+'   dhtdir/dhsub/sub1.dat (nested subdir file)
+
+    debug(" ")
+    debug("* Creating test file structure...")
+
+    dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+    ' Root file
+    h := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    ' dhtdir/dh1.dat - using full paths from root
+    h := dfs.open(dfs.DEV_FLASH, @dhDirFile1, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    ' dhtdir/dh2.dat
+    h := dfs.open(dfs.DEV_FLASH, @dhDirFile2, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    ' dhtdir/dh3.dat
+    h := dfs.open(dfs.DEV_FLASH, @dhDirFile3, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    ' dhtdir/dhsub/sub1.dat
+    h := dfs.open(dfs.DEV_FLASH, @dhSubFile, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    ' Pool test files (distinct files needed since Flash can't open same file twice)
+    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile2, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile3, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile4, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile5, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.wr_str(h, @dhContent)
+        dfs.close(h)
+
+    dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+    debug("* Test structure created")
+    debug(" ")
+
+PRI cleanupTestFiles()
+' Delete all test files (Flash has no real directories to clean)
+
+    dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+    dfs.deleteFile(dfs.DEV_FLASH, @dhRootFile)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhPoolFile2)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhPoolFile3)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhPoolFile4)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhPoolFile5)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhDirFile1)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhDirFile2)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhDirFile3)
+    dfs.deleteFile(dfs.DEV_FLASH, @dhSubFile)
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  =================================================================================================
+}}

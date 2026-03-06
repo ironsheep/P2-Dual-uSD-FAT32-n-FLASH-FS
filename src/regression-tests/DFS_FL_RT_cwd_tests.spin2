@@ -12,7 +12,7 @@
 ''   with CWD filtering, and CWD-aware file operations (open, exists, delete, rename).
 ''   Flash has no real directories -- CWD is emulated by prepending a prefix to filenames.
 ''
-''   30 tests across 8 groups
+''   34 tests across 9 groups
 ''
 '' =================================================================================================
 
@@ -68,6 +68,8 @@ fullPathDirA    BYTE    "dirA/alpha.dat", 0
 ' Test data
 cwdTestData     BYTE    "CWD-TEST-DATA", 0
 cwdRenameTarget BYTE    "renamed.dat", 0
+cwdMoveFile     BYTE    "moveme.dat", 0
+cwdEmptyStr     BYTE    0
 
 ' Absolute path test strings
 absPathDirATest BYTE    "/dirA/abstest.dat", 0
@@ -233,18 +235,39 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             utils.evaluateSingleValue(testValue, @"dirB file count", 1)
 
             ' ==============================================================
-            ' GROUP 5: openDirectory(DEV_FLASH) not supported (2 tests)
+            ' GROUP 5: openDirectory(DEV_FLASH) basic (3 tests)
             ' ==============================================================
-            utils.startTestGroup(@"openDirectory(DEV_FLASH) not supported")
+            utils.startTestGroup(@"openDirectory(DEV_FLASH) basic")
 
-            utils.startTest(@"openDirectory returns E_NOT_SUPPORTED")
+            utils.startTest(@"openDirectory(.) succeeds")
             dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-            status := dfs.openDirectory(dfs.DEV_FLASH, @cwdDirA)
-            utils.evaluateResultNegError(status, dfs.E_NOT_SUPPORTED)
+            handle := dfs.openDirectory(dfs.DEV_FLASH, @".")
+            utils.evaluateSubBool(handle >= 0, @"handle >= 0", true)
+            if handle >= 0
+              dfs.closeDirectoryHandle(handle)
 
-            utils.startTest(@"mount state intact after openDirectory error")
-            found := dfs.exists(dfs.DEV_FLASH, @rootFile1)
-            utils.evaluateBool(found, @"Flash still mounted", true)
+            utils.startTest(@"readDirectoryHandle enumerates root files")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            handle := dfs.openDirectory(dfs.DEV_FLASH, @".")
+            if handle >= 0
+              testValue := 0
+              repeat
+                if dfs.readDirectoryHandle(handle) == 0
+                  quit
+                testValue++
+              dfs.closeDirectoryHandle(handle)
+            ' Root has rootFile1 + dirA/ pseudo-entry + dirB/ pseudo-entry = at least 3
+            utils.evaluateSubBool(testValue >= 3, @"root has >= 3 entries", true)
+
+            utils.startTest(@"closeDirectoryHandle releases handle")
+            handle := dfs.openDirectory(dfs.DEV_FLASH, @".")
+            utils.evaluateSubBool(handle >= 0, @"first open ok", true)
+            if handle >= 0
+              dfs.closeDirectoryHandle(handle)
+            handle := dfs.openDirectory(dfs.DEV_FLASH, @".")
+            utils.evaluateSubBool(handle >= 0, @"reopen after close ok", true)
+            if handle >= 0
+              dfs.closeDirectoryHandle(handle)
 
             ' ==============================================================
             ' GROUP 6: CWD-aware file operations (4 tests)
@@ -298,7 +321,76 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             utils.evaluateBool(found, @"rootfile.dat NOT in dirA", false)
 
             ' ==============================================================
-            ' GROUP 7: Absolute path basics (5 tests)
+            ' GROUP 7: moveFile() on Flash (4 tests)
+            ' ==============================================================
+            utils.startTestGroup(@"moveFile() on Flash")
+
+            ' Re-setup: recreate dirA/alpha.dat (was renamed in group 6)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            handle := dfs.open(dfs.DEV_FLASH, @cwdFileAlpha, dfs.FILEMODE_WRITE)
+            if handle >= 0
+                dfs.wr_str(handle, @cwdTestData)
+                dfs.close(handle)
+
+            ' Create moveme.dat in dirA
+            handle := dfs.open(dfs.DEV_FLASH, @cwdMoveFile, dfs.FILEMODE_WRITE)
+            if handle >= 0
+                dfs.wr_str(handle, @cwdTestData)
+                dfs.close(handle)
+
+            utils.startTest(@"moveFile from dirA to dirB")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            status := dfs.moveFile(dfs.DEV_FLASH, @cwdMoveFile, @cwdDirB)
+            utils.evaluateSubValue(status, @"moveFile(moveme.dat, dirB)", dfs.SUCCESS)
+            ' Verify gone from dirA
+            found := dfs.exists(dfs.DEV_FLASH, @cwdMoveFile)
+            utils.evaluateSubBool(found, @"moveme.dat gone from dirA", false)
+            ' Verify present in dirB
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            found := dfs.exists(dfs.DEV_FLASH, @cwdMoveFile)
+            utils.evaluateSubBool(found, @"moveme.dat now in dirB", true)
+
+            utils.startTest(@"moveFile from dirB to root")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirB)
+            status := dfs.moveFile(dfs.DEV_FLASH, @cwdMoveFile, @cwdEmptyStr)
+            utils.evaluateSubValue(status, @"moveFile(moveme.dat, root)", dfs.SUCCESS)
+            ' Verify gone from dirB
+            found := dfs.exists(dfs.DEV_FLASH, @cwdMoveFile)
+            utils.evaluateSubBool(found, @"moveme.dat gone from dirB", false)
+            ' Verify present at root
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            found := dfs.exists(dfs.DEV_FLASH, @cwdMoveFile)
+            utils.evaluateSubBool(found, @"moveme.dat now at root", true)
+
+            utils.startTest(@"moveFile to same dir returns error")
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            ' moveme.dat is at root, move to root (empty dest)
+            status := dfs.moveFile(dfs.DEV_FLASH, @cwdMoveFile, @cwdEmptyStr)
+            utils.evaluateSingleValue(status, @"moveFile same dir", dfs.E_FLASH_FILE_EXISTS)
+
+            utils.startTest(@"moveFile preserves file content")
+            ' Move moveme.dat from root back to dirA, then read it
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+            status := dfs.moveFile(dfs.DEV_FLASH, @cwdMoveFile, @cwdDirA)
+            utils.evaluateSubValue(status, @"moveFile(moveme.dat, dirA)", dfs.SUCCESS)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdDirA)
+            handle := dfs.open(dfs.DEV_FLASH, @cwdMoveFile, dfs.FILEMODE_READ)
+            utils.evaluateSubHandle(handle, @"open moved file for read")
+            if handle >= 0
+                lenBytes := dfs.rd_str(handle, @filename, dfs.FL_FILENAME_SIZE)
+                utils.evaluateSubStringMatch(@filename, @"moved file content", @cwdTestData)
+                dfs.close(handle)
+
+            ' Cleanup: delete the moved file
+            dfs.deleteFile(dfs.DEV_FLASH, @cwdMoveFile)
+            dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
+
+            ' ==============================================================
+            ' GROUP 8: Absolute path basics (5 tests)
             ' ==============================================================
             utils.startTestGroup(@"Absolute path basics")
 
@@ -351,7 +443,7 @@ PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_F
             utils.evaluateSubBool(found, @"absfile.dat gone from dirB", false)
 
             ' ==============================================================
-            ' GROUP 8: Absolute path edge cases (5 tests)
+            ' GROUP 9: Absolute path edge cases (5 tests)
             ' ==============================================================
             utils.startTestGroup(@"Absolute path edge cases")
 

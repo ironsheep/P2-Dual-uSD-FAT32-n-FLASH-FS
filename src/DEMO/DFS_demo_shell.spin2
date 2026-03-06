@@ -117,6 +117,7 @@ CON { named constants - no magic numbers }
   LABEL_MAX_LENGTH      = 11                                    ' FAT32 volume label max
   TREE_NAME_BUF_SIZE    = 16                                    ' tree walk name buffer
   TREE_NAME_MAX_COPY    = 15                                    ' max bytes to copy into name buffer
+  FL_PATH_BUF_SIZE      = 128                                   ' Flash path buffer (matches FL_FILENAME_SIZE)
   MID_HEX_OFFSET        = 5                                     ' offset of hex digits in "MID:$XX"
   HEX_ALPHA_BASE        = 10                                    ' nibble value where A-F begins
   DECIMAL_BASE          = 10                                    ' decimal digit modulus
@@ -311,9 +312,12 @@ PUB show_prompt()
 
   if (activeDev == ACTIVE_FLASH)
     if (flashMounted)
-      serial.fstr0(@"FL:> \r")
+      if strsize(dfs.getFlashCwd()) == 0
+        serial.fstr0(@"flash:/> \r")
+      else
+        serial.fstr1(@"flash:/%s> \r", dfs.getFlashCwd())
     else
-      serial.fstr0(@"FL:(unmounted)> \r")
+      serial.fstr0(@"flash:(unmounted)> \r")
   else
     if (sdMounted)
       serial.fstr1(@"SD:%s> \r", @cwd)
@@ -327,9 +331,9 @@ PRI prompt_len() : len
 
   if (activeDev == ACTIVE_FLASH)
     if (flashMounted)
-      len := PROMPT_LEN_MOUNTED                                   ' "FL:> "
+      len := 9 + strsize(dfs.getFlashCwd())                       ' "flash:/" + cwd + "> "
     else
-      len := PROMPT_LEN_UNMOUNTED                                  ' "FL:(unmounted)> "
+      len := 20                                                    ' "flash:(unmounted)> "
   else
     if (sdMounted)
       len := PROMPT_LEN_MOUNTED + strsize(@cwd)                   ' "SD:" + cwd + "> "
@@ -393,7 +397,7 @@ PUB show_help()
     serial.fstr0(@"  mount [dev]   Mount device(s)       hexdump <f> Hex dump (hd)\r\n")
     serial.fstr0(@"  unmount [dev] Unmount (eject)       copy <s><d> Copy file (cp)\r\n")
     serial.fstr0(@"\r\n")
-    serial.fstr0(@"  Navigation (SD only)                del <f>     Delete (rm)\r\n")
+    serial.fstr0(@"  Navigation                          del <f>     Delete (rm)\r\n")
     serial.fstr0(@"  dir [path]  List files (ls)         ren <o> <n> Rename in place\r\n")
     serial.fstr0(@"  tree [path] Directory tree          move <f><d> Move file (mv)\r\n")
     serial.fstr0(@"  cd <path>   Change directory        touch <f>   Create file\r\n")
@@ -782,9 +786,9 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
       serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
 
 
-PRI do_flash_dir() | count, total_size, status
+PRI do_flash_dir() | count, dir_count, total_size, dh, p_entry, p_name, attrib, fsize
 
-' List Flash filesystem contents using directory() iteration
+' List Flash filesystem contents using handle-based iteration (shows subdirs too)
 
   if (check_flash_mount())
     serial.fstr0(@"\r\n Flash Files\r\n\r\n")
@@ -792,31 +796,48 @@ PRI do_flash_dir() | count, total_size, status
     serial.fstr0(@"  --------  --------------------------------\r\n")
 
     count := 0
+    dir_count := 0
     total_size := 0
-    flDirBlockId := 0
 
-    repeat
-      status := dfs.directory(dfs.DEV_FLASH, @flDirBlockId, @flDirName, @flDirSize)
-      if status <> dfs.SUCCESS
-        quit
-      if flDirName[0] == 0
-        quit
-      serial.fstr2(@"  %8d  %s\r\n", flDirSize, @flDirName)
-      count++
-      total_size += flDirSize
+    dh := dfs.openDirectory(dfs.DEV_FLASH, @".")
+    if dh >= 0
+      repeat
+        p_entry := dfs.readDirectoryHandle(dh)
+        if p_entry == 0
+          quit
+
+        p_name := dfs.fileName()
+        attrib := dfs.attributes()
+        fsize := dfs.fileSize()
+
+        if attrib & ATTR_DIRECTORY
+          serial.fstr1(@"     <DIR>  %s/\r\n", p_name)
+          dir_count++
+        else
+          serial.fstr2(@"  %8d  %s\r\n", fsize, p_name)
+          count++
+          total_size += fsize
+
+      dfs.closeDirectoryHandle(dh)
 
     serial.fstr0(@"\r\n")
+    if dir_count > 0
+      serial.fstr1(@"  %d dir(s)\r\n", dir_count)
     serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
 
 
-PUB do_cd() | p_path
+PUB do_cd() | p_path, status
 
-'' Change current directory (SD only)
+'' Change current directory
 
   if (ntokens <> 2)
     bad_syntax()
   elseif (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
+    if (check_flash_mount())
+      p_path := token(1)
+      status := dfs.changeDirectory(dfs.DEV_FLASH, p_path)
+      if status <> dfs.SUCCESS
+        serial.fstr1(@"Directory not found: %s\r\n", p_path)
   elseif (check_sd_mount())
     p_path := token(1)
 
@@ -832,26 +853,37 @@ PUB do_cd() | p_path
       serial.fstr1(@"Directory not found: %s\r\n", p_path)
 
 
-PUB do_pwd()
+PUB do_pwd() | p_cwd
 
-'' Print working directory (SD only)
+'' Print working directory
 
   if (ntokens <> 1)
     bad_syntax()
   elseif (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
+    if (check_flash_mount())
+      p_cwd := dfs.getFlashCwd()
+      if strsize(p_cwd) == 0
+        serial.fstr0(@"/\r\n")
+      else
+        serial.fstr1(@"/%s\r\n", p_cwd)
   elseif (check_sd_mount())
     serial.fstr1(@"%s\r\n", @cwd)
 
 
 PUB do_mkdir() | p_name, p_leaf, has_path, status
 
-'' Create new directory (SD only)
+'' Create new directory
 
   if (ntokens <> 2)
     bad_syntax()
   elseif (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
+    if (check_flash_mount())
+      p_name := token(1)
+      status := dfs.newDirectory(dfs.DEV_FLASH, p_name)
+      if status == dfs.SUCCESS
+        serial.fstr1(@"Flash directory '%s' - appears when files are added\r\n", p_name)
+      else
+        serial.fstr1(@"Failed to create: %s\r\n", p_name)
   elseif (check_sd_mount())
     p_name := token(1)
     p_leaf, has_path := navigate_to_parent(p_name)
@@ -1082,12 +1114,19 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, status
 
 PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, status
 
-'' Move file to directory, or rename (SD only)
+'' Move file to directory, or rename
 
   if (ntokens <> 3)
     bad_syntax()
   elseif (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Flash uses flat namespace. Use 'ren' to rename.\r\n")
+    if (check_flash_mount())
+      p_src := token(1)
+      p_dst := token(2)
+      status := dfs.rename(dfs.DEV_FLASH, p_src, p_dst)
+      if status == dfs.SUCCESS
+        serial.fstr2(@"Moved '%s' to '%s'\r\n", p_src, p_dst)
+      else
+        serial.fstr1(@"Failed to move: %s\r\n", p_src)
   elseif (check_sd_mount())
     p_src := token(1)
     p_dst := token(2)
@@ -1309,6 +1348,7 @@ PUB do_delete() | p_name, p_leaf, has_path, status
       status := dfs.deleteFile(dfs.DEV_FLASH, p_name)
       if (status == dfs.SUCCESS)
         serial.fstr1(@"Deleted: %s\r\n", p_name)
+        fl_cascade_cd_up()
       else
         serial.fstr1(@"Failed to delete: %s\r\n", p_name)
   elseif (check_sd_mount())
@@ -1328,12 +1368,23 @@ PUB do_delete() | p_name, p_leaf, has_path, status
 
 PUB do_rmdir() | p_name, p_leaf, has_path, dh, status, p_entry, is_empty
 
-'' Remove directory (SD only, must be empty)
+'' Remove directory (must be empty)
 
   if (ntokens <> 2)
     bad_syntax()
   elseif (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Flash uses flat namespace (no directories)\r\n")
+    if (check_flash_mount())
+      p_name := token(1)
+      dh := dfs.openDirectory(dfs.DEV_FLASH, p_name)
+      if dh < 0
+        serial.fstr1(@"Directory does not exist: %s\r\n", p_name)
+      else
+        p_entry := dfs.readDirectoryHandle(dh)
+        dfs.closeDirectoryHandle(dh)
+        if p_entry <> 0
+          serial.fstr1(@"Directory not empty: %s\r\n", p_name)
+        else
+          serial.fstr1(@"Directory does not exist: %s\r\n", p_name)
   elseif (check_sd_mount())
     p_name := token(1)
     p_leaf, has_path := navigate_to_parent(p_name)
@@ -1846,12 +1897,20 @@ PUB do_alias()
 
 PUB do_tree() | p_path
 
-'' Display directory tree (SD only)
+'' Display directory tree
 
   if (ntokens > 2)
     bad_syntax()
   elseif (activeDev == ACTIVE_FLASH)
-    serial.fstr0(@"Flash uses flat namespace. Use 'dir' for file list.\r\n")
+    if (check_flash_mount())
+      if (ntokens == 2)
+        p_path := token(1)
+      else
+        p_path := @"."
+
+      serial.fstr0(@"\r\n")
+      fl_tree_walk(p_path, 0)
+      serial.fstr0(@"\r\n")
   elseif (check_sd_mount())
     if (ntokens == 2)
       p_path := token(1)
@@ -2052,6 +2111,83 @@ PRI tree_skip_to(dh, p_past_name) | status, p_name, done
       p_name := dfs.fileName()
       if strcomp(p_name, p_past_name)
         done := true
+
+
+PRI fl_tree_walk(p_path, depth) | dh, p_entry, p_name, attrib, sub_path[32], name_len, p_cwd
+
+' Recursively display Flash directory tree.
+' Each recursion level uses its own directory handle with its own stored prefix,
+' so no CWD save/restore or tree_skip_to() is needed.
+
+  if depth > TREE_MAX_DEPTH
+    tree_indent(depth)
+    serial.fstr0(@"... (max depth)\r\n")
+  else
+    dh := dfs.openDirectory(dfs.DEV_FLASH, p_path)
+    if dh < 0
+      if depth == 0
+        serial.fstr1(@"Cannot open: %s\r\n", p_path)
+    else
+      if depth == 0
+        p_cwd := dfs.getFlashCwd()
+        if strsize(p_cwd) == 0
+          serial.fstr0(@"/\r\n")
+        else
+          serial.fstr1(@"/%s\r\n", p_cwd)
+
+      repeat
+        p_entry := dfs.readDirectoryHandle(dh)
+        if p_entry == 0
+          quit
+
+        p_name := dfs.fileName()
+        if byte[p_name] == 0
+          next
+
+        attrib := dfs.attributes()
+
+        if attrib & ATTR_DIRECTORY
+          tree_indent(depth + 1)
+          serial.fstr1(@"%s/\r\n", p_name)
+          ' Build path for recursive call
+          bytefill(@sub_path, 0, FL_PATH_BUF_SIZE)
+          if strcomp(p_path, @".") or strcomp(p_path, @"/")
+            bytemove(@sub_path, p_name, strsize(p_name))
+          else
+            name_len := strsize(p_path)
+            bytemove(@sub_path, p_path, name_len)
+            BYTE[@sub_path][name_len] := "/"
+            bytemove(@sub_path + name_len + 1, p_name, strsize(p_name))
+          fl_tree_walk(@sub_path, depth + 1)
+        else
+          tree_indent(depth + 1)
+          serial.fstr1(@"%s\r\n", p_name)
+
+      dfs.closeDirectoryHandle(dh)
+
+
+PRI fl_cascade_cd_up() | p_cwd, block_id, filename[32], fsize, has_files
+
+' After deleting a Flash file, cascade cd-up if the current directory is now empty.
+' Repeats until a non-empty directory is found or root is reached.
+
+  repeat
+    p_cwd := dfs.getFlashCwd()
+    if strsize(p_cwd) == 0
+      quit  ' Already at root
+
+    ' Check if current directory has any files
+    has_files := false
+    block_id := 0
+    dfs.directory(dfs.DEV_FLASH, @block_id, @filename, @fsize)
+    if BYTE[@filename] <> 0
+      has_files := true
+
+    if has_files
+      quit  ' Directory still has files
+
+    serial.fstr0(@"(directory empty, returning to parent)\r\n")
+    dfs.changeDirectory(dfs.DEV_FLASH, @"..")
 
 
 PRI show_sd_summary() | total_mb, size_gb
