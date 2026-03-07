@@ -9178,7 +9178,7 @@ PRI cmd(op,parm) : response | timeout
   timeout := getct() + clkfreq
   repeat
     response := sp_transfer(-1,8)                                                 '  read 1st byte of reply
-    if response <> $FF
+    if (response & $80) == 0                                                       '  valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       if op == 8 or op == 58                                                    '  read 32-bit reply for cmd8 and cmd58
         response := sp_transfer(-1,32)                                            '  (memory card interface condition and operation conditions register
       if op <> 17 and op <> 24 and op <> CMD18 and op <> CMD25 and op <> 55     '  keep cs asserted for sector read/write and application commands
@@ -9872,7 +9872,7 @@ PRI waitR1Response() : response | timeout, resp
   timeout := getct() + clkfreq / RESPONSE_TIMEOUT_DIV                                 ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                         ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       response := resp  ' Got response
       quit
     else
@@ -10220,11 +10220,11 @@ PRI readCSD(p_csd) : ok | timeout, idx
   sp_transfer(0, 32)                                                            '  argument = 0
   sp_transfer_8($AF)                                                            '  CRC (approximate)
 
-  ' Wait for response
+  ' Wait for R1 response
   timeout := getct() + clkfreq
   repeat
     ok := sp_transfer_8($FF)
-    if ok <> $FF
+    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
     if getct() - timeout > 0
       pinh(cs)
@@ -10278,11 +10278,11 @@ PRI readCID(p_cid) : ok | timeout, idx
   sp_transfer(0, 32)                                                            '  argument = 0
   sp_transfer_8($1B)                                                            '  CRC for CMD10
 
-  ' Wait for response
+  ' Wait for R1 response
   timeout := getct() + clkfreq
   repeat
     ok := sp_transfer_8($FF)
-    if ok <> $FF
+    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
     if getct() - timeout > 0
       pinh(cs)
@@ -10530,7 +10530,7 @@ PRI readSCR(p_scr) : ok | timeout, idx
   timeout := getct() + clkfreq
   repeat
     ok := sp_transfer_8($FF)
-    if ok <> $FF
+    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
     if getct() - timeout > 0
       debug("  [readSCR] CMD55 timeout - no response")
@@ -10560,7 +10560,7 @@ PRI readSCR(p_scr) : ok | timeout, idx
     timeout := getct() + clkfreq
     repeat
       ok := sp_transfer_8($FF)
-      if ok <> $FF
+      if (ok & $80) == 0                                                         ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
         quit
       if getct() - timeout > 0
         debug("  [readSCR] ACMD51 timeout - no response")
@@ -10629,7 +10629,7 @@ PRI readSDStatus(p_buf) : ok | timeout, idx
   timeout := getct() + clkfreq
   repeat
     ok := sp_transfer_8($FF)
-    if ok <> $FF
+    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
     if getct() - timeout > 0
       debug("  [readSDStatus] CMD55 timeout - no response")
@@ -10659,7 +10659,7 @@ PRI readSDStatus(p_buf) : ok | timeout, idx
     timeout := getct() + clkfreq
     repeat
       ok := sp_transfer_8($FF)
-      if ok <> $FF
+      if (ok & $80) == 0                                                         ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
         quit
       if getct() - timeout > 0
         debug("  [readSDStatus] ACMD13 timeout - no response")
@@ -10727,7 +10727,7 @@ PRI sendCMD6(arg, p_status) : ok | timeout, idx
   timeout := getct() + clkfreq
   repeat
     ok := sp_transfer_8($FF)
-    if ok <> $FF
+    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
     if getct() - timeout > 0
       debug("  [sendCMD6] Timeout waiting for R1")
