@@ -65,9 +65,9 @@ CON ' ---- Device Constants ----
   DEV_FLASH = 1       ' Onboard 16MB Flash chip
   DEV_BOTH  = 2       ' Both devices (for mount/unmount)
 
-  DFS_VERSION   = 100  ' Dual FS driver version 1.0.0 (major.minor.patch as integer)
-  SD_VERSION    = 300  ' SD sub-driver version (from micro_sd_fat32_fs V3.0)
-  FLASH_VERSION = 200  ' Flash sub-driver version (from flash_fs V2.0)
+  DFS_VERSION   = 1_00_00  ' Dual FS driver version 1.0.0
+  SD_VERSION    = 1_02_00  ' SD sub-driver version 1.2.0
+  FLASH_VERSION = 2_00_00  ' Flash sub-driver version 2.0.0
 
 CON ' ---- Flash File Open Mode Constants ----
     ' FLASH FILE OPEN MODE CONSTANTS
@@ -508,6 +508,9 @@ CON ' struct types - SD card register and FAT32 on-disk data structures
   STRUCT fsinfo_t(LONG leadSig, BYTE reserved1[480], LONG structSig, ...
     LONG freeClusters, LONG nextFreeHint, BYTE reserved2[12], LONG trailSig)
   '  FSInfo sector: 4+480+4+4+4+12+4 = 512 bytes
+
+DAT ' version string buffer
+  verBuf        BYTE    0[8]            ' "XX.YY.ZZ" + null (max 8 bytes)
 
 DAT ' singleton control - SHARED across all object instances
   ' =======================================================================
@@ -997,17 +1000,40 @@ PUB canMount(dev) : is_mountable
         is_mountable := false
 
 PUB version(dev) : ver
-'' Get driver version for a device as integer (e.g., 200 = v2.0.0).
-'' Use DFS_VERSION constant for unified driver version.
+'' Get driver version for a device as encoded integer.
+'' Format: major * 10000 + minor * 100 + patch (e.g., 1_02_00 = v1.2.0).
 ''
 '' @param dev - Target device (DEV_SD, DEV_FLASH, or DEV_BOTH)
-'' @returns ver - Version integer (major * 100 + minor * 10 + patch)
+'' @returns ver - Encoded version integer
 
   case dev
     DEV_SD:    ver := SD_VERSION
     DEV_FLASH: ver := FLASH_VERSION
     DEV_BOTH:  ver := DFS_VERSION
     other:     ver := DFS_VERSION
+
+PUB versionStr(dev) : p_str | ver, pos
+'' Get driver version as a formatted "X.Y.Z" string pointer.
+''
+'' @param dev - Target device (DEV_SD, DEV_FLASH, or DEV_BOTH)
+'' @returns p_str - Pointer to null-terminated version string (e.g., "1.2.0")
+
+  ver := version(dev)
+  pos := 0
+  pos := fmtVerPart(ver / 1_00_00, pos)
+  BYTE[@verBuf][pos++] := "."
+  pos := fmtVerPart(ver / 1_00 // 1_00, pos)
+  BYTE[@verBuf][pos++] := "."
+  pos := fmtVerPart(ver // 1_00, pos)
+  BYTE[@verBuf][pos] := 0
+  p_str := @verBuf
+
+PRI fmtVerPart(val, pos) : npos
+'' Format a version part (0-99) into verBuf at pos, no leading zeros.
+  if val >= 10
+    BYTE[@verBuf][pos++] := "0" + val / 10
+  BYTE[@verBuf][pos++] := "0" + val // 10
+  npos := pos
 
 PUB format(dev) : status
 '' Format one device (destructive!).
@@ -4061,19 +4087,27 @@ PRI do_unmount() : status
   debug("  [do_unmount] Card unmounted cleanly, mode=NONE")
   status := SUCCESS
 
-PRI do_open(name_ptr) : status | search_result
+PRI do_open(name_ptr) : status | search_result, p_leaf, saved_sec
 ' Internal open file operation - opens an existing file for reading/writing.
+' Accepts full paths (e.g., "/MYDIR/FILE.TXT") -- navigates to parent, operates on leaf.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
 ' @returns status - SUCCESS or error code
 ' @local search_result - Result from searchDirectory
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  do_close()
-  search_result := searchDirectory(name_ptr)
-  if search_result and (attributes() & %0001_1110 == 0)
-    status := SUCCESS
-  else
+  p_leaf, saved_sec := sd_resolve_path(name_ptr)
+  if p_leaf == 0
     status := E_FILE_NOT_FOUND
+  else
+    do_close()
+    search_result := searchDirectory(p_leaf)
+    if search_result and (attributes() & %0001_1110 == 0)
+      status := SUCCESS
+    else
+      status := E_FILE_NOT_FOUND
+  sd_restore_path(saved_sec)
 
 PRI do_close() : status
 ' Internal close file operation - close the file and update directory entry on disk.
@@ -4101,52 +4135,63 @@ PRI do_close() : status
 ' These functions use the multi-file handle system for independent file access
 ' ===========================================================================
 
-PRI do_open_read(p_path) : handle | start_cluster
+PRI do_open_read(p_path) : handle | start_cluster, p_leaf, saved_sec
 ' Open file for reading (V3 handle) - opens existing file and returns handle.
 ' Multiple files can be open simultaneously for reading.
 ' Each handle has its own position, enabling interleaved reads.
+' Accepts full paths (e.g., "/MYDIR/FILE.TXT") -- navigates to parent, operates on leaf.
 '
 ' @param p_path - Pointer to null-terminated path string
 ' @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
 ' @local start_cluster - Starting cluster of the file
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  ' Allocate a handle slot
-  handle := allocateHandle()
-  if handle < 0
-    debug("  [do_open_read] No free handles")
-
-  ' Search for the file
-  elseif not searchDirectory(p_path)
-    debug("  [do_open_read] File not found: ", zstr_(p_path))
-    freeHandle(handle)
+  p_leaf, saved_sec := sd_resolve_path(p_path)
+  if p_leaf == 0
     handle := E_FILE_NOT_FOUND
 
-  ' Verify it's a file, not a directory
-  elseif attributes() & DIR_ATTR_DIRECTORY                                                  ' Directory bit
-    debug("  [do_open_read] Path is a directory, not a file")
-    freeHandle(handle)
-    handle := E_NOT_A_FILE
-
-  ' Populate handle state from directory entry
+  ' Allocate a handle slot
   else
-    start_cluster := firstCluster()
-    h_start_clus[handle] := start_cluster
-    h_size[handle] := fileSize()
-    h_attr[handle] := attributes()
-    h_dir_sector[handle] := entry_address >> SECTOR_BITS
-    h_dir_offset[handle] := entry_address & SECTOR_MASK
-    h_cluster[handle] := start_cluster
-    h_sector[handle] := clus2sec(start_cluster)
-    h_position[handle] := 0
-    h_buf_sector[handle] := -1                                                    ' No sector cached yet
-    h_flags[handle] := HF_READ
+    handle := allocateHandle()
+    if handle < 0
+      debug("  [do_open_read] No free handles")
 
-    debug("  [do_open_read] Success: handle=", udec_(handle), " size=", udec_(h_size[handle]), " cluster=", udec_(start_cluster))
+    ' Search for the file
+    elseif not searchDirectory(p_leaf)
+      debug("  [do_open_read] File not found: ", zstr_(p_leaf))
+      freeHandle(handle)
+      handle := E_FILE_NOT_FOUND
 
-PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f_size, cluster_count
+    ' Verify it's a file, not a directory
+    elseif attributes() & DIR_ATTR_DIRECTORY                                                ' Directory bit
+      debug("  [do_open_read] Path is a directory, not a file")
+      freeHandle(handle)
+      handle := E_NOT_A_FILE
+
+    ' Populate handle state from directory entry
+    else
+      start_cluster := firstCluster()
+      h_start_clus[handle] := start_cluster
+      h_size[handle] := fileSize()
+      h_attr[handle] := attributes()
+      h_dir_sector[handle] := entry_address >> SECTOR_BITS
+      h_dir_offset[handle] := entry_address & SECTOR_MASK
+      h_cluster[handle] := start_cluster
+      h_sector[handle] := clus2sec(start_cluster)
+      h_position[handle] := 0
+      h_buf_sector[handle] := -1                                                  ' No sector cached yet
+      h_flags[handle] := HF_READ
+
+      debug("  [do_open_read] Success: handle=", udec_(handle), " size=", udec_(h_size[handle]), " cluster=", udec_(start_cluster))
+
+  sd_restore_path(saved_sec)
+
+PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f_size, cluster_count, p_leaf, saved_sec
 ' Open file for writing/append (V3 handle) - opens existing file for appending.
 ' Enforces single-writer policy: only one write handle per file allowed.
 ' Position is set to end of file for appending.
+' Accepts full paths (e.g., "/MYDIR/FILE.TXT") -- navigates to parent, operates on leaf.
 '
 ' @param p_path - Pointer to null-terminated path string
 ' @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
@@ -4155,145 +4200,164 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
 ' @local fat_addr - Address of FAT entry
 ' @local f_size - Size of file in bytes
 ' @local cluster_count - Number of clusters to walk
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  ' Allocate a handle slot
-  handle := allocateHandle()
-  if handle < 0
-    debug("  [do_open_write] No free handles")
-
-  ' Search for the file
-  elseif not searchDirectory(p_path)
-    debug("  [do_open_write] File not found: ", zstr_(p_path))
-    freeHandle(handle)
+  p_leaf, saved_sec := sd_resolve_path(p_path)
+  if p_leaf == 0
     handle := E_FILE_NOT_FOUND
 
-  ' Verify it's a file, not a directory
-  elseif attributes() & DIR_ATTR_DIRECTORY                                                  ' Directory bit
-    debug("  [do_open_write] Path is a directory, not a file")
-    freeHandle(handle)
-    handle := E_NOT_A_FILE
-
-  ' Check single-writer policy
-  elseif isFileOpenForWrite(entry_address >> SECTOR_BITS, entry_address & SECTOR_MASK)
-    debug("  [do_open_write] File already open for write")
-    freeHandle(handle)
-    handle := E_FILE_ALREADY_OPEN
-
-  ' Populate handle state from directory entry
   else
-    start_cluster := firstCluster()
-    f_size := fileSize()
-    h_start_clus[handle] := start_cluster
-    h_size[handle] := f_size
-    h_attr[handle] := attributes()
-    h_dir_sector[handle] := entry_address >> SECTOR_BITS
-    h_dir_offset[handle] := entry_address & SECTOR_MASK
+    ' Allocate a handle slot
+    handle := allocateHandle()
+    if handle < 0
+      debug("  [do_open_write] No free handles")
 
-    ' Position at end of file for append mode
-    ' Walk FAT chain to find the last cluster
-    h_position[handle] := f_size
-    if f_size > 0
-      ' Calculate which cluster contains the last byte
-      cluster_count := (f_size - 1) / (sec_per_clus << SECTOR_BITS)
-      current_cluster := start_cluster
-      repeat cluster_count
-        fat_addr := readFat(current_cluster)
-        current_cluster := long[fat_addr]
-        if current_cluster +>= $0FFF_FFF8                                         ' End of chain - shouldn't happen
-          quit
-      h_cluster[handle] := current_cluster
-      h_sector[handle] := clus2sec(current_cluster) + ((f_size - 1) >> SECTOR_BITS) & (sec_per_clus - 1)
+    ' Search for the file
+    elseif not searchDirectory(p_leaf)
+      debug("  [do_open_write] File not found: ", zstr_(p_leaf))
+      freeHandle(handle)
+      handle := E_FILE_NOT_FOUND
+
+    ' Verify it's a file, not a directory
+    elseif attributes() & DIR_ATTR_DIRECTORY                                                ' Directory bit
+      debug("  [do_open_write] Path is a directory, not a file")
+      freeHandle(handle)
+      handle := E_NOT_A_FILE
+
+    ' Check single-writer policy
+    elseif isFileOpenForWrite(entry_address >> SECTOR_BITS, entry_address & SECTOR_MASK)
+      debug("  [do_open_write] File already open for write")
+      freeHandle(handle)
+      handle := E_FILE_ALREADY_OPEN
+
+    ' Populate handle state from directory entry
     else
-      ' Empty file - position at start
-      h_cluster[handle] := start_cluster
-      h_sector[handle] := clus2sec(start_cluster)
+      start_cluster := firstCluster()
+      f_size := fileSize()
+      h_start_clus[handle] := start_cluster
+      h_size[handle] := f_size
+      h_attr[handle] := attributes()
+      h_dir_sector[handle] := entry_address >> SECTOR_BITS
+      h_dir_offset[handle] := entry_address & SECTOR_MASK
 
-    h_buf_sector[handle] := -1                                                    ' No sector cached yet
-    h_flags[handle] := HF_WRITE
+      ' Position at end of file for append mode
+      ' Walk FAT chain to find the last cluster
+      h_position[handle] := f_size
+      if f_size > 0
+        ' Calculate which cluster contains the last byte
+        cluster_count := (f_size - 1) / (sec_per_clus << SECTOR_BITS)
+        current_cluster := start_cluster
+        repeat cluster_count
+          fat_addr := readFat(current_cluster)
+          current_cluster := long[fat_addr]
+          if current_cluster +>= $0FFF_FFF8                                       ' End of chain - shouldn't happen
+            quit
+        h_cluster[handle] := current_cluster
+        h_sector[handle] := clus2sec(current_cluster) + ((f_size - 1) >> SECTOR_BITS) & (sec_per_clus - 1)
+      else
+        ' Empty file - position at start
+        h_cluster[handle] := start_cluster
+        h_sector[handle] := clus2sec(start_cluster)
 
-    debug("  [do_open_write] Success: handle=", udec_(handle), " size=", udec_(f_size), " pos=", udec_(h_position[handle]))
+      h_buf_sector[handle] := -1                                                  ' No sector cached yet
+      h_flags[handle] := HF_WRITE
 
-PRI do_create(p_path) : handle | temp, first_cluster
+      debug("  [do_open_write] Success: handle=", udec_(handle), " size=", udec_(f_size), " pos=", udec_(h_position[handle]))
+
+  sd_restore_path(saved_sec)
+
+PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
 ' Create new file (V3 handle) - creates empty file and opens for writing.
 ' If file already exists, returns error.
+' Accepts full paths (e.g., "/MYDIR/FILE.TXT") -- navigates to parent, operates on leaf.
 '
 ' @param p_path - Pointer to null-terminated path string
 ' @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
 ' @local temp - Temporary calculation variable
 ' @local first_cluster - First cluster allocated for the new file
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  ' Allocate a handle slot
-  handle := allocateHandle()
-  if handle < 0
-    debug("  [do_create] No free handles")
-
-  ' Check if file already exists
-  elseif searchDirectory(p_path)
-    debug("  [do_create] File already exists: ", zstr_(p_path))
-    freeHandle(handle)
-    handle := E_FILE_EXISTS
-
-  ' Guard: entry_address 0 means searchDirectory never found a valid directory
-  elseif entry_address == 0
-    debug("  [do_create] entry_address=0 -- path not valid, aborting")
-    freeHandle(handle)
+  p_leaf, saved_sec := sd_resolve_path(p_path)
+  if p_leaf == 0
     handle := E_FILE_NOT_FOUND
 
-  ' searchDirectory() sets entry_address to first free directory entry
-  ' Check if we need to allocate a new cluster for the directory
+  ' Allocate a handle slot
   else
-    temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
-    if temp == (sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE)
-      if dir_buf[480] == $00                                                      ' End of directory
-        temp := allocateCluster(byte2clus(entry_address))
-        if temp < 0
-          debug("  [do_create] Failed to allocate dir cluster")
-          freeHandle(handle)
-          handle := E_DISK_FULL
-        else
-          clearCluster(temp)
+    handle := allocateHandle()
+    if handle < 0
+      debug("  [do_create] No free handles")
 
-    ' Allocate first cluster for the new file
-    first_cluster := allocateCluster(0)
-    if first_cluster < 0
-      debug("  [do_create] Failed to allocate file cluster")
+    ' Check if file already exists
+    elseif searchDirectory(p_leaf)
+      debug("  [do_create] File already exists: ", zstr_(p_leaf))
       freeHandle(handle)
-      handle := E_DISK_FULL
+      handle := E_FILE_EXISTS
 
-    ' Set up directory entry in entry_buffer
+    ' Guard: entry_address 0 means searchDirectory never found a valid directory
+    elseif entry_address == 0
+      debug("  [do_create] entry_address=0 -- path not valid, aborting")
+      freeHandle(handle)
+      handle := E_FILE_NOT_FOUND
+
+    ' searchDirectory() sets entry_address to first free directory entry
+    ' Check if we need to allocate a new cluster for the directory
     else
-      dirEntSetAttr(@entry_buffer, $20)                                              ' Archive attribute
-      dirEntSetCreateStamp(@entry_buffer, date_stamp)
-      dirEntSetStartClus(@entry_buffer, first_cluster)
-      dirEntSetModifyStamp(@entry_buffer, date_stamp)
-      dirEntSetFileSize(@entry_buffer, 0)
+      temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
+      if temp == (sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE)
+        if dir_buf[480] == $00                                                    ' End of directory
+          temp := allocateCluster(byte2clus(entry_address))
+          if temp < 0
+            debug("  [do_create] Failed to allocate dir cluster")
+            freeHandle(handle)
+            handle := E_DISK_FULL
+          else
+            clearCluster(temp)
 
-      ' Write directory entry to disk
-      if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-        debug("  [do_create] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+      ' Allocate first cluster for the new file
+      first_cluster := allocateCluster(0)
+      if first_cluster < 0
+        debug("  [do_create] Failed to allocate file cluster")
         freeHandle(handle)
-        handle := E_IO_ERROR
+        handle := E_DISK_FULL
+
+      ' Set up directory entry in entry_buffer
       else
-        bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-        if not writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
-          debug("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+        dirEntSetAttr(@entry_buffer, $20)                                            ' Archive attribute
+        dirEntSetCreateStamp(@entry_buffer, date_stamp)
+        dirEntSetStartClus(@entry_buffer, first_cluster)
+        dirEntSetModifyStamp(@entry_buffer, date_stamp)
+        dirEntSetFileSize(@entry_buffer, 0)
+
+        ' Write directory entry to disk
+        if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+          debug("  [do_create] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
           freeHandle(handle)
           handle := E_IO_ERROR
-
-        ' Populate handle state
         else
-          h_start_clus[handle] := first_cluster
-          h_size[handle] := 0
-          h_attr[handle] := $20
-          h_dir_sector[handle] := entry_address >> SECTOR_BITS
-          h_dir_offset[handle] := entry_address & SECTOR_MASK
-          h_cluster[handle] := first_cluster
-          h_sector[handle] := clus2sec(first_cluster)
-          h_position[handle] := 0
-          h_buf_sector[handle] := -1                                                    ' No sector cached yet
-          h_flags[handle] := HF_WRITE
+          bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
+          if not writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
+            debug("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+            freeHandle(handle)
+            handle := E_IO_ERROR
 
-          debug("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
+          ' Populate handle state
+          else
+            h_start_clus[handle] := first_cluster
+            h_size[handle] := 0
+            h_attr[handle] := $20
+            h_dir_sector[handle] := entry_address >> SECTOR_BITS
+            h_dir_offset[handle] := entry_address & SECTOR_MASK
+            h_cluster[handle] := first_cluster
+            h_sector[handle] := clus2sec(first_cluster)
+            h_position[handle] := 0
+            h_buf_sector[handle] := -1                                                  ' No sector cached yet
+            h_flags[handle] := HF_WRITE
+
+            debug("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
+
+  sd_restore_path(saved_sec)
 
 PRI do_close_h(handle) : status | p_buf
 ' Close file handle (V3) - closes handle, flushing writes and updating directory.
@@ -4692,43 +4756,51 @@ PRI do_sync_all() : status | idx
 ' A directory handle reuses per-handle fields with HF_DIR flag.
 ' ===========================================================================
 
-PRI do_open_dir(p_path) : handle | start_cluster
+PRI do_open_dir(p_path) : handle | start_cluster, p_leaf, saved_sec
 ' Open directory for enumeration (V3 handle) - returns handle for iterating entries.
 ' Directory handles share the existing handle pool with file handles.
+' Accepts full paths (e.g., "/MYDIR/SUBDIR") -- navigates to parent, opens leaf dir.
 '
 ' @param p_path - Pointer to null-terminated path string ("." or "" for CWD)
 ' @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
 ' @local start_cluster - Starting cluster of the directory
+' @local p_leaf - Pointer to leaf name after path resolution
+' @local saved_sec - Saved directory sector for path restore
+
+  p_leaf, saved_sec := sd_resolve_path(p_path)
 
   ' Allocate a handle slot
   handle := allocateHandle()
   if handle < 0
     debug("  [do_open_dir] No free handles")
+  elseif p_leaf == 0
+    freeHandle(handle)
+    handle := E_FILE_NOT_FOUND
   else
     ' Determine which directory to enumerate
-    if byte[p_path] == 0 or (byte[p_path] == "." and byte[p_path + 1] == 0)
+    if byte[p_leaf] == 0 or (byte[p_leaf] == "." and byte[p_leaf + 1] == 0)
       ' Empty string or "." -- enumerate calling cog's CWD
       n_sec := cog_dir_sec[pb_caller]
       start_cluster := sec2clus(n_sec)
-    elseif byte[p_path] == "/" and byte[p_path + 1] == 0
+    elseif byte[p_leaf] == "/" and byte[p_leaf + 1] == 0
       ' "/" -- enumerate root directory
       n_sec := root_sec
       start_cluster := sec2clus(root_sec)
     else
       ' Search for the named directory
-      if not searchDirectory(p_path)
-        debug("  [do_open_dir] Directory not found: ", zstr_(p_path))
+      if not searchDirectory(p_leaf)
+        debug("  [do_open_dir] Directory not found: ", zstr_(p_leaf))
         freeHandle(handle)
         handle := E_FILE_NOT_FOUND
       ' Verify it's a directory
       elseif not (attributes() & DIR_ATTR_DIRECTORY)
-        debug("  [do_open_dir] Not a directory: ", zstr_(p_path))
+        debug("  [do_open_dir] Not a directory: ", zstr_(p_leaf))
         freeHandle(handle)
         handle := E_NOT_A_DIR
       else
         start_cluster := firstCluster()
         if start_cluster < 2
-          start_cluster := 2                                                        ' Root directory
+          start_cluster := 2                                                      ' Root directory
 
     ' Populate handle state (only if handle is still valid)
     if handle >= 0
@@ -4736,11 +4808,13 @@ PRI do_open_dir(p_path) : handle | start_cluster
       h_start_clus[handle] := start_cluster
       h_cluster[handle] := start_cluster
       h_sector[handle] := clus2sec(start_cluster)
-      h_position[handle] := 0                                                      ' Entry index
-      h_size[handle] := 0                                                          ' Not used for directories
-      h_buf_sector[handle] := -1                                                   ' No sector cached yet
+      h_position[handle] := 0                                                    ' Entry index
+      h_size[handle] := 0                                                        ' Not used for directories
+      h_buf_sector[handle] := -1                                                 ' No sector cached yet
 
       debug("  [do_open_dir] Success: handle=", udec_(handle), " cluster=", udec_(start_cluster))
+
+  sd_restore_path(saved_sec)
 
 PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_addr, next_cluster
 ' Read next directory entry from handle (V3) - skips deleted and LFN entries.
@@ -4877,85 +4951,94 @@ PRI do_newfile(name_ptr) : status | temp
     flags |= F_NEWDIR
     status := SUCCESS
 
-PRI do_newdir(name_ptr) : status | temp
+PRI do_newdir(name_ptr) : status | temp, p_leaf, saved_sec
 ' Internal new directory operation - creates a new directory in current directory.
+' Accepts full paths (e.g., "/MYDIR/NEWDIR") -- navigates to parent, creates leaf dir.
 '
 ' @param name_ptr - Pointer to null-terminated directory name string
 ' @returns status - SUCCESS or error code
 ' @local temp - Temporary calculation variable for cluster allocation
+' @local p_leaf - Pointer to leaf name after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  do_close()
-  if searchDirectory(name_ptr)
-    status := E_FILE_EXISTS
-
-  ' Guard: entry_address 0 means searchDirectory never found a valid directory
-  ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
-  elseif entry_address == 0
-    debug("  [do_newdir] entry_address=0 -- path not valid, aborting")
+  p_leaf, saved_sec := sd_resolve_path(name_ptr)
+  if p_leaf == 0
     status := E_FILE_NOT_FOUND
-
   else
-    temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
-    if temp == sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE
-      if dir_buf[480] == $00                                                      ' Check dir buffer after searchDirectory
-        temp := allocateCluster(byte2clus(entry_address))
-        clearCluster(temp)
+    do_close()
+    if searchDirectory(p_leaf)
+      status := E_FILE_EXISTS
 
-    temp := allocateCluster(0)
-    dirEntSetAttr(@entry_buffer, $10)                                              ' Directory attribute
-    dirEntSetCreateStamp(@entry_buffer, date_stamp)
-    dirEntSetStartClus(@entry_buffer, temp)
-    dirEntSetModifyStamp(@entry_buffer, date_stamp)
-    dirEntSetFileSize(@entry_buffer, 0)
+    ' Guard: entry_address 0 means searchDirectory never found a valid directory
+    ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
+    elseif entry_address == 0
+      debug("  [do_newdir] entry_address=0 -- path not valid, aborting")
+      status := E_FILE_NOT_FOUND
 
-    if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-      debug("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
-      status := E_IO_ERROR
     else
-      debug("  [do_newdir] Before write: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
-      bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-      debug("  [do_newdir] After copy: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
-      debug("  [do_newdir] entry_buffer=[", lstr_(@entry_buffer, 11), "]")
-      writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
-      ' Verify write by reading back
-      dir_sec_in_buf := -1                                                          ' Force re-read
+      temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
+      if temp == sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE
+        if dir_buf[480] == $00                                                    ' Check dir buffer after searchDirectory
+          temp := allocateCluster(byte2clus(entry_address))
+          clearCluster(temp)
+
+      temp := allocateCluster(0)
+      dirEntSetAttr(@entry_buffer, $10)                                            ' Directory attribute
+      dirEntSetCreateStamp(@entry_buffer, date_stamp)
+      dirEntSetStartClus(@entry_buffer, temp)
+      dirEntSetModifyStamp(@entry_buffer, date_stamp)
+      dirEntSetFileSize(@entry_buffer, 0)
+
       if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-        debug("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+        debug("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+        status := E_IO_ERROR
       else
-        debug("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+        debug("  [do_newdir] Before write: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+        bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
+        debug("  [do_newdir] After copy: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+        debug("  [do_newdir] entry_buffer=[", lstr_(@entry_buffer, 11), "]")
+        writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
+        ' Verify write by reading back
+        dir_sec_in_buf := -1                                                        ' Force re-read
+        if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
+          debug("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+        else
+          debug("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
 
-      bytefill(@dir_buf, 0, SECTOR_SIZE)
-      bytemove(@dir_buf[0], string(".          "), FILENAME_83_LEN)
-      byte[@dir_buf + DIR_ATTR_OFFSET] := DIR_ATTR_DIRECTORY
-      long[@dir_buf + DIR_CRT_TIME_OFFSET] := date_stamp
-      word[@dir_buf + DIR_CLUS_HI_OFFSET] := temp >> 16
-      long[@dir_buf + DIR_WRT_TIME_OFFSET] := date_stamp
-      word[@dir_buf + DIR_CLUS_LO_OFFSET] := temp & $FFFF
+        bytefill(@dir_buf, 0, SECTOR_SIZE)
+        bytemove(@dir_buf[0], string(".          "), FILENAME_83_LEN)
+        byte[@dir_buf + DIR_ATTR_OFFSET] := DIR_ATTR_DIRECTORY
+        long[@dir_buf + DIR_CRT_TIME_OFFSET] := date_stamp
+        word[@dir_buf + DIR_CLUS_HI_OFFSET] := temp >> 16
+        long[@dir_buf + DIR_WRT_TIME_OFFSET] := date_stamp
+        word[@dir_buf + DIR_CLUS_LO_OFFSET] := temp & $FFFF
 
-      temp := byte2clus(entry_address)
-      if temp == 2
-        temp := 0
-      bytemove(@dir_buf[DIR_ENTRY_SIZE], string("..         "), FILENAME_83_LEN)
-      byte[@dir_buf + DIR_ENTRY_SIZE + DIR_ATTR_OFFSET] := DIR_ATTR_DIRECTORY
-      long[@dir_buf + DIR_ENTRY_SIZE + DIR_CRT_TIME_OFFSET] := date_stamp
-      word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_HI_OFFSET] := temp >> 16
-      long[@dir_buf + DIR_ENTRY_SIZE + DIR_WRT_TIME_OFFSET] := date_stamp
-      word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_LO_OFFSET] := temp & $FFFF
+        temp := byte2clus(entry_address)
+        if temp == 2
+          temp := 0
+        bytemove(@dir_buf[DIR_ENTRY_SIZE], string("..         "), FILENAME_83_LEN)
+        byte[@dir_buf + DIR_ENTRY_SIZE + DIR_ATTR_OFFSET] := DIR_ATTR_DIRECTORY
+        long[@dir_buf + DIR_ENTRY_SIZE + DIR_CRT_TIME_OFFSET] := date_stamp
+        word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_HI_OFFSET] := temp >> 16
+        long[@dir_buf + DIR_ENTRY_SIZE + DIR_WRT_TIME_OFFSET] := date_stamp
+        word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_LO_OFFSET] := temp & $FFFF
 
-      n_sec := clus2sec(firstCluster())
-      debug("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
-      writeSector(n_sec, BUF_DIR)
-      dir_sec_in_buf := n_sec
-      ' Verify the ./.. write
-      dir_sec_in_buf := -1
-      if readSector(n_sec, BUF_DIR) < 0
-        debug("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
-      else
-        debug("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
-      status := SUCCESS
+        n_sec := clus2sec(firstCluster())
+        debug("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
+        writeSector(n_sec, BUF_DIR)
+        dir_sec_in_buf := n_sec
+        ' Verify the ./.. write
+        dir_sec_in_buf := -1
+        if readSector(n_sec, BUF_DIR) < 0
+          debug("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
+        else
+          debug("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
+        status := SUCCESS
+  sd_restore_path(saved_sec)
 
-PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count
+PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count, p_leaf, saved_sec
 ' Internal delete operation - deletes a file and frees its clusters.
+' Accepts full paths (e.g., "/MYDIR/FILE.TXT") -- navigates to parent, operates on leaf.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
 ' @returns status - SUCCESS or error code
@@ -4963,42 +5046,50 @@ PRI do_delete(name_ptr) : status | cluster, p_cluster, fat_sector, loop_count
 ' @local p_cluster - Previous cluster in chain
 ' @local fat_sector - FAT sector containing current cluster
 ' @local loop_count - Safety counter to prevent infinite loops
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  do_close()
-  if searchDirectory(name_ptr) == 0
+  p_leaf, saved_sec := sd_resolve_path(name_ptr)
+  if p_leaf == 0
     status := E_FILE_NOT_FOUND
-  elseif attributes() & %0000_1111                                                   ' Check read-only, hidden, system, volume label
-    status := E_FILE_NOT_FOUND  ' Protected file (but allow directories)
-
   else
-    dir_buf[entry_address & SECTOR_MASK] := $E5                                           ' Mark entry as deleted in dir buffer
-    writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
+    do_close()
+    if searchDirectory(p_leaf) == 0
+      status := E_FILE_NOT_FOUND
+    elseif attributes() & %0000_1111                                                 ' Check read-only, hidden, system, volume label
+      status := E_FILE_NOT_FOUND  ' Protected file (but allow directories)
 
-    ' Only deallocate clusters if file has data (cluster >= 2)
-    p_cluster := firstCluster()
-    loop_count := 0
-    if p_cluster >= 2
-      repeat
-        cluster := long[readFAT(p_cluster)]
-        long[@fat_buf + ((p_cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)] := 0                            ' Zero the FAT entry in fat buffer
-        if fsi_free_count <> $FFFF_FFFF                                           ' Track free count incrementally
-          fsi_free_count++                                                        '  (avoids slow FAT scan on unmount)
-        if (cluster >> 7) - (p_cluster >> 7) <> 0                                 ' Different FAT sector? (explicit precedence)
-          fat_sector := p_cluster >> 7
-          writeSector(fat_sector + fat_sec, BUF_FAT)
-          writeSector(fat_sector + fat2_sec, BUF_FAT)
-        p_cluster := cluster
-        loop_count++
-        if loop_count > 100000                                                    ' Safety limit - prevent infinite loop
-          status := E_IO_ERROR
-          quit
-      until cluster +>= $0FFF_FFF8
-    if status <> E_IO_ERROR
-      status := SUCCESS
+    else
+      dir_buf[entry_address & SECTOR_MASK] := $E5                                         ' Mark entry as deleted in dir buffer
+      writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
 
-PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cluster_count, loop_count
+      ' Only deallocate clusters if file has data (cluster >= 2)
+      p_cluster := firstCluster()
+      loop_count := 0
+      if p_cluster >= 2
+        repeat
+          cluster := long[readFAT(p_cluster)]
+          long[@fat_buf + ((p_cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)] := 0                          ' Zero the FAT entry in fat buffer
+          if fsi_free_count <> $FFFF_FFFF                                         ' Track free count incrementally
+            fsi_free_count++                                                      '  (avoids slow FAT scan on unmount)
+          if (cluster >> 7) - (p_cluster >> 7) <> 0                               ' Different FAT sector? (explicit precedence)
+            fat_sector := p_cluster >> 7
+            writeSector(fat_sector + fat_sec, BUF_FAT)
+            writeSector(fat_sector + fat2_sec, BUF_FAT)
+          p_cluster := cluster
+          loop_count++
+          if loop_count > 100000                                                  ' Safety limit - prevent infinite loop
+            status := E_IO_ERROR
+            quit
+        until cluster +>= $0FFF_FFF8
+      if status <> E_IO_ERROR
+        status := SUCCESS
+  sd_restore_path(saved_sec)
+
+PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cluster_count, loop_count, p_leaf, saved_sec
 ' Calculate unused (slack) bytes in last cluster of an SD file.
 ' Walks the FAT chain to count allocated clusters, then subtracts actual file size.
+' Accepts full paths (e.g., "/MYDIR/FILE.TXT") -- navigates to parent, operates on leaf.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
 ' @returns unused_bytes - Allocated space minus file size, or 0 on error
@@ -5007,8 +5098,14 @@ PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cl
 ' @local cluster - Current cluster number
 ' @local cluster_count - Number of clusters traversed
 ' @local loop_count - Safety counter for chain traversal loops
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  if not searchDirectory(name_ptr)
+  p_leaf, saved_sec := sd_resolve_path(name_ptr)
+  if p_leaf == 0
+    unused_bytes := 0
+    status := E_FILE_NOT_FOUND
+  elseif not searchDirectory(p_leaf)
     unused_bytes := 0
     status := E_FILE_NOT_FOUND
 
@@ -5038,6 +5135,7 @@ PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cl
       if status <> E_IO_ERROR
         unused_bytes := (cluster_count * sec_per_clus * SECTOR_SIZE) - fsize
         status := SUCCESS
+  sd_restore_path(saved_sec)
 
 PRI do_chdir(name_ptr) : status
 ' Internal change directory operation - changes current directory.
@@ -5056,6 +5154,79 @@ PRI do_chdir(name_ptr) : status
   else
     debug("  [do_chdir] searchDirectory FAILED for: ", zstr(name_ptr), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
     status := E_FILE_NOT_FOUND
+
+PRI sd_resolve_path(p_path) : p_leaf, saved_sec | i, last_slash, status, seg_start
+' Split path at "/" separators, navigate to parent directory, return leaf name.
+' Caller MUST call sd_restore_path(saved_sec) after the operation to restore CWD.
+'
+' Examples:
+'   "FILE.TXT"           -> no navigation, returns ^"FILE.TXT", saved_sec = current
+'   "/MYDIR/FILE.TXT"    -> cd to /MYDIR, returns ^"FILE.TXT"
+'   "SUB/FILE.TXT"       -> cd to SUB (relative), returns ^"FILE.TXT"
+'   "/A/B/FILE.TXT"      -> cd to /A/B, returns ^"FILE.TXT"
+'
+' @param p_path - Pointer to null-terminated path string (may be modified temporarily)
+' @returns p_leaf - Pointer to leaf filename within p_path, or 0 on navigation error
+' @returns saved_sec - Original cog_dir_sec value to pass to sd_restore_path()
+
+  saved_sec := cog_dir_sec[pb_caller]
+
+  ' Find last "/" in path
+  last_slash := -1
+  i := 0
+  repeat while BYTE[p_path + i] <> 0
+    if BYTE[p_path + i] == "/"
+      last_slash := i
+    i++
+
+  ' No "/" -- leaf is the whole path, no navigation needed
+  if last_slash < 0
+    p_leaf := p_path
+  else
+    ' Leaf starts after last "/"
+    p_leaf := p_path + last_slash + 1
+
+    ' Navigate through parent path components
+    i := 0
+
+    ' Handle leading "/" -- start from root
+    if BYTE[p_path] == "/"
+      cog_dir_sec[pb_caller] := root_sec
+      i := 1
+
+    ' Walk each segment between "/" separators (up to last_slash)
+    seg_start := i
+    repeat while i < last_slash
+      if BYTE[p_path + i] == "/"
+        ' Null-terminate this segment temporarily
+        BYTE[p_path + i] := 0
+        status := do_chdir(p_path + seg_start)
+        BYTE[p_path + i] := "/"                                                ' Restore
+        if status <> SUCCESS
+          cog_dir_sec[pb_caller] := saved_sec
+          p_leaf := 0
+          return
+        seg_start := i + 1
+      i++
+
+    ' Navigate last parent segment (from seg_start to last_slash)
+    if seg_start < last_slash
+      BYTE[p_path + last_slash] := 0
+      status := do_chdir(p_path + seg_start)
+      BYTE[p_path + last_slash] := "/"                                          ' Restore
+      if status <> SUCCESS
+        cog_dir_sec[pb_caller] := saved_sec
+        p_leaf := 0
+
+
+PRI sd_restore_path(saved_sec)
+' Restore per-cog directory sector after sd_resolve_path() operation.
+' No SPI operations -- just restores the saved sector number.
+'
+' @param saved_sec - Value returned by sd_resolve_path()
+
+  cog_dir_sec[pb_caller] := saved_sec
+
 
 PRI do_freespace() : free_sectors | cluster
 ' Internal free space calculation - returns free sectors on card.
@@ -5087,11 +5258,12 @@ PRI do_sync()
       writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
     flags := flags & !F_NEWDIR
 
-PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entry[8], p_buf
+PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entry[8], p_buf, p_leaf, saved_sec
 ' Internal rename operation - renames file/directory by updating directory entry.
 ' Finds old file, saves entry, parses new_name into 8.3 format, writes back.
+' Accepts full paths for old_name (e.g., "/MYDIR/FILE.TXT"). New name uses leaf only.
 '
-' @param old_name - Pointer to current filename string
+' @param old_name - Pointer to current filename string (may include path)
 ' @param new_name - Pointer to new filename string
 ' @returns status - SUCCESS or error code
 ' @local bookmark - Saved entry address
@@ -5099,55 +5271,62 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
 ' @local idx - Loop counter
 ' @local saved_entry - Saved directory entry (32 bytes = 8 longs)
 ' @local p_buf - Pointer to buffer position
+' @local p_leaf - Pointer to leaf filename after path resolution
+' @local saved_sec - Saved directory sector for path restore
 
-  debug("  [do_rename] old=", zstr_(old_name), " new=", zstr_(new_name), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
-  if searchDirectory(old_name)
-    debug("  [do_rename] Found old file, entry_address=", uhex_(entry_address))
-    bookmark := entry_address
-    temp_sec := cog_dir_sec[pb_caller]
-    bytemove(@saved_entry, @entry_buffer, DIR_ENTRY_SIZE)                                  ' Save complete entry (32 bytes)
-    cog_dir_sec[pb_caller] := entry_address >> SECTOR_BITS                                ' Search in same directory
-    idx := 0
-    repeat until byte[new_name + idx] == $00
-      if byte[new_name + idx] == "/"
-        new_name += idx+1
-        idx := 0
-      idx++
-    debug("  [do_rename] Checking if new name exists...")
-    if searchDirectory(new_name) == 0                                           ' Verify new name doesn't exist
-      debug("  [do_rename] New name doesn't exist, proceeding")
-      bytemove(@entry_buffer, @saved_entry, DIR_ENTRY_SIZE)                                ' Restore complete entry
-      if readSector(bookmark >> SECTOR_BITS, BUF_DIR) < 0
-        debug("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
-        status := E_IO_ERROR
-      ' Parse new_name directly into buffer in 8.3 format
-      else
-        p_buf := @dir_buf + (bookmark & SECTOR_MASK)
-        idx := 0
-        repeat until byte[new_name + idx] == "/" or byte[new_name + idx] == $00
-          idx++
-        bytefill(p_buf, " ", 11)                                                 ' Clear name field
-        bytemove(p_buf, new_name, idx <# 12)                                       ' Copy name
-        ' Convert to uppercase first (must happen before 8.3 rearrangement)
-        repeat idx from 0 to FILENAME_83_LEN - 1
-          case byte[p_buf + idx]
-            "a".."z" : byte[p_buf + idx] -= $20
-        ' Handle 8.3 extension separator
-        repeat idx from 0 to FILENAME_83_LEN - 1
-          if byte[p_buf + idx] == "."
-            bytemove(p_buf + 8, p_buf + idx + 1, 3)
-            bytefill(p_buf + idx, " ", 8 - idx)
-            quit
-        writeSector(bookmark >> SECTOR_BITS, BUF_DIR)
-        cog_dir_sec[pb_caller] := temp_sec
-        debug("  [do_rename] SUCCESS")
-        status := SUCCESS
-    else
-      debug("  [do_rename] New name already exists!")
-      status := E_FILE_EXISTS
-  else
-    debug("  [do_rename] Old file NOT FOUND")
+  p_leaf, saved_sec := sd_resolve_path(old_name)
+  if p_leaf == 0
     status := E_FILE_NOT_FOUND
+  else
+    debug("  [do_rename] old=", zstr_(p_leaf), " new=", zstr_(new_name), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
+    if searchDirectory(p_leaf)
+      debug("  [do_rename] Found old file, entry_address=", uhex_(entry_address))
+      bookmark := entry_address
+      temp_sec := cog_dir_sec[pb_caller]
+      bytemove(@saved_entry, @entry_buffer, DIR_ENTRY_SIZE)                                ' Save complete entry (32 bytes)
+      cog_dir_sec[pb_caller] := entry_address >> SECTOR_BITS                              ' Search in same directory
+      idx := 0
+      repeat until byte[new_name + idx] == $00
+        if byte[new_name + idx] == "/"
+          new_name += idx+1
+          idx := 0
+        idx++
+      debug("  [do_rename] Checking if new name exists...")
+      if searchDirectory(new_name) == 0                                         ' Verify new name doesn't exist
+        debug("  [do_rename] New name doesn't exist, proceeding")
+        bytemove(@entry_buffer, @saved_entry, DIR_ENTRY_SIZE)                              ' Restore complete entry
+        if readSector(bookmark >> SECTOR_BITS, BUF_DIR) < 0
+          debug("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
+          status := E_IO_ERROR
+        ' Parse new_name directly into buffer in 8.3 format
+        else
+          p_buf := @dir_buf + (bookmark & SECTOR_MASK)
+          idx := 0
+          repeat until byte[new_name + idx] == "/" or byte[new_name + idx] == $00
+            idx++
+          bytefill(p_buf, " ", 11)                                               ' Clear name field
+          bytemove(p_buf, new_name, idx <# 12)                                     ' Copy name
+          ' Convert to uppercase first (must happen before 8.3 rearrangement)
+          repeat idx from 0 to FILENAME_83_LEN - 1
+            case byte[p_buf + idx]
+              "a".."z" : byte[p_buf + idx] -= $20
+          ' Handle 8.3 extension separator
+          repeat idx from 0 to FILENAME_83_LEN - 1
+            if byte[p_buf + idx] == "."
+              bytemove(p_buf + 8, p_buf + idx + 1, 3)
+              bytefill(p_buf + idx, " ", 8 - idx)
+              quit
+          writeSector(bookmark >> SECTOR_BITS, BUF_DIR)
+          cog_dir_sec[pb_caller] := temp_sec
+          debug("  [do_rename] SUCCESS")
+          status := SUCCESS
+      else
+        debug("  [do_rename] New name already exists!")
+        status := E_FILE_EXISTS
+    else
+      debug("  [do_rename] Old file NOT FOUND")
+      status := E_FILE_NOT_FOUND
+  sd_restore_path(saved_sec)
 
 PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
 ' Internal set volume label - updates BPB and root directory volume label entry.

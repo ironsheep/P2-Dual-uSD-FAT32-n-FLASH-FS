@@ -1,6 +1,6 @@
 # Dual Filesystem Demo Shell
 
-An interactive command-line shell for exploring both SD card and Flash filesystem operations on the P2. Supports DOS-style (`dir`, `type`, `del`) and Unix-style (`ls`, `cat`, `rm`) commands. Switch between devices with `dev sd` / `dev flash`, or copy across devices with `copy sd:FILE flash:FILE`.
+An interactive command-line shell for exploring both SD card and Flash filesystem operations on the P2. Supports DOS-style (`dir`, `type`, `del`) and Unix-style (`ls`, `cat`, `rm`) commands. Switch between devices with `dvc sd` / `dvc flash`, or copy across devices with `copy sd:FILE flash:FILE`.
 
 ## Files
 
@@ -58,13 +58,13 @@ sd:(unmounted)> _        (SD not mounted)
 
 ### Device Switching
 
-Use `dev` to switch between SD and Flash:
+Use `dvc` to switch between SD and Flash (`fl` and `flash` are interchangeable everywhere):
 
 ```
-sd:/> dev flash
+sd:/> dvc fl
 flash:/> dir
  ... Flash file listing ...
-flash:/> dev sd
+flash:/> dvc sd
 sd:/>
 ```
 
@@ -75,24 +75,24 @@ Mount the devices before any filesystem operations:
 ```
 sd:(unmounted)> mount
 Mounting SD card...
-Mounted successfully
-  Card: PNY SD16G (16 GB)
-  SPI:  25000000 Hz
-  Free: 15.9 GB
+SD mounted successfully
+  Volume: [P2FMTER    ]
+  Size: 15272 MB (15GB)
 sd:/>
 ```
 
 Switch to Flash and mount it:
 
 ```
-sd:/> dev flash
+sd:/> dvc fl
 flash:(unmounted)> mount
 Mounting Flash...
-Mounted successfully
+Flash mounted successfully
+  Size: 15872 KB (15MB)
 flash:/>
 ```
 
-Or mount both at once with `mount both`.
+Or mount both at once with `mount all`.
 
 ### Browsing Files
 
@@ -101,14 +101,13 @@ Or mount both at once with `mount both`.
 sd:/> dir
  Directory of /
 
-  Attr    Name          Size
-  ----    --------      ----------
-  D---    MYDIR/
-  -A--    README.TXT    1,234
-  -A--    DATA.BIN      65,536
+  Attr      Size  Name
+  ----  --------  --------------------------------
+  D---    <DIR>  MYDIR
+  -A--      1234  README.TXT
+  -A--     65536  DATA.BIN
 
-       2 File(s)     66,770 bytes
-       1 Dir(s)
+  3 file(s), 66770 bytes
 
 sd:/> cd MYDIR
 sd:/MYDIR> dir
@@ -117,31 +116,35 @@ sd:/MYDIR> dir
 **Flash directory listing:**
 ```
 flash:/> dir
-  Name           Size
-  ----------     -----
-  sensor.log     128
-  config.dat     64
+ Flash Files
 
-  2 files
+      Size  Name
+  --------  --------------------------------
+       128  sensor.log
+        64  config.dat
+
+  2 file(s), 192 bytes
 ```
 
 ### Cross-Device Copy
 
-Copy files between SD and Flash using device prefixes:
+Copy files between SD and Flash using device prefixes (`fl:` and `flash:` are interchangeable):
 
 ```
-sd:/> copy README.TXT flash:readme
-Copied 1,234 bytes (SD -> Flash)
+sd:/> copy README.TXT fl:readme
+Copied README.TXT -> readme (cross-device)
 
 flash:/> copy sensor.log sd:SENSOR.LOG
-Copied 128 bytes (Flash -> SD)
+Copied sensor.log -> SENSOR.LOG (cross-device)
 ```
 
 ### File Operations
 
 ```
 sd:/> type README.TXT
+
 Hello from the P2 SD card driver!
+
 [58 bytes]
 
 sd:/> copy README.TXT BACKUP.TXT
@@ -161,16 +164,14 @@ Deleted: EMPTY.TXT
 
 ```
 sd:/> stats
-  Volume label: P2FMTER
-  Free space:   15.9 GB (31199056 sectors)
-  Cluster size: 16 sectors (8192 bytes)
+Total:  15272 MB
+Free:   15227 MB
+Label:  [P2FMTER    ]
 
 sd:/> card
-  Manufacturer: PNY (0x27)
-  Product:      SD16G
-  Revision:     2.0
-  Serial:       0x0BADCAFE
-  Date:         06/2023
+card ready...
+PNY SD16G SDHC 15GB [FAT32] SD3.x rev2.0 SN:0BADCAFE 2023/06
+OEM: MSWIN4.1
 ```
 
 ### Diagnostics
@@ -178,39 +179,72 @@ sd:/> card
 **Audit** - read-only filesystem integrity check (works on both SD and Flash):
 ```
 sd:/> audit
-  [PASS] MBR signature valid ($AA55)
-  ...
-  All checks passed
+Unmounted for audit.
+  ... (audit output from external utility) ...
+
+Re-mount devices? (Y/N): y
 
 flash:/> audit
-  Phase 1: canMount() health check...
-    canMount: PASS
-  Phase 2: Mount and statistics...
-    Used blocks:  12  Free blocks:  1012  File count:  3
-  Phase 3: File iteration verification...
-    File count: MATCH
-  AUDIT PASSED - Flash filesystem is healthy
+Flash Filesystem Audit (Read-Only)
+
+Phase 1: canMount() health check...
+  canMount: PASS
+
+Phase 2: Mount and statistics...
+  Mount: PASS
+  Used blocks:  12
+  Free blocks:  1012
+  File count:   3
+  Total blocks: 1024
+
+Phase 3: File iteration verification...
+  [1] hello.txt (26 bytes)
+  [2] readme.txt (45 bytes)
+  [3] config.dat (64 bytes)
+  Iterated files: 3
+  Total bytes:    135
+  File count: MATCH
+
+AUDIT PASSED - Flash filesystem is healthy
 ```
 
 **FSCK** - filesystem check and repair (works on both SD and Flash):
 ```
 sd:/> fsck
-  WARNING: FSCK will modify the SD card to fix errors.
-  Continue? (Y/N): y
-  ...
-  Filesystem check complete
+FSCK requires unmount. Unmount now? (Y/N): y
+Unmounted.
+  ... (FSCK output from external utility) ...
+
+Re-mount devices? (Y/N): y
 
 flash:/> fsck
-  Phase 1: Read-only health check (canMount)...
-    Health check: PASS (no issues detected)
-  FSCK COMPLETE - No repairs needed
+Flash Filesystem Check & Repair (FSCK)
+
+Phase 1: Read-only health check (canMount)...
+  Health check: PASS (no issues detected)
+
+  Mounting to verify statistics...
+  Used blocks:  12
+  Free blocks:  1012
+  File count:   3
+
+FSCK COMPLETE - No repairs needed
 ```
 
 **Benchmark** - read throughput measurement (SD only):
 ```
 sd:/> bench
-  Single sector read:  285 KB/s
-  Multi-sector read:   412 KB/s
+
+=== Read-Only Throughput Benchmark ===
+Card: 15272 MB
+Test area: sectors 2048+
+
+Single-sector (100 reads)... 48 ms, 204 KB/s
+Multi-sector x8 (100 reads)... 196 ms, 400 KB/s
+Multi-sector x32 (25 reads)... 130 ms, 601 KB/s
+Multi-sector x64 (16 reads)... 133 ms, 600 KB/s
+
+Benchmark complete.
 ```
 
 ## Complete Command Reference
@@ -218,31 +252,34 @@ sd:/> bench
 ### Navigation
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `dev sd` / `dev flash` | | Switch active device |
-| `mount` | | Mount the active device (or `mount both`) |
-| `unmount` | `eject` | Safely unmount the active device |
+| `dvc {sd|fl}` | | Switch active device (`fl` and `flash` both work) |
+| `mount [sd|fl|all]` | | Mount active device, or specified |
+| `unmount [sd|fl]` | `eject` | Unmount active device, or specified |
 | `dir` | `ls` | List directory contents |
-| `cd <path>` | | Change directory (SD only) |
-| `pwd` | | Print current working directory (SD only) |
+| `tree [<path>]` | | Display directory tree |
+| `cd [<path>]` | | Change directory (bare `cd` = root) |
+| `pwd` | | Print current working directory |
+| `mkdir <dir>` | | Create a new directory |
+| `rmdir <dir>` | | Remove an empty directory |
 
 ### File Operations
 | Command | Aliases | Description |
 |---------|---------|-------------|
 | `type <file>` | `cat` | Display text file contents |
 | `hexdump <file>` | `hd` | Display file in hex dump format |
-| `copy <src> <dst>` | `cp` | Copy a file (supports `sd:`/`flash:` prefixes) |
-| `ren <old> <new>` | `mv` | Rename a file or directory |
+| `copy <src> <dst>` | `cp` | Copy a file (supports `sd:`/`fl:` prefixes) |
+| `ren <old> <new>` | | Rename a file or directory |
+| `move <src> <dst>` | `mv` | Move file to directory, or rename |
 | `del <file>` | `rm` | Delete a file |
 | `touch <file>` | | Create an empty file |
-| `mkdir <dir>` | | Create a new directory (SD only) |
-| `rmdir <dir>` | | Remove an empty directory (SD only) |
 
 ### Information
 | Command | Aliases | Description |
 |---------|---------|-------------|
 | `stats` | `info` | Show filesystem statistics |
-| `card` | `cid` | Show SD card identification |
-| `version` | | Show driver version and SPI frequency |
+| `card` | `cid` | Show SD card identification (SD only) |
+| `version` | | Show driver version |
+| `label [<name>]` | `vol` | Display or set volume label (SD only) |
 
 ### Diagnostics
 | Command | Aliases | Description |
@@ -250,12 +287,14 @@ sd:/> bench
 | `audit` | | Read-only filesystem integrity check (SD and Flash) |
 | `fsck` | | Filesystem check and repair (SD and Flash) |
 | `bench` | `benchmark`, `perf` | Read throughput benchmark (SD only) |
+| `format [sd|fl]` | | Format active device, or specified |
 
 ### Utility
 | Command | Description |
 |---------|-------------|
 | `demo` | Create sample files for testing |
 | `cls` / `clear` | Clear the terminal screen |
+| `alias` | Show all command aliases |
 | `help` | Show all available commands |
 
 ## Architecture
@@ -266,7 +305,7 @@ The demo shell runs as a single-cog application:
 2. **Dual-FS driver** - runs a worker cog for SPI operations (started on `mount`), manages both SD and Flash on the shared SPI bus
 3. **Serial driver** - singleton serial terminal on the programming port (P62/P63)
 
-The shell tracks the active device (SD or Flash) and routes commands accordingly. SD supports full directory navigation (`cd`, `pwd`, `mkdir`); Flash uses a flat namespace.
+The shell tracks the active device (SD or Flash) and routes commands accordingly. Both devices support directory navigation (`cd`, `pwd`, `mkdir`). Flash emulates directories using path-prefixed filenames; the driver handles path resolution transparently so callers pass full paths (e.g., `/MYDIR/FILE.TXT`) and the driver navigates internally.
 
 ---
 
