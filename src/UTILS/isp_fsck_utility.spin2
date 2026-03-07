@@ -53,6 +53,7 @@ CON { FAT32 structure constants }
 
   ' Signatures
   MBR_SIGNATURE               = $AA55
+  PARTITION_TYPE_FAT32_CHS    = $0B
   PARTITION_TYPE_FAT32_LBA    = $0C
   FSINFO_SIG1                 = $41615252      ' "RRaA"
   FSINFO_SIG2                 = $61417272      ' "rrAa"
@@ -592,7 +593,7 @@ PRI auditMBR() | result
     auditRunTest(@"Partition 1 boot flag ($00/$80)", result == $00 OR result == BOOT_FLAG_ACTIVE)
 
     result := buf[MBR_PART1_TYPE]
-    auditRunTest(@"Partition type ($0C = FAT32 LBA)", result == PARTITION_TYPE_FAT32_LBA)
+    auditRunTest(@"Partition type FAT32 ($0B or $0C)", result == PARTITION_TYPE_FAT32_LBA OR result == PARTITION_TYPE_FAT32_CHS)
 
     result := LONG[@buf + MBR_PART1_LBA]
     auditRunTest(@"Partition start > 0", result > 0)
@@ -728,7 +729,11 @@ PRI auditFSInfo() | result, idx, mismatch
             mismatch := true
             quit
 
-    auditRunTest(@"Backup FSInfo matches primary", mismatch == false)
+    if mismatch
+        fifo.put(@"  [WARN] Backup FSInfo differs from primary (common, repaired by fsck)")
+        v_warningCount++
+    else
+        auditRunTest(@"Backup FSInfo matches primary", TRUE)
     fifo.put(@" ")
 
 
