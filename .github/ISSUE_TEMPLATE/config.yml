@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Parallax Forums
-    url: https://forums.parallax.com/
-    about: Ask questions and discuss P2 development on the Parallax Forums
+    url: https://forums.parallax.com/discussion/178045/p2-dual-usd-fat32-and-flash-filesystem-spin2-pasm2
+    about: Ask questions and discuss this project on the Parallax Forums
   - name: P2 Documentation
     url: https://www.parallax.com/propeller-2/documentation/
     about: Official Propeller 2 documentation and resources
