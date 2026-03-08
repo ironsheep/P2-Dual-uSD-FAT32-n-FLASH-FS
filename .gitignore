@@ -38,6 +38,9 @@ src/phase3_flash_methods.spin2
 # Completed plans archive (kept locally, not in git)
 DOCs/Plans/archive/
 
+# Reference archive (kept locally, not in git)
+DOCs/Reference/archive/
+
 # Internal procedures (local-only, not for publication)
 DOCs/procedures/
 
