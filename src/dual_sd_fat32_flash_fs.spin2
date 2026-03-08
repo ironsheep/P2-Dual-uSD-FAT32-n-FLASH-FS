@@ -66,7 +66,7 @@ CON ' ---- Device Constants ----
   DEV_BOTH  = 2       ' Both devices (for mount/unmount)
 
   DFS_VERSION   = 1_00_00  ' Dual FS driver version 1.0.0
-  SD_VERSION    = 1_03_00  ' SD sub-driver version 1.3.0
+  SD_VERSION    = 1_03_01  ' SD sub-driver version 1.3.1
   FLASH_VERSION = 2_00_00  ' Flash sub-driver version 2.0.0
 
 CON ' ---- Flash File Open Mode Constants ----
@@ -422,15 +422,29 @@ CON ' Flash filesystem geometry and constants
 
 CON ' SD card command codes and tokens for multi-block operations
   ' ===========================================================================
-  ' SD SPI Commands for multi-block operations (reference: SD Physical Layer Spec)
+  ' SD SPI Commands (reference: SD Physical Layer Spec)
   ' ===========================================================================
+  CMD0   = 0                    ' GO_IDLE_STATE - reset card to idle state
+  CMD6   = 6                    ' SWITCH_FUNC - check/switch card function (high-speed mode)
+  CMD9   = 9                    ' SEND_CSD - read Card Specific Data register (16 bytes)
+  CMD10  = 10                   ' SEND_CID - read Card Identification register (16 bytes)
   CMD12  = 12                   ' STOP_TRANSMISSION - terminates multi-block read/write
   CMD13  = 13                   ' SEND_STATUS - get card status register (R2 response)
   CMD18  = 18                   ' READ_MULTIPLE_BLOCK - read consecutive sectors
-  CMD0   = 0                    ' GO_IDLE_STATE - reset card to idle state
   CMD23  = 23                   ' SET_BLOCK_COUNT - pre-define sector count for CMD18/CMD25
   CMD25  = 25                   ' WRITE_MULTIPLE_BLOCK - write consecutive sectors
-  CRC_CMD12 = $61              ' Pre-computed CRC7 + stop bit for CMD12 (STOP_TRANSMISSION)
+  CMD55  = 55                   ' APP_CMD - prefix for application-specific commands (ACMD*)
+  ACMD51 = 51                   ' SEND_SCR - read SD Configuration Register (8 bytes)
+
+  ' ===========================================================================
+  ' Pre-computed CRC-7 bytes for fixed-argument commands
+  ' ===========================================================================
+  CRC_CMD9   = $AF              ' CRC for CMD9 (SEND_CSD, arg=0)
+  CRC_CMD10  = $1B              ' CRC for CMD10 (SEND_CID, arg=0)
+  CRC_CMD12  = $61              ' CRC for CMD12 (STOP_TRANSMISSION)
+  CRC_CMD55  = $65              ' CRC for CMD55 (APP_CMD, arg=0)
+  CRC_ACMD51 = $55              ' CRC for ACMD51 (SEND_SCR, arg=0)
+  CRC_NONE   = $FF              ' CRC not validated in SPI mode after init (CMD6, ACMD13)
 
 CON ' SD card initialization constants
   CMD0_MAX_RETRIES    = 5       ' Maximum CMD0 attempts during card init
@@ -557,6 +571,11 @@ DAT ' singleton control - SHARED across all object instances
   cmd12_capture_len BYTE    0           ' Number of bytes captured in cmd12_capture[]
   cmd12_capture     BYTE    0[16]       ' Raw byte stream after CMD12 stuff byte (for framing analysis)
   cmd12_pre_capture BYTE    0[7]        ' MISO bytes received DURING CMD12 command transmission (full-duplex)
+
+  ' CMD13 (SEND_STATUS) full-duplex capture - for sendCmd13Transaction() diagnostics
+  cmd13_pre_capture BYTE    0[7]        ' MISO bytes received DURING CMD13 command transmission (6 cmd + 1 pad)
+  cmd13_capture     BYTE    0[8]        ' Raw post-command byte stream (R1 + STATUS + trailing)
+  cmd13_capture_len BYTE    0           ' Number of bytes before R1 appeared (NCR gap length)
 
   ' CMD23 (SET_BLOCK_COUNT) diagnostics
   last_cmd23_r1     BYTE    0           ' Last R1 from CMD23: $00=accepted, $FF=not sent
@@ -10039,6 +10058,75 @@ PRI recoverToIdle() : status
       debug("  [recoverToIdle] FAILED: card holding MISO low after 240 clocks")
       status := -1  ' Card stuck - caller must handle
 
+PRI sendCmd13Transaction() : r1, status | idx, resp, timeout
+' Send CMD13 and capture full R2 response with full-duplex MISO diagnostics.
+' Captures MISO during command transmission (cmd13_pre_capture) and raw post-command
+' byte stream (cmd13_capture). Stages diagnostics into last_cmd13_r1/status/error.
+'
+' @returns r1 - R1 response byte, or -1 on timeout
+' @returns status - STATUS byte (second byte of R2), or 0 on timeout
+' @local idx - Capture index
+' @local resp - Received byte
+' @local timeout - Timeout deadline
+
+  ' Initialize capture buffers
+  bytefill(@cmd13_pre_capture, $FF, 7)
+  bytefill(@cmd13_capture, $FF, 8)
+  cmd13_capture_len := 0
+
+  ' Dummy clocks with CS HIGH for card recovery
+  pinh(cs)
+  sp_transfer_8($FF)
+  sp_transfer_8($FF)
+
+  ' CS LOW, send CMD13 byte-by-byte capturing MISO (full-duplex)
+  pinl(cs)
+  cmd13_pre_capture[0] := sp_transfer_8($40 | CMD13)                            ' Command byte
+  cmd13_pre_capture[1] := sp_transfer_8($00)                                    ' Argument byte 3
+  cmd13_pre_capture[2] := sp_transfer_8($00)                                    ' Argument byte 2
+  cmd13_pre_capture[3] := sp_transfer_8($00)                                    ' Argument byte 1
+  cmd13_pre_capture[4] := sp_transfer_8($00)                                    ' Argument byte 0
+  cmd13_pre_capture[5] := sp_transfer_8($FF)                                    ' CRC (not checked)
+  cmd13_pre_capture[6] := sp_transfer_8($FF)                                    ' Padding byte
+
+  ' Scan for R1 with 100ms timeout, capturing raw bytes
+  r1 := -1
+  timeout := getct() + clkfreq / RESPONSE_TIMEOUT_DIV
+  idx := 0
+  repeat while idx < 8
+    resp := sp_transfer_8($FF)
+    cmd13_capture[idx] := resp
+    if (resp & $80) == 0                                                         ' valid R1 has bit 7 = 0
+      cmd13_capture_len := idx
+      r1 := resp
+      idx++
+      quit
+    if getct() - timeout > 0
+      last_cmd13_r1 := $FF
+      pinh(cs)
+      quit
+    idx++
+
+  ' On timeout, return with r1 = -1
+  if r1 < 0
+    status := 0
+
+  else
+    ' Capture remaining bytes up to 8 total
+    repeat while idx < 8
+      cmd13_capture[idx] := sp_transfer_8($FF)
+      idx++
+
+    ' STATUS byte is immediately after R1
+    status := cmd13_capture[cmd13_capture_len + 1]
+    pinh(cs)
+
+    ' Stage diagnostics
+    last_cmd13_r1 := r1
+    last_cmd13_status := status
+    if r1 <> 0 or status <> 0
+      last_cmd13_error := (r1 << 8) | status
+
 PRI probeCmd13() | r1, status
 ' Probe CMD13 reliability at end of initCard().
 ' Sends a single CMD13 on an idle card and checks whether the response is valid.
@@ -10049,48 +10137,27 @@ PRI probeCmd13() | r1, status
 ' @local r1 - R1 response byte from CMD13
 ' @local status - STATUS byte (second byte of R2 response)
 
-  ' Send dummy clocks with CS HIGH (card recovery time)
-  pinh(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($FF)
+  r1, status := sendCmd13Transaction()
 
-  ' Send CMD13
-  pinl(cs)
-  sp_transfer_8($40 | CMD13)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($FF)
-
-  ' Read R1 response
-  r1 := waitR1Response()
   if r1 < 0
-    ' Timeout - card didn't respond to CMD13 at all
     debug("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
-    pinh(cs)
+    cmd13_reliable := FALSE
+    card_warning_flags |= CW_CMD13_UNRELIABLE
+
+  ' Check 1: R1 bit 7 must be 0 per SD spec
+  elseif r1 & $80
+    debug("    [probeCmd13] R1 bit 7 set ($", uhex_byte_(r1), ") - marking CMD13 unreliable")
+    cmd13_reliable := FALSE
+    card_warning_flags |= CW_CMD13_UNRELIABLE
+
+  ' Check 2: 3+ error bits in STATUS on an idle card = garbage data
+  elseif ones status >= 3
+    debug("    [probeCmd13] STATUS has ", udec_(ones status), " error bits ($", uhex_byte_(status), ") - marking CMD13 unreliable")
     cmd13_reliable := FALSE
     card_warning_flags |= CW_CMD13_UNRELIABLE
 
   else
-    ' Read STATUS byte (second byte of R2)
-    status := sp_transfer_8($FF)
-    pinh(cs)
-
-    ' Check 1: R1 bit 7 must be 0 per SD spec
-    if r1 & $80
-      debug("    [probeCmd13] R1 bit 7 set ($", uhex_byte_(r1), ") - marking CMD13 unreliable")
-      cmd13_reliable := FALSE
-      card_warning_flags |= CW_CMD13_UNRELIABLE
-
-    ' Check 2: 3+ error bits in STATUS on an idle card = garbage data
-    elseif ones status >= 3
-      debug("    [probeCmd13] STATUS has ", udec_(ones status), " error bits ($", uhex_byte_(status), ") - marking CMD13 unreliable")
-      cmd13_reliable := FALSE
-      card_warning_flags |= CW_CMD13_UNRELIABLE
-
-    else
-      debug("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
+    debug("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
 
 PRI probeCmd23() | scr[2], cmd_support, resp
 ' Probe CMD23 support at init time.
@@ -10132,196 +10199,124 @@ PRI checkCardStatus(caller) : status | r1, r2_status
 ' @param caller - String identifying the calling function (for debug)
 ' @returns status - 0 on success (card OK), -1 on error
 ' @local r1 - R1 response byte
-' @local status - Status byte (second byte of R2)
+' @local r2_status - STATUS byte (second byte of R2)
 
   ' Skip CMD13 on cards with broken implementation (detected by probeCmd13 at init)
   if not cmd13_reliable
     return
 
-  ' Send dummy clocks with CS HIGH to ensure card is ready
-  ' (Some cards need recovery time after previous operation)
-  pinh(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($FF)
+  r1, r2_status := sendCmd13Transaction()
 
-  ' CMD13 requires CS to be asserted
-  pinl(cs)
-
-  ' Send CMD13 with no argument (RCA = 0x0000 for SPI mode)
-  sp_transfer_8($40 | CMD13)                                                    ' Command byte: 0x40 | 13 = 0x4D
-  sp_transfer_8($00)                                                            ' Argument bytes (RCA, unused in SPI)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($FF)                                                            ' CRC disabled after init in SPI mode
-
-  ' Get R1 response (first byte of R2)
-  r1 := waitR1Response()
   if r1 < 0
     debug("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
-    pinh(cs)
     status := E_TIMEOUT
 
-  ' Get status byte (second byte of R2)
+  ' Check for errors
+  elseif r1 <> $00
+    debug("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
+    status := -1
+
+  elseif r2_status <> $00
+    debug("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(r2_status))
+    if r2_status & CSR_OUT_OF_RANGE
+      debug("    -> OUT_OF_RANGE")
+    if r2_status & CSR_ERASE_PARAM
+      debug("    -> ERASE_PARAM")
+    if r2_status & CSR_WP_VIOLATION
+      debug("    -> WP_VIOLATION")
+    if r2_status & CSR_CARD_ECC_FAILED
+      debug("    -> CARD_ECC_FAILED")
+    if r2_status & CSR_CC_ERROR
+      debug("    -> CC_ERROR")
+    if r2_status & CSR_ERROR
+      debug("    -> ERROR")
+    if r2_status & CSR_WP_ERASE_SKIP
+      debug("    -> WP_ERASE_SKIP")
+    if r2_status & CSR_CARD_IS_LOCKED
+      debug("    -> CARD_IS_LOCKED")
+    status := -1
+
   else
-    r2_status := sp_transfer_8($FF)
+    status := 0  ' Card status OK
 
-    pinh(cs)                                                                      ' Deselect card
+PRI readDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : ok | timeout, idx
+' Consolidated register read transaction: send command, wait for R1, wait for $FE data token,
+' read byte_count bytes into buffer, consume 2-byte CRC, deselect. Used by readCSD, readCID,
+' sendCMD6, readSCR (via sendAppCmdPrefix), and readSDStatus (via sendAppCmdPrefix).
+'
+' @param cmd_num - SD command number (e.g., CMD9, CMD10, CMD6, ACMD51)
+' @param arg - 32-bit command argument (0 for most register reads)
+' @param crc_byte - Pre-computed CRC-7 byte (or CRC_NONE)
+' @param p_buf - Pointer to receive buffer (must be >= byte_count bytes)
+' @param byte_count - Number of data bytes to read (e.g., 16 for CSD/CID, 64 for CMD6)
+' @returns ok - TRUE on success, FALSE on failure/timeout
 
-    ' =======================================================================
-    ' STAGE CMD13 RESULTS - Preserve for diagnostic inspection
-    ' =======================================================================
-    last_cmd13_r1 := r1
-    last_cmd13_status := status
-    if r1 <> 0 or r2_status <> 0
-      last_cmd13_error := (r1 << 8) | r2_status                                      ' Preserve last error
+  ' Pre-command dummy clock
+  sp_transfer_8($FF)
+  pinl(cs)
+  sp_transfer_8($FF)
 
-    ' Check for errors
-    if r1 <> $00
-      debug("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
-      status := -1
+  ' Send command: $40 | cmd_num, 32-bit arg, CRC
+  sp_transfer_8($40 | cmd_num)
+  sp_transfer(arg, 32)
+  sp_transfer_8(crc_byte)
 
-    elseif status <> $00
-      debug("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(status))
-      if status & CSR_OUT_OF_RANGE
-        debug("    -> OUT_OF_RANGE")
-      if status & CSR_ERASE_PARAM
-        debug("    -> ERASE_PARAM")
-      if status & CSR_WP_VIOLATION
-        debug("    -> WP_VIOLATION")
-      if status & CSR_CARD_ECC_FAILED
-        debug("    -> CARD_ECC_FAILED")
-      if status & CSR_CC_ERROR
-        debug("    -> CC_ERROR")
-      if status & CSR_ERROR
-        debug("    -> ERROR")
-      if status & CSR_WP_ERASE_SKIP
-        debug("    -> WP_ERASE_SKIP")
-      if status & CSR_CARD_IS_LOCKED
-        debug("    -> CARD_IS_LOCKED")
-      status := -1
+  ' Wait for R1 response (bit 7 = 0 per SD spec 7.3.2.1)
+  timeout := getct() + clkfreq
+  repeat
+    ok := sp_transfer_8($FF)
+    if (ok & $80) == 0
+      quit
+    if getct() - timeout > 0
+      ok := $FF
+      quit
 
+  if ok <> $00
+    if ok <> $FF
+      pinh(cs)
+    ok := false
+
+  ' Wait for data token ($FE)
+  else
+    timeout := getct() + clkfreq
+    repeat
+      ok := sp_transfer_8($FF)
+      if ok == $FE
+        quit
+      if getct() - timeout > 0
+        ok := $FF
+        quit
+
+    if ok == $FE
+      ' Read data bytes
+      repeat idx from 0 to byte_count - 1
+        byte[p_buf + idx] := sp_transfer_8($FF)
+
+      ' Consume 2-byte CRC
+      sp_transfer_8($FF)
+      sp_transfer_8($FF)
+
+      pinh(cs)
+      ok := true
     else
-      status := 0  ' Card status OK
+      pinh(cs)
+      ok := false
 
-PRI readCSD(p_csd) : ok | timeout, idx
+PRI readCSD(p_csd) : ok
 ' Read CSD register using CMD9 - reads 16-byte CSD register into buffer.
-' Uses smart pin operations for compatibility with smart pin SPI mode.
 '
 ' @param p_csd - Pointer to 16-byte buffer to receive CSD data
 ' @returns ok - TRUE on success, FALSE on failure
-' @local timeout - Timeout counter
-' @local idx - Loop counter
 
-  sp_transfer_8($FF)
-  pinl(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($40 | 9)                                                        '  CMD9 = SEND_CSD
-  sp_transfer(0, 32)                                                            '  argument = 0
-  sp_transfer_8($AF)                                                            '  CRC (approximate)
+  ok := readDataRegister(CMD9, 0, CRC_CMD9, p_csd, CSD_CID_BYTES)
 
-  ' Wait for R1 response
-  timeout := getct() + clkfreq
-  repeat
-    ok := sp_transfer_8($FF)
-    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-      quit
-    if getct() - timeout > 0
-      pinh(cs)
-      ok := $FF
-      quit
-
-  if ok <> $00
-    if ok <> $FF
-      pinh(cs)
-    ok := false
-
-  ' Wait for data token ($FE)
-  else
-    timeout := getct() + clkfreq
-    repeat
-      ok := sp_transfer_8($FF)
-      if ok == $FE
-        quit
-      if getct() - timeout > 0
-        pinh(cs)
-        ok := $FF
-        quit
-
-    if ok == $FE
-      ' Read 16 bytes of CSD data
-      repeat idx from 0 to CSD_CID_BYTES - 1
-        byte[p_csd + idx] := sp_transfer_8($FF)
-
-      ' Read and discard 2-byte CRC
-      sp_transfer_8($FF)
-      sp_transfer_8($FF)
-
-      pinh(cs)
-      ok := true
-    else
-      ok := false
-
-PRI readCID(p_cid) : ok | timeout, idx
+PRI readCID(p_cid) : ok
 ' Read CID register using CMD10 - reads 16-byte Card Identification register.
-' Uses smart pin operations for compatibility with smart pin SPI mode.
 '
 ' @param p_cid - Pointer to 16-byte buffer to receive CID data
 ' @returns ok - TRUE on success, FALSE on failure
-' @local timeout - Timeout counter
-' @local idx - Loop counter
 
-  sp_transfer_8($FF)
-  pinl(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($40 | 10)                                                       '  CMD10 = SEND_CID
-  sp_transfer(0, 32)                                                            '  argument = 0
-  sp_transfer_8($1B)                                                            '  CRC for CMD10
-
-  ' Wait for R1 response
-  timeout := getct() + clkfreq
-  repeat
-    ok := sp_transfer_8($FF)
-    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-      quit
-    if getct() - timeout > 0
-      pinh(cs)
-      ok := $FF
-      quit
-
-  if ok <> $00
-    if ok <> $FF
-      pinh(cs)
-    ok := false
-
-  ' Wait for data token ($FE)
-  else
-    timeout := getct() + clkfreq
-    repeat
-      ok := sp_transfer_8($FF)
-      if ok == $FE
-        quit
-      if getct() - timeout > 0
-        pinh(cs)
-        ok := $FF
-        quit
-
-    if ok == $FE
-      ' Read 16 bytes of CID data (arrives big-endian / MSB-first from card)
-      ' Layout: MID[1] OID[2] PNM[5] PRV[1] PSN[4] MDT[2] CRC[1]
-      ' TODO: With {Spin2_v52}+STRUCT, callers can use ENDIANL/ENDIANW on
-      '   multi-byte fields (PSN, MDT) instead of manual shift/OR patterns
-      repeat idx from 0 to CSD_CID_BYTES - 1
-        byte[p_cid + idx] := sp_transfer_8($FF)
-
-      ' Read and discard 2-byte CRC
-      sp_transfer_8($FF)
-      sp_transfer_8($FF)
-
-      pinh(cs)
-      ok := true
-    else
-      ok := false
+  ok := readDataRegister(CMD10, 0, CRC_CMD10, p_cid, CSD_CID_BYTES)
 
 PRI parseTransSpeed(p_csd) : speed_hz | tran_speed, time_val, mult_val
 ' Parse TRAN_SPEED from CSD register - returns max transfer speed in Hz.
@@ -10506,267 +10501,57 @@ PRI setOptimalSpeed()
     debug("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 
-PRI readSCR(p_scr) : ok | timeout, idx
+PRI sendAppCmdPrefix() : resp
+' Send CMD55 (APP_CMD) prefix for application-specific commands (ACMD*).
+' CMD55 is sent via cmd() which keeps CS asserted; we deassert so the
+' following ACMD gets its own CS cycle.
+'
+' @returns resp - R1 response from CMD55
+
+  resp := cmd(CMD55, 0)
+  pinh(cs)
+
+PRI readSCR(p_scr) : ok
 ' Read SCR register using ACMD51 - reads 8-byte SD Configuration Register.
 ' Requires CMD55 prefix before ACMD51.
-' Uses smart pin operations for compatibility.
 '
 ' @param p_scr - Pointer to 8-byte buffer to receive SCR data
 ' @returns ok - TRUE on success, FALSE on failure
-' @local timeout - Timeout counter
-' @local idx - Loop counter
 
-  debug("  [readSCR] Starting SCR read sequence")
-
-  ' Send CMD55 (APP_CMD) first
-  sp_transfer_8($FF)
-  pinl(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($40 | 55)                                                       '  CMD55 = APP_CMD
-  sp_transfer(0, 32)                                                            '  argument = 0
-  sp_transfer_8($65)                                                            '  CRC for CMD55
-
-  ' Wait for R1 response
-  timeout := getct() + clkfreq
-  repeat
-    ok := sp_transfer_8($FF)
-    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-      quit
-    if getct() - timeout > 0
-      debug("  [readSCR] CMD55 timeout - no response")
-      pinh(cs)
-      ok := $FF
-      quit
-
+  ok := sendAppCmdPrefix()
   debug("  [readSCR] CMD55 response: $", uhex_byte_(ok))
-  if ok > $01                                                               '  Accept $00 or $01 (idle)
-    if ok <> $FF
-      debug("  [readSCR] CMD55 error response")
-      pinh(cs)
+  if ok > $01                                                                    ' Accept $00 or $01 (idle)
+    debug("  [readSCR] CMD55 error response")
     ok := false
-
   else
-    pinh(cs)                                                                      '  Deselect before ACMD51
+    ok := readDataRegister(ACMD51, 0, CRC_ACMD51, p_scr, 8)
 
-    ' Send ACMD51 (SEND_SCR)
-    sp_transfer_8($FF)
-    pinl(cs)
-    sp_transfer_8($FF)
-    sp_transfer_8($40 | 51)                                                       '  ACMD51 = SEND_SCR
-    sp_transfer(0, 32)                                                            '  argument = 0
-    sp_transfer_8($55)                                                            '  CRC (approximate)
-
-    ' Wait for R1 response
-    timeout := getct() + clkfreq
-    repeat
-      ok := sp_transfer_8($FF)
-      if (ok & $80) == 0                                                         ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-        quit
-      if getct() - timeout > 0
-        debug("  [readSCR] ACMD51 timeout - no response")
-        pinh(cs)
-        ok := $FF
-        quit
-
-    debug("  [readSCR] ACMD51 response: $", uhex_byte_(ok))
-    if ok <> $00
-      if ok <> $FF
-        debug("  [readSCR] ACMD51 error - expected $00")
-        pinh(cs)
-      ok := false
-
-    ' Wait for data token ($FE)
-    else
-      timeout := getct() + clkfreq
-      repeat
-        ok := sp_transfer_8($FF)
-        if ok == $FE
-          quit
-        if getct() - timeout > 0
-          debug("  [readSCR] Timeout waiting for data token $FE")
-          pinh(cs)
-          ok := $FF
-          quit
-
-      if ok == $FE
-        debug("  [readSCR] Got data token, reading 8 bytes")
-
-        ' Read 8 bytes of SCR data
-        repeat idx from 0 to 7
-          byte[p_scr + idx] := sp_transfer_8($FF)
-
-        ' Read and discard 2-byte CRC
-        sp_transfer_8($FF)
-        sp_transfer_8($FF)
-
-        pinh(cs)
-        debug("  [readSCR] Success")
-        ok := true
-      else
-        ok := false
-
-PRI readSDStatus(p_buf) : ok | timeout, idx
+PRI readSDStatus(p_buf) : ok
 ' Read SD Status register using ACMD13 - reads 64-byte SD Status.
 ' Requires CMD55 prefix before ACMD13.
-' Uses byte-by-byte read (same pattern as readSCR).
 '
 ' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
 ' @returns ok - TRUE on success, FALSE on failure
-' @local timeout - Timeout counter
-' @local idx - Loop counter
 
-  debug("  [readSDStatus] Starting SD Status read sequence")
-
-  ' Send CMD55 (APP_CMD) first
-  sp_transfer_8($FF)
-  pinl(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($40 | 55)                                                       '  CMD55 = APP_CMD
-  sp_transfer(0, 32)                                                            '  argument = 0
-  sp_transfer_8($65)                                                            '  CRC for CMD55
-
-  ' Wait for R1 response
-  timeout := getct() + clkfreq
-  repeat
-    ok := sp_transfer_8($FF)
-    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-      quit
-    if getct() - timeout > 0
-      debug("  [readSDStatus] CMD55 timeout - no response")
-      pinh(cs)
-      ok := $FF
-      quit
-
+  ok := sendAppCmdPrefix()
   debug("  [readSDStatus] CMD55 response: $", uhex_byte_(ok))
-  if ok > $01                                                               '  Accept $00 or $01 (idle)
-    if ok <> $FF
-      debug("  [readSDStatus] CMD55 error response")
-      pinh(cs)
+  if ok > $01                                                                    ' Accept $00 or $01 (idle)
+    debug("  [readSDStatus] CMD55 error response")
     ok := false
-
   else
-    pinh(cs)                                                                      '  Deselect before ACMD13
-
-    ' Send ACMD13 (SD_STATUS)
-    sp_transfer_8($FF)
-    pinl(cs)
-    sp_transfer_8($FF)
-    sp_transfer_8($40 | 13)                                                       '  ACMD13 = SD_STATUS
-    sp_transfer(0, 32)                                                            '  argument = 0
-    sp_transfer_8($FF)                                                            '  CRC (don'timeout care in SPI mode)
-
-    ' Wait for R1 response
-    timeout := getct() + clkfreq
-    repeat
-      ok := sp_transfer_8($FF)
-      if (ok & $80) == 0                                                         ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-        quit
-      if getct() - timeout > 0
-        debug("  [readSDStatus] ACMD13 timeout - no response")
-        pinh(cs)
-        ok := $FF
-        quit
-
-    debug("  [readSDStatus] ACMD13 response: $", uhex_byte_(ok))
-    if ok <> $00
-      if ok <> $FF
-        debug("  [readSDStatus] ACMD13 error - expected $00")
-        pinh(cs)
-      ok := false
-
-    ' Wait for data token ($FE)
-    else
-      timeout := getct() + clkfreq
-      repeat
-        ok := sp_transfer_8($FF)
-        if ok == $FE
-          quit
-        if getct() - timeout > 0
-          debug("  [readSDStatus] Timeout waiting for data token $FE")
-          pinh(cs)
-          ok := $FF
-          quit
-
-      if ok == $FE
-        debug("  [readSDStatus] Got data token, reading 64 bytes")
-
-        ' Read 64 bytes of SD Status data
-        repeat idx from 0 to SD_STATUS_BYTES - 1
-          byte[p_buf + idx] := sp_transfer_8($FF)
-
-        ' Read and discard 2-byte CRC
-        sp_transfer_8($FF)
-        sp_transfer_8($FF)
-
-        pinh(cs)
-        debug("  [readSDStatus] Success")
-        ok := true
-      else
-        ok := false
+    ok := readDataRegister(CMD13, 0, CRC_NONE, p_buf, SD_STATUS_BYTES)
 
 
 #IFDEF SD_INCLUDE_SPEED
-PRI sendCMD6(arg, p_status) : ok | timeout, idx
+PRI sendCMD6(arg, p_status) : ok
 ' Send CMD6 (SWITCH_FUNC) and receive 64-byte status structure.
 ' arg format: [31]=mode (0=check, 1=switch), [3:0]=function group 1 selection.
 '
 ' @param arg - CMD6 argument word
 ' @param p_status - Pointer to 64-byte buffer to receive status
 ' @returns ok - TRUE on success, FALSE on failure/timeout
-' @local timeout - Timeout counter
-' @local idx - Loop counter
 
-  sp_transfer_8($FF)
-  pinl(cs)
-  sp_transfer_8($FF)
-  sp_transfer_8($40 | 6)                                                        '  CMD6 = SWITCH_FUNC
-  sp_transfer(arg, 32)                                                          '  argument
-  sp_transfer_8($FF)                                                            '  CRC (not checked in SPI mode)
-
-  ' Wait for R1 response
-  timeout := getct() + clkfreq
-  repeat
-    ok := sp_transfer_8($FF)
-    if (ok & $80) == 0                                                           ' valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
-      quit
-    if getct() - timeout > 0
-      debug("  [sendCMD6] Timeout waiting for R1")
-      pinh(cs)
-      ok := $FF
-      quit
-
-  if ok <> $00
-    if ok <> $FF
-      debug("  [sendCMD6] R1 error: $", uhex_byte_(ok))
-      pinh(cs)
-    ok := false
-
-  ' Wait for data token ($FE)
-  else
-    timeout := getct() + clkfreq
-    repeat
-      ok := sp_transfer_8($FF)
-      if ok == $FE
-        quit
-      if getct() - timeout > 0
-        debug("  [sendCMD6] Timeout waiting for data token")
-        pinh(cs)
-        ok := $FF
-        quit
-
-    if ok == $FE
-      ' Read 64 bytes of status data
-      repeat idx from 0 to SD_STATUS_BYTES - 1
-        byte[p_status + idx] := sp_transfer_8($FF)
-
-      ' Read and discard 2-byte CRC
-      sp_transfer_8($FF)
-      sp_transfer_8($FF)
-
-      pinh(cs)
-      ok := true
-    else
-      ok := false
+  ok := readDataRegister(CMD6, arg, CRC_NONE, p_status, SD_STATUS_BYTES)
 
 PRI queryHighSpeedSupport() : supported | scr[2], status[16], sd_spec
 ' Check if card supports high-speed mode - queries SCR and function group 1.
