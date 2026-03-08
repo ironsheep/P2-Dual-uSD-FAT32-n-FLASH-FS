@@ -6,7 +6,7 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **33 test files** across four device categories producing **1,308+ test assertions**, all verified on real P2 hardware.
+The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **29 standard suites** across four device categories producing **1,308 test assertions**, all verified on real P2 hardware.
 
 **Verified on hardware (2026-03-07):** 29 standard suites totaling **1,308 tests** -- all passing on both GigaStone 32GB and Elite SD cards:
 
@@ -25,10 +25,10 @@ The tests exercise the driver from dual-device bus switching through both filesy
 
 ### 2.1 Unified Test Framework
 
-The suite uses two separate test frameworks, one for each device type:
+The suite uses a single unified test framework:
 
-| Framework | File | Used By | Key Difference |
-|-----------|------|---------|----------------|
+| Framework | File | Used By | Key Feature |
+|-----------|------|---------|-------------|
 | Unified framework | `DFS_RT_utilities.spin2` | All tests (SD, Flash, dual/cross) | Per-cog VAR arrays (indexed by `cogid()`) for multi-cog safety |
 
 The unified framework provides the core assertion API:
@@ -284,7 +284,7 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 
 **Why we test this:** Raw sector access bypasses the FAT32 filesystem and writes directly to specified sectors. The format utility and FSCK utility depend on this API. These tests verify that data written to a sector can be read back correctly.
 
-### 4.12 SD Volume Tests (23 tests)
+### 4.12 SD Volume Tests (25 tests)
 
 **Purpose:** Validate volume-level operations -- volume label, VBR access, syncAll, sync, and setDate.
 
@@ -383,7 +383,7 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 
 **Circular Compatibility Tests (79 tests):** Validate that circular files created by write operations can be correctly read back, including persistence verification across unmount/mount cycles.
 
-### 4.27 Flash CWD Tests (31 tests)
+### 4.27 Flash CWD Tests (36 tests)
 
 **Purpose:** Validate Flash current working directory (CWD) emulation -- `changeDirectory()`, per-cog directory isolation, and absolute path support on the flat Flash filesystem.
 
@@ -414,7 +414,7 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 
 ## 5. Test Card Requirements
 
-SD tests require a FAT32-formatted test card with specific test files. See `TEST-CARD-SPECIFICATION.md` for the required directory structure and file contents.
+SD tests require a FAT32-formatted test card with specific test files. See `TestCard/TEST-CARD-SPECIFICATION.md` for the required directory structure and file contents.
 
 Flash tests use the onboard 16MB W25Q128JV Flash chip. Most Flash test suites format the Flash at startup, so no special preparation is needed.
 

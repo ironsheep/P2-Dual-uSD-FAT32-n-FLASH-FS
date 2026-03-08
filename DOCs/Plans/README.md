@@ -9,7 +9,6 @@ Style guides and procedures are in [`DOCs/procedures/`](../procedures/) (gitigno
 | Document | Description |
 |----------|-------------|
 | [PUNCH_LIST.md](PUNCH_LIST.md) | Pre-release cleanup tasks (nothing outstanding) |
-| [SPI-Backend-Consolidation-Plan.md](SPI-Backend-Consolidation-Plan.md) | SPI backend refactoring: 3 shared methods, ~286 lines saved |
 
 ## Deferred
 
@@ -23,6 +22,7 @@ Completed plans are in `archive/` (gitignored, local-only). Kept for reference b
 
 | Document | Description |
 |----------|-------------|
+| SPI-Backend-Consolidation-Plan.md | SPI backend refactoring: 3 shared methods, ~286 lines saved |
 | R1-Bit7-Fix-Plan.md | R1 response bit-7 fix (SD spec 7.3.2.1), 9 loops in 7 methods |
 | SD-Driver-v1.3.0-Upgrade-Plan.md | SD driver v1.3.0 upgrade (CMD13/CMD23 probes, CMD12 tolerance) |
 | Driver-Path-Resolution-Plan.md | Driver-internal path resolution for SD and Flash |
