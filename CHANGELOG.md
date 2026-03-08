@@ -10,7 +10,7 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 Initial release of the unified dual-FS driver for the Parallax Propeller 2.
 
-### Added
+### Features
 - **Unified driver**: `dual_sd_fat32_flash_fs.spin2` -- SD FAT32 and Flash filesystems managed by a single worker cog
 - **SD FAT32**: 8.3 filenames, directory navigation, up to 6 simultaneous file handles, 25 MHz SPI
 - **Flash filesystem**: 16 MB onboard Flash with wear leveling, CRC-32 integrity, and circular file support
