@@ -1,10 +1,4 @@
-# P2 Dual uSD FAT32 n FLASH FS
-
----
-
-**This is NOT a released driver!!!** Much of the code is not yet here as I'm still certifying it. The driver you are looking for (which is released and announced in the forum post is the [P2 microSD FAT32 Filesystem](https://github.com/ironsheep/P2-uSD-FAT32-FS)
-
----
+# P2 Dual uSD FAT32 and FLASH FS
 
 A unified filesystem driver for the Parallax Propeller 2 (P2) that provides simultaneous access to both the onboard 16MB FLASH chip and a microSD card through a single cog and a single API.
 
@@ -36,6 +30,7 @@ If your product only ever needs one device, the standalone drivers ([Flash-only]
 - **Unified API** — mount, open, read, write, close, and copy files on either device with the same calls
 - **Cross-device copy** — copy files between Flash and SD through one driver with `copyFile()`
 - **Shared SPI bus management** — automatic bus switching between SD (Mode 0) and Flash (Mode 3) with proper smart pin reconfiguration
+- **Flash directory emulation** — per-cog current working directory on the flat Flash filesystem using slash-delimited filename convention
 - **Multi-cog safety** — hardware lock serializes access from up to 8 cogs
 - **Conditional compilation** — `SD_INCLUDE_RAW`, `SD_INCLUDE_REGISTERS`, `SD_INCLUDE_SPEED`, `SD_INCLUDE_DEBUG` for minimal or full builds
 - **1,308 regression tests** across 29 standard test suites verified on real P2 hardware
@@ -100,7 +95,7 @@ The SD card uses **SPI Mode 0** (CPOL=0, CPHA=0 — clock idles LOW) while the F
 - Parallax Propeller 2 — [P2-EC](https://www.parallax.com/product/p2-edge-module/) or [P2-EC32MB](https://www.parallax.com/product/p2-edge-module-32mb/)
 - microSD card (SDHC or SDXC) — the included format utility can format cards that are not already FAT32
 
-### Default Pin Configuration (P2 Edge)
+### Pin Configuration (P2 Edge)
 
 | Pin | SD Card | Flash |
 |-----|---------|-------|
@@ -133,10 +128,6 @@ DOCs/
 └── Utils/                         # Utility theory of operations
 
 tools/                             # Test runner scripts and logs
-
-REF-FLASH-uSD/                     # Read-only reference drivers (development baseline)
-├── FLASH/                         # Flash FS reference (Chip Gracey / Jon McPhalen)
-└── uSD-FAT32/                     # microSD FAT32 reference (Chris Gadd / Stephen Moraco)
 ```
 
 ## Documentation
@@ -149,17 +140,6 @@ REF-FLASH-uSD/                     # Read-only reference drivers (development ba
 | [Flash FS Theory](DOCs/FLASH-FS-THEORY.md) | Block format, wear leveling, mount process, circular files |
 | [Memory Sizing Guide](DOCs/Reference/MEMORY-SIZING-GUIDE.md) | Hub RAM sizing for the dual-FS driver |
 | [Flash Chip Datasheet](DOCs/Reference/W25Q128JV-210823.pdf) | W25Q128JV SPI Flash datasheet (Winbond) |
-
-## Reference Implementations
-
-The `REF-FLASH-uSD/` directory contains the two standalone drivers that served as the development baseline:
-
-| Driver | Description | Original Tests |
-|--------|-------------|----------------|
-| [**Flash FS**](REF-FLASH-uSD/FLASH/) | Wear-leveling filesystem for onboard 16MB FLASH. Circular files, read-modify-write, 4KB blocks, 127-char filenames. | 900+ |
-| [**microSD FAT32**](REF-FLASH-uSD/uSD-FAT32/) | Full FAT32 driver with smart pin SPI, streamer DMA, multi-sector transfers. 8.3 filenames, up to 2TB. | 345+ |
-
-Both test suites have been migrated and expanded in the unified driver's [regression test suite](src/regression-tests/).
 
 ## Toolchain
 

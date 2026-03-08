@@ -1,6 +1,6 @@
 # Regression Testing: Best Practices and Principles
 
-A comprehensive guide to designing, organizing, and maintaining regression test suites for software libraries, drivers, and APIs. This document covers the theory and methodology; for project-specific coding conventions, see the companion [REGRESSION-TEST-STYLE-GUIDE.md](REGRESSION-TEST-STYLE-GUIDE.md).
+A comprehensive guide to designing, organizing, and maintaining regression test suites for software libraries, drivers, and APIs. This document covers the theory and methodology; for project-specific coding conventions, see the companion REGRESSION-TEST-STYLE-GUIDE.md.
 
 ---
 
@@ -805,4 +805,4 @@ The following works are cited in this document and recommended for further study
 
 ---
 
-*Document created 2026-03-04. Companion to [REGRESSION-TEST-STYLE-GUIDE.md](REGRESSION-TEST-STYLE-GUIDE.md) (project-specific coding conventions for test files).*
+*Document created 2026-03-04. Companion to REGRESSION-TEST-STYLE-GUIDE.md (project-specific coding conventions for test files).*

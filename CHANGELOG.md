@@ -16,21 +16,15 @@ Initial release of the unified dual-FS driver for the Parallax Propeller 2.
 - **Flash filesystem**: 16 MB onboard Flash with wear leveling, CRC-32 integrity, and circular file support
 - **Cross-device operations**: `copyFile()` and `moveFile()` between SD and Flash devices
 - **Multi-cog safety**: hardware lock serializes access from up to 8 cogs via `WAITATN()`/`COGATN()` signaling
-- **Conditional compilation**: `SD_INCLUDE_RAW`, `SD_INCLUDE_REGISTERS`, `SD_INCLUDE_SPEED`, `SD_INCLUDE_DEBUG` (and `SD_INCLUDE_ALL`)
 - **Status-returning API**: all PUB methods return status codes (SUCCESS=0 or negative error constant)
-- **Feature parity**: `exists()`, `file_size()`, `serial_number()`, `stats()`, byte/word/long/string I/O, seek with whence
-- **Flash CWD emulation**: per-cog current working directory for Flash using slash-delimited filename convention
-- **SD path resolution**: driver-internal path handling -- API methods accept absolute or relative paths
+- **Flash directory emulation** — per-cog current working directory on the flat Flash filesystem using slash-delimited filename convention
 - **Card presence detection**: `E_NO_CARD` (-8) via MISO pull-up probe during CMD0
-- **SD CMD13 health check**: automatic card status verification after every read/write operation
-- **SD CMD23 auto-stop**: pre-defined block count for multi-block reads (when card supports it)
-- **SD high-speed mode**: CMD6 SWITCH_FUNC for 50 MHz capable cards (behind `SD_INCLUDE_SPEED`)
-- **SPI backend consolidation**: shared `readDataRegister()`, `sendAppCmdPrefix()`, `sendCmd13Transaction()` methods
 - **Interactive shell**: `DFS_demo_shell.spin2` -- dual-device commands with `sd`/`fl` device switching, inline audit/fsck
 - **Example programs**: basic mount/read/write, cross-device copy, data logger, SD manifest reader (4 programs)
 - **Utilities**: SD format, SD audit, SD FSCK, SD card characterize, Flash format, Flash audit, Flash FSCK (7 utilities)
 - **Regression tests**: 29 standard suites, 1,308 tests (SD, Flash, cross-device, dual-device, multi-cog) plus optional format and 8-cog stress tests
 - **Documentation**: theory of operations, tutorial, utilities guide, memory sizing guide, Flash FS theory, utility theory docs
+- **Conditional compilation**: `SD_INCLUDE_RAW`, `SD_INCLUDE_REGISTERS`, `SD_INCLUDE_SPEED`, `SD_INCLUDE_DEBUG` (and `SD_INCLUDE_ALL`)
 - **Configurable resources**: `MAX_OPEN_FILES` and `MAX_FLASH_BUFFERS` independently tunable via OBJ overrides
 
 ### Hardware Verified

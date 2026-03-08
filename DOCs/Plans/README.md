@@ -9,7 +9,7 @@ Style guides and procedures are in [`DOCs/procedures/`](../procedures/) (gitigno
 | Document | Description |
 |----------|-------------|
 | [PUNCH_LIST.md](PUNCH_LIST.md) | Pre-release cleanup tasks (nothing outstanding) |
-| [SPI-BACKEND-CONSOLIDATION-GUIDE.md](SPI-BACKEND-CONSOLIDATION-GUIDE.md) | SPI backend refactoring: 3 shared methods, ~286 lines saved (pending) |
+| [SPI-Backend-Consolidation-Plan.md](SPI-Backend-Consolidation-Plan.md) | SPI backend refactoring: 3 shared methods, ~286 lines saved |
 
 ## Deferred
 

@@ -166,7 +166,7 @@ Default SD pins (P2 Edge Module): CS=P60, MOSI=P59, MISO=P58, SCK=P61. The Flash
 ## Documentation
 
 - [THEORY-OF-OPERATIONS.md](THEORY-OF-OPERATIONS.md) -- Detailed theory of operations for each test suite
-- [TEST-CARD-SPECIFICATION.md](TEST-CARD-SPECIFICATION.md) -- SD test card file layout and contents
+- [TEST-CARD-SPECIFICATION.md](TestCard/TEST-CARD-SPECIFICATION.md) -- SD test card file layout and contents
 - [REGRESSION-TEST-ANALYSIS.md](../../DOCs/Analysis/REGRESSION-TEST-ANALYSIS.md) -- Pre-release quality audit and hardening results
 
 ---
