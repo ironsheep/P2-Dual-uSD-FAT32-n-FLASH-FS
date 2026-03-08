@@ -772,6 +772,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_FLASH_BAD_FILE_LENGTH` | -112 | File length is negative or zero |
 | `E_FLASH_BAD_SEEK_ARG` | -113 | Invalid seek argument |
 | `E_FLASH_FILE_EXISTS` | -114 | Flash file already exists |
+| `E_FLASH_NO_BUFFER` | -115 | No Flash buffer available (all in use) |
 
 ### Unified Device Errors
 
@@ -780,6 +781,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_BAD_DEVICE` | -120 | Invalid device parameter |
 | `E_DEVICE_NOT_MOUNTED` | -121 | Requested device not mounted |
 | `E_NOT_SUPPORTED` | -122 | Operation not supported on this device |
+| `E_STACK_OVERFLOW` | -130 | Worker cog stack overflow detected |
 
 The `string_for_error(code)` method returns a human-readable string for any error code.
 
@@ -795,6 +797,7 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `unmount(dev)` | Flush and unmount one or both filesystems |
 | `mounted(dev)` | Check if device is mounted (lock-free) |
 | `version(dev)` | Driver version as integer (100 = v1.0.0) |
+| `versionStr(dev)` | Driver version as string (e.g., "1.0.0") |
 | `checkStackGuard()` | Verify worker cog stack guard is intact |
 | `error()` | Last error code for calling cog |
 
@@ -856,6 +859,7 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `readDirectoryHandle(handle)` | Read next directory entry → pEntry |
 | `closeDirectoryHandle(handle)` | Close directory handle |
 | `directory(dev, pBlockId, pFilename, pFileSize)` | Iterate Flash directory (set blockId=0 to start) |
+| `getFlashCwd()` | Get current Flash CWD prefix string for calling cog |
 
 ### Device Information
 
@@ -865,6 +869,7 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `volumeLabel(dev)` | Pointer to volume label string (SD only) |
 | `setVolumeLabel(dev, pLabel)` | Set SD volume label |
 | `serial_number(dev)` | Device serial number (sn_hi, sn_lo) |
+| `cardWarnings()` | SD card warning flags from last operation |
 | `stats(dev)` | Device statistics (used, free, file_count) |
 | `canMount(dev)` | Non-destructive mount check |
 | `format(dev)` | Format device (destructive!) |

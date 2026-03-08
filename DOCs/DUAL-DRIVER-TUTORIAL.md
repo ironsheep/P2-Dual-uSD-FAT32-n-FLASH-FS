@@ -44,32 +44,34 @@ CON
   SD_MISO = 58
   SD_SCK  = 61
 
-PUB main() | workerCog, handle, buf[128], bytes_read
+DAT
+  testFile    BYTE  "TEST.TXT", 0
+  sensorLog   BYTE  "sensor-log.dat", 0
+  flashMsg    BYTE  "Hello from Flash!", 0
+
+PUB main() | workerCog, status, handle, buf[128], bytesRead
   ' Step 1: Initialize driver (starts worker cog)
   workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  if workerCog < 0
-    debug("Init failed!")
-    return
+  if workerCog >= 0
+    ' Step 2: Mount one or both devices
+    status := fs.mount(fs.DEV_BOTH)
+    if status == fs.SUCCESS
+      ' Step 3: Use SD (FAT32 -- directories, 8.3 filenames)
+      handle := fs.openFileRead(fs.DEV_SD, @testFile)
+      if handle >= 0
+        bytesRead := fs.readHandle(handle, @buf, 512)
+        fs.closeFileHandle(handle)
+        debug("SD: read ", udec(bytesRead), " bytes")
 
-  ' Step 2: Mount one or both devices
-  fs.mount(fs.DEV_BOTH)
+      ' Step 4: Use Flash (block-based -- directory emulation, long filenames)
+      handle := fs.open(fs.DEV_FLASH, @sensorLog, fs.FILEMODE_WRITE)
+      if handle >= 0
+        fs.wr_str(handle, @flashMsg)
+        fs.close(handle)
 
-  ' Step 3: Use SD (FAT32 — directories, 8.3 filenames)
-  handle := fs.openFileRead(fs.DEV_SD, @"TEST.TXT")
-  if handle >= 0
-    bytes_read := fs.readHandle(handle, @buf, 512)
-    fs.closeFileHandle(handle)
-    debug("SD: read ", udec(bytes_read), " bytes")
-
-  ' Step 4: Use Flash (block-based — directory emulation, long filenames)
-  handle := fs.open(fs.DEV_FLASH, @"sensor-log.dat", fs.FILEMODE_WRITE)
-  if handle >= 0
-    fs.wr_str(handle, @"Hello from Flash!")
-    fs.close(handle)
-
-  ' Step 5: Clean shutdown
-  fs.unmount(fs.DEV_BOTH)
-  fs.stop()
+      ' Step 5: Clean shutdown
+      fs.unmount(fs.DEV_BOTH)
+    fs.stop()
 ```
 
 Key differences from the SD-only reference driver:
@@ -128,8 +130,9 @@ fs.mount(fs.DEV_FLASH)
 `mount()` returns `SUCCESS` (0) on success, or a negative error code on failure. After mounting, you can check the status:
 
 ```spin2
-if fs.mount(fs.DEV_SD)
-  debug("SD mount failed: ", sdec(fs.error()))
+status := fs.mount(fs.DEV_SD)
+if status < 0
+  debug("SD mount failed: ", zstr(fs.string_for_error(status)))
 else
   debug("SD mounted, volume: ", zstr(fs.volumeLabel(fs.DEV_SD)))
 ```
@@ -317,15 +320,12 @@ fs.wr_str(handle, @"Temperature: 23.5C")
 
 ```spin2
 ' Read individual values
-byte_val := fs.rd_byte(handle)       ' Single byte
-word_val := fs.rd_word(handle)       ' 16-bit
-long_val := fs.rd_long(handle)       ' 32-bit
+byteVal := fs.rd_byte(handle)       ' Single byte
+wordVal := fs.rd_word(handle)       ' 16-bit
+longVal := fs.rd_long(handle)       ' 32-bit
 
 ' Read string (reads until null terminator or maxLen)
-VAR
-  byte str_buf[128]
-
-bytes_read := fs.rd_str(handle, @str_buf, 128)
+bytesRead := fs.rd_str(handle, @strBuf, STR_BUF_SIZE)
 ```
 
 > **Note:** `wr_str()` writes the null terminator into the file. `rd_str()` reads until it finds that terminator (or hits the buffer limit). The return value from `rd_str()` is the string length **without** the terminator.
@@ -351,23 +351,26 @@ handle := fs.open_circular(fs.DEV_FLASH, @"ringlog.dat", fs.FILEMODE_WRITE, 8000
 ### Flash Example: Write and Read Back
 
 ```spin2
-PUB flashReadWrite() | handle, value
+DAT
+  flTestFile  BYTE  "test.dat", 0
+  flTestStr   BYTE  "hello", 0
+
+PUB flashReadWrite() | handle, value, nameBuf[8]
   ' Write some values
-  handle := fs.open(fs.DEV_FLASH, @"test.dat", fs.FILEMODE_WRITE)
+  handle := fs.open(fs.DEV_FLASH, @flTestFile, fs.FILEMODE_WRITE)
   if handle >= 0
     fs.wr_long(handle, 42)
-    fs.wr_str(handle, @"hello")
+    fs.wr_str(handle, @flTestStr)
     fs.close(handle)
 
   ' Read them back
-  handle := fs.open(fs.DEV_FLASH, @"test.dat", fs.FILEMODE_READ)
+  handle := fs.open(fs.DEV_FLASH, @flTestFile, fs.FILEMODE_READ)
   if handle >= 0
     value := fs.rd_long(handle)
     debug("Value: ", udec(value))          ' 42
 
-    VAR byte name_buf[32]
-    fs.rd_str(handle, @name_buf, 32)
-    debug("String: ", zstr(@name_buf))     ' hello
+    fs.rd_str(handle, @nameBuf, 32)
+    debug("String: ", zstr(@nameBuf))      ' hello
 
     fs.close(handle)
 ```
@@ -402,27 +405,25 @@ fs.copyFile(fs.DEV_SD, @"FILE.TXT", fs.DEV_SD, @"COPY.TXT")
 For more control (e.g., data transformation during copy), you can do it manually:
 
 ```spin2
-PUB manualCopy() | src_h, dst_h, buf[128], bytes
+DAT
+  srcLogFile  BYTE  "log.dat", 0
+  dstLogFile  BYTE  "LOG.TXT", 0
+
+PUB manualCopy() | srcHandle, dstHandle, buf[128], bytesRead
   ' Read from Flash
-  src_h := fs.open(fs.DEV_FLASH, @"log.dat", fs.FILEMODE_READ)
-  if src_h < 0
-    return
-
-  ' Write to SD
-  dst_h := fs.createFileNew(fs.DEV_SD, @"LOG.TXT")
-  if dst_h < 0
-    fs.close(src_h)
-    return
-
-  ' Copy loop — driver handles SPI switching per command
-  repeat
-    bytes := fs.readHandle(src_h, @buf, 512)
-    if bytes == 0
-      quit
-    fs.writeHandle(dst_h, @buf, bytes)
-
-  fs.close(src_h)
-  fs.closeFileHandle(dst_h)
+  srcHandle := fs.open(fs.DEV_FLASH, @srcLogFile, fs.FILEMODE_READ)
+  if srcHandle >= 0
+    ' Write to SD
+    dstHandle := fs.createFileNew(fs.DEV_SD, @dstLogFile)
+    if dstHandle >= 0
+      ' Copy loop -- driver handles SPI switching per command
+      repeat
+        bytesRead := fs.readHandle(srcHandle, @buf, 512)
+        if bytesRead == 0
+          quit
+        fs.writeHandle(dstHandle, @buf, bytesRead)
+      fs.closeFileHandle(dstHandle)
+    fs.close(srcHandle)
 ```
 
 ---
@@ -463,41 +464,43 @@ else
 **Index-based (simple, from CWD):**
 
 ```spin2
-PUB listSDDirectory() | entry_num, p_entry
-  entry_num := 0
+CON
+  ATTR_DIRECTORY = $10        ' FAT32 directory attribute flag
+
+PUB listSDDirectory() | entryIdx, pEntry
+  entryIdx := 0
   repeat
-    p_entry := fs.readDirectory(entry_num)
-    if p_entry == 0
+    pEntry := fs.readDirectory(entryIdx)
+    if pEntry == 0
       quit
 
-    if fs.attributes() & $10
+    if fs.attributes() & ATTR_DIRECTORY
       debug("[DIR]  ", zstr(fs.fileName()))
     else
       debug("[FILE] ", zstr(fs.fileName()), " (", udec(fs.fileSize()), " bytes)")
 
-    entry_num++
+    entryIdx++
 ```
 
 **Handle-based (enumerate a specific path without changing CWD):**
 
 ```spin2
-PUB listPath(p_path) | dh, p_entry
-  dh := fs.openDirectory(fs.DEV_SD, p_path)
-  if dh < 0
-    debug("Cannot open: ", sdec(dh))
-    return
+PUB listPath(pPath) | dirHandle, pEntry
+  dirHandle := fs.openDirectory(fs.DEV_SD, pPath)
+  if dirHandle >= 0
+    repeat
+      pEntry := fs.readDirectoryHandle(dirHandle)
+      if pEntry == 0
+        quit
 
-  repeat
-    p_entry := fs.readDirectoryHandle(dh)
-    if p_entry == 0
-      quit
+      if fs.attributes() & ATTR_DIRECTORY
+        debug("[DIR]  ", zstr(fs.fileName()))
+      else
+        debug("[FILE] ", zstr(fs.fileName()))
 
-    if fs.attributes() & $10
-      debug("[DIR]  ", zstr(fs.fileName()))
-    else
-      debug("[FILE] ", zstr(fs.fileName()))
-
-  fs.closeDirectoryHandle(dh)
+    fs.closeDirectoryHandle(dirHandle)
+  else
+    debug("Cannot open: ", sdec(dirHandle))
 ```
 
 ### Flash Directory Emulation
@@ -530,30 +533,30 @@ handle := fs.open(fs.DEV_FLASH, @"temp.dat", fs.FILEMODE_WRITE)
 **Handle-based (filtered by CWD):**
 
 ```spin2
-PUB listFlashDir() | dh, p_entry
-  dh := fs.openDirectory(fs.DEV_FLASH, @"/sensors")
-  if dh < 0
-    return
+DAT
+  sensorsDir  BYTE  "/sensors", 0
 
-  repeat
-    p_entry := fs.readDirectoryHandle(dh)
-    if p_entry == 0
-      quit
-    debug("[FILE] ", zstr(fs.fileName()))
-
-  fs.closeDirectoryHandle(dh)
+PUB listFlashDir() | dirHandle, pEntry
+  dirHandle := fs.openDirectory(fs.DEV_FLASH, @sensorsDir)
+  if dirHandle >= 0
+    repeat
+      pEntry := fs.readDirectoryHandle(dirHandle)
+      if pEntry == 0
+        quit
+      debug("[FILE] ", zstr(fs.fileName()))
+    fs.closeDirectoryHandle(dirHandle)
 ```
 
 **Low-level iteration (all files, unfiltered):**
 
 ```spin2
-PUB listAllFlashFiles() | block_id, status, name_buf[32], file_size
-  block_id := 0
+PUB listAllFlashFiles() | blockId, status, nameBuf[32], fileBytes
+  blockId := 0
   repeat
-    status := fs.directory(fs.DEV_FLASH, @block_id, @name_buf, @file_size)
-    if status <> 0
+    status := fs.directory(fs.DEV_FLASH, @blockId, @nameBuf, @fileBytes)
+    if status <> fs.SUCCESS
       quit
-    debug(zstr(@name_buf), " (", udec(file_size), " bytes)")
+    debug(zstr(@nameBuf), " (", udec(fileBytes), " bytes)")
 ```
 
 Call `directory()` with `block_id` initialized to 0. Each call updates `block_id` to point to the next file. When there are no more files, it returns a non-zero status. This shows all files with their full path-segmented names.
@@ -598,13 +601,20 @@ end_pos := fs.flashSeek(handle, 50, fs.SK_CURRENT_POSN)
 ### Random Access Example (SD)
 
 ```spin2
-PUB readRecordAt(record_num) | handle, record[16]
-  handle := fs.openFileRead(fs.DEV_SD, @"DATABASE.DAT")
+CON
+  RECORD_SIZE = 64            ' bytes per record
+
+DAT
+  dbFile      BYTE  "DATABASE.DAT", 0
+
+PUB readRecordAt(recordNum, pRecordBuf) : status | handle
+  status := fs.E_FILE_NOT_FOUND
+  handle := fs.openFileRead(fs.DEV_SD, @dbFile)
   if handle >= 0
-    fs.seekHandle(handle, record_num * 64)
-    fs.readHandle(handle, @record, 64)
+    fs.seekHandle(handle, recordNum * RECORD_SIZE)
+    fs.readHandle(handle, pRecordBuf, RECORD_SIZE)
     fs.closeFileHandle(handle)
-  return @record
+    status := fs.SUCCESS
 ```
 
 ---
@@ -779,10 +789,10 @@ PRI archiveTask()
 
 ```spin2
 PRI sensorLogger()
-    if not fs.mounted(fs.DEV_FLASH)
+    if fs.mounted(fs.DEV_FLASH)
+        ' proceed with logging...
+    else
         debug("FATAL: Flash not mounted")
-        return
-    ' proceed with logging...
 ```
 
 #### Late-Discovered Need: Just Call `mount()`
@@ -914,37 +924,36 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 ### Error Handling Pattern
 
 ```spin2
-PUB safeOperation() | handle, status
-  workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  if workerCog < 0
-    debug("Init failed")
-    return
+DAT
+  configFile  BYTE  "CONFIG.TXT", 0
 
-  status := fs.mount(fs.DEV_BOTH)
-  if status < 0
-    if status == fs.E_NO_CARD
+PUB safeOperation() | workerCog, handle, status
+  workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  if workerCog >= 0
+    status := fs.mount(fs.DEV_BOTH)
+    if status == fs.SUCCESS
+      ' Try to open a file on SD
+      handle := fs.openFileRead(fs.DEV_SD, @configFile)
+      if handle >= 0
+        ' ... use handle ...
+        fs.closeFileHandle(handle)
+      else
+        case fs.error()
+          fs.E_FILE_NOT_FOUND:
+            debug("Config not found, using defaults")
+          fs.E_NOT_MOUNTED:
+            debug("SD card not mounted")
+          other:
+            debug("Error: ", zstr(fs.string_for_error(fs.error())))
+
+      fs.unmount(fs.DEV_BOTH)
+    elseif status == fs.E_NO_CARD
       debug("No SD card detected - check slot")
     else
       debug("Mount failed: ", zstr(fs.string_for_error(status)))
     fs.stop()
-    return
-
-  ' Try to open a file on SD
-  handle := fs.openFileRead(fs.DEV_SD, @"CONFIG.TXT")
-  if handle < 0
-    case fs.error()
-      fs.E_FILE_NOT_FOUND:
-        debug("Config not found, using defaults")
-      fs.E_NOT_MOUNTED:
-        debug("SD card not mounted")
-      other:
-        debug("Error: ", zstr(fs.string_for_error(fs.error())))
   else
-    ' ... use handle ...
-    fs.closeFileHandle(handle)
-
-  fs.unmount(fs.DEV_BOTH)
-  fs.stop()
+    debug("Init failed")
 ```
 
 ---
@@ -958,33 +967,38 @@ A common pattern: write high-frequency data to Flash for speed, then archive to 
 ```spin2
 CON
   SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+  NUM_READINGS = 100
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"
 
-PUB main() | handle, i, value
+DAT
+  flReadings  BYTE  "readings.dat", 0
+  sdReadings  BYTE  "READINGS.DAT", 0
+
+PUB main() | status, handle, readingIdx, value
   fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  fs.mount(fs.DEV_BOTH)
+  status := fs.mount(fs.DEV_BOTH)
+  if status == fs.SUCCESS
+    ' --- Phase 1: Fast logging to Flash ---
+    handle := fs.open(fs.DEV_FLASH, @flReadings, fs.FILEMODE_WRITE)
+    if handle >= 0
+      repeat readingIdx from 0 to NUM_READINGS - 1
+        value := readSensor()
+        fs.wr_long(handle, value)
+      fs.close(handle)
+      debug("Logged 100 readings to Flash")
 
-  ' --- Phase 1: Fast logging to Flash ---
-  handle := fs.open(fs.DEV_FLASH, @"readings.dat", fs.FILEMODE_WRITE)
-  if handle >= 0
-    repeat i from 0 to 99
-      value := readSensor()
-      fs.wr_long(handle, value)
-    fs.close(handle)
-    debug("Logged 100 readings to Flash")
+    ' --- Phase 2: Archive to SD ---
+    fs.copyFile(fs.DEV_FLASH, @flReadings, fs.DEV_SD, @sdReadings)
+    debug("Archived to SD card")
 
-  ' --- Phase 2: Archive to SD ---
-  fs.copyFile(fs.DEV_FLASH, @"readings.dat", fs.DEV_SD, @"READINGS.DAT")
-  debug("Archived to SD card")
+    ' --- Phase 3: Verify and clean up ---
+    if fs.exists(fs.DEV_SD, @sdReadings)
+      fs.deleteFile(fs.DEV_FLASH, @flReadings)
+      debug("Flash copy deleted after successful archive")
 
-  ' --- Phase 3: Verify and clean up ---
-  if fs.exists(fs.DEV_SD, @"READINGS.DAT")
-    fs.deleteFile(fs.DEV_FLASH, @"readings.dat")
-    debug("Flash copy deleted after successful archive")
-
-  fs.unmount(fs.DEV_BOTH)
+    fs.unmount(fs.DEV_BOTH)
   fs.stop()
 
 PRI readSensor() : value
@@ -997,47 +1011,48 @@ PRI readSensor() : value
 CON
   SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
   MAX_LINE = 80
+  LF = 10
+  CR = 13
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"
 
+DAT
+  configIni   BYTE  "CONFIG.INI", 0
+
 VAR
-  byte line_buffer[MAX_LINE]
+  byte lineBuffer[MAX_LINE]
 
-PUB readConfig() | handle, i, ch
+PUB readConfig() : status | handle, charIdx, charVal
+  status := fs.E_NOT_MOUNTED
   fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  if fs.mount(fs.DEV_SD)
-    debug("Mount failed")
-    return false
+  status := fs.mount(fs.DEV_SD)
+  if status == fs.SUCCESS
+    handle := fs.openFileRead(fs.DEV_SD, @configIni)
+    if handle >= 0
+      ' Read line by line
+      repeat
+        charIdx := 0
+        repeat
+          if fs.readHandle(handle, @charVal, 1) == 0
+            quit
+          if charVal == LF
+            quit
+          if charVal <> CR and charIdx < MAX_LINE - 1
+            lineBuffer[charIdx++] := charVal
 
-  handle := fs.openFileRead(fs.DEV_SD, @"CONFIG.INI")
-  if handle < 0
+        lineBuffer[charIdx] := 0
+        if charIdx > 0
+          processConfigLine(@lineBuffer)
+
+        if fs.eofHandle(handle)
+          quit
+
+      fs.closeFileHandle(handle)
+    else
+      status := handle
     fs.unmount(fs.DEV_SD)
-    fs.stop()
-    return false
-
-  ' Read line by line
-  repeat
-    i := 0
-    repeat
-      if fs.readHandle(handle, @ch, 1) == 0
-        quit
-      if ch == 10
-        quit
-      if ch <> 13 and i < MAX_LINE - 1
-        line_buffer[i++] := ch
-
-    line_buffer[i] := 0
-    if i > 0
-      processConfigLine(@line_buffer)
-
-    if fs.eofHandle(handle)
-      quit
-
-  fs.closeFileHandle(handle)
-  fs.unmount(fs.DEV_SD)
   fs.stop()
-  return true
 ```
 
 ### Example 3: Data Logger with Periodic SD Checkpoints
@@ -1045,42 +1060,51 @@ PUB readConfig() | handle, i, ch
 ```spin2
 CON
   SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+  LOG_HEADER_LEN = 19
+  LOG_FOOTER_LEN = 17
+  CRLF_LEN = 2
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"
 
+DAT
+  logsDir     BYTE  "LOGS", 0
+  dataLog     BYTE  "DATA.LOG", 0
+  logHeader   BYTE  "=== Log Started ===", 0
+  logFooter   BYTE  "=== Log Ended ===", 0
+  crLf        BYTE  13, 10
+  rootDir     BYTE  "/", 0
+
 VAR
-  long log_handle
+  long logHandle
 
 PUB startLogging() | status
   fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  fs.mount(fs.DEV_SD)
+  status := fs.mount(fs.DEV_SD)
+  if status == fs.SUCCESS
+    ' Set timestamp
+    fs.setDate(2026, 2, 28, 12, 0, 0)
 
-  ' Set timestamp
-  fs.setDate(2026, 2, 28, 12, 0, 0)
+    ' Create logs directory if needed
+    if fs.changeDirectory(fs.DEV_SD, @logsDir) < 0
+      fs.newDirectory(fs.DEV_SD, @logsDir)
+      fs.changeDirectory(fs.DEV_SD, @logsDir)
 
-  ' Create logs directory if needed
-  if not fs.changeDirectory(fs.DEV_SD, @"LOGS")
-    fs.newDirectory(fs.DEV_SD, @"LOGS")
-    fs.changeDirectory(fs.DEV_SD, @"LOGS")
+    ' Create log file
+    logHandle := fs.createFileNew(fs.DEV_SD, @dataLog)
+    if logHandle >= 0
+      fs.writeHandle(logHandle, @logHeader, LOG_HEADER_LEN)
 
-  ' Create log file
-  log_handle := fs.createFileNew(fs.DEV_SD, @"DATA.LOG")
-  if log_handle < 0
-    return
-
-  fs.writeHandle(log_handle, @"=== Log Started ===", 19)
-
-PUB logEntry(message) | len
-  len := strsize(message)
-  fs.writeHandle(log_handle, message, len)
-  fs.writeHandle(log_handle, string(13, 10), 2)
-  fs.syncHandle(log_handle)               ' Checkpoint for power-fail safety
+PUB logEntry(pMessage) | messageLen
+  messageLen := strsize(pMessage)
+  fs.writeHandle(logHandle, pMessage, messageLen)
+  fs.writeHandle(logHandle, @crLf, CRLF_LEN)
+  fs.syncHandle(logHandle)               ' Checkpoint for power-fail safety
 
 PUB stopLogging()
-  fs.writeHandle(log_handle, @"=== Log Ended ===", 17)
-  fs.closeFileHandle(log_handle)
-  fs.changeDirectory(fs.DEV_SD, @"/")
+  fs.writeHandle(logHandle, @logFooter, LOG_FOOTER_LEN)
+  fs.closeFileHandle(logHandle)
+  fs.changeDirectory(fs.DEV_SD, @rootDir)
   fs.unmount(fs.DEV_SD)
   fs.stop()
 ```
@@ -1119,6 +1143,7 @@ The `src/` directory contains compilable, hardware-verified example programs:
 | [DFS_example_basic.spin2](../src/EXAMPLES/DFS_example_basic.spin2) | Init both devices, write/read on SD and Flash, device stats |
 | [DFS_example_cross_copy.spin2](../src/EXAMPLES/DFS_example_cross_copy.spin2) | Cross-device copy (SD → Flash → SD round-trip with verification) |
 | [DFS_example_data_logger.spin2](../src/EXAMPLES/DFS_example_data_logger.spin2) | Fast logging to Flash, periodic archival to SD |
+| [DFS_example_sd_manifest.spin2](../src/EXAMPLES/DFS_example_sd_manifest.spin2) | Read manifest from SD, copy listed files to Flash |
 | [DFS_demo_shell.spin2](../src/DEMO/DFS_demo_shell.spin2) | Interactive shell: `dev sd`/`dev flash`, `dir`, `type`, `copy sd:FILE flash:FILE` |
 
 Build any example with:
@@ -1128,8 +1153,6 @@ cd src/EXAMPLES/
 pnut-ts -d -I .. DFS_example_basic.spin2
 pnut-term-ts -r DFS_example_basic.bin
 ```
-
-The reference SD-only examples are also available under `REF-FLASH-uSD/uSD-FAT32/src/EXAMPLES/` (using the single-device `micro_sd_fat32_fs` driver).
 
 ---
 
@@ -1218,6 +1241,7 @@ if fs.checkCMD6Support()
 | `unmount(dev)` | Flush and unmount |
 | `mounted(dev)` | Check mount status (lock-free) |
 | `version(dev)` | Driver version as integer |
+| `versionStr(dev)` | Driver version as string (e.g., "1.3.1") |
 | `checkStackGuard()` | Verify worker stack integrity |
 | `error()` | Last error for calling cog |
 | `string_for_error(code)` | Human-readable error string |
@@ -1274,6 +1298,7 @@ if fs.checkCMD6Support()
 | Method | Description |
 |--------|-------------|
 | `changeDirectory(dev, path)` | Change CWD (SD or Flash, per-cog) |
+| `getFlashCwd()` | Current Flash working directory path |
 | `newDirectory(dev, name)` | Create directory (SD native, Flash emulated) |
 | `readDirectory(index)` | Enumerate CWD by index (SD) |
 | `openDirectory(dev, path)` | Open for enumeration (SD or Flash) → handle |
@@ -1291,6 +1316,7 @@ if fs.checkCMD6Support()
 | `serial_number(dev)` | Device serial number |
 | `stats(dev)` | Statistics (used, free, files) |
 | `canMount(dev)` | Non-destructive mount check |
+| `cardWarnings()` | SD card warning flags after mount |
 | `format(dev)` | Format device (destructive!) |
 | `setDate(y,m,d,h,mi,s)` | Timestamp for new files (SD) |
 
