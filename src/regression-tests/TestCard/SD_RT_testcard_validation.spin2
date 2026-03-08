@@ -1,0 +1,527 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_testcard_validation.spin2
+''   Purpose.... Validate V3 driver can read pre-formatted test card (read-only test)
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 16 JAN 2026
+''
+''   NOTE: This test requires the pre-formatted test card!
+''         See TestCard/TEST-CARD-SPECIFICATION.md for card preparation.
+''         Copy TestCard/TESTROOT/* to the SD card root before running.
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 320_000_000
+
+     ' Pin configuration for P2 Edge with SD card
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' Buffer sizes for various tests
+     SMALL_BUF = 64
+     MEDIUM_BUF = 512
+     LARGE_BUF = 4096
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test file paths from specification
+fileTiny        BYTE    "TINY.TXT", 0
+fileExact512    BYTE    "EXACT512.BIN", 0
+fileTwoSec      BYTE    "TWOSEC.TXT", 0
+fileFourK       BYTE    "FOUR_K.BIN", 0
+fileSixtyK      BYTE    "SIXTYFK.BIN", 0
+fileSeekTest    BYTE    "SEEKTEST.BIN", 0
+fileChecksum    BYTE    "CHECKSUM.BIN", 0
+fileLevel1      BYTE    "/LEVEL1/INLEVEL1.TXT", 0
+fileDeep        BYTE    "/LEVEL1/LEVEL2/DEEP.TXT", 0
+dirMulti        BYTE    "MULTI", 0
+
+' Expected content
+tinyContent     BYTE    "TINY TEST FILE", 0    ' First 14 chars of TINY.TXT
+level1Content   BYTE    "This file is in LEVEL1", 0  ' First 22 chars
+deepContent     BYTE    "Deepest level", 0     ' First 13 chars
+
+' Buffers
+smallBuf        BYTE    0[SMALL_BUF]
+mediumBuf       BYTE    0[MEDIUM_BUF]
+largeBuf        BYTE    0[LARGE_BUF]
+
+PUB go() | result
+'' Main entry point -- validates the pre-built test card content against expected filesystem structure.
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver V2 - Test Card Validation")
+    debug("  (READ-ONLY Test for Directory Debug)")
+    debug("==============================================")
+    debug(" ")
+    debug("NOTE: This test requires the pre-formatted test card!")
+    debug("      See TestCard/TEST-CARD-SPECIFICATION.md")
+    debug("      This test does NOT write to the card.")
+    debug(" ")
+
+    ' Mount the card
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card!")
+        debug("Is the test card inserted?")
+        debug("END_SESSION")
+        return
+
+    ' Show card info
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(sd.volumeLabel()))
+    debug("   Free Space: ", udec(sd.freeSpace()), " sectors")
+
+    ' Run all validation tests
+    test_mount_validation()
+    test_root_directory_enum()
+    test_tiny_file()
+    test_exact_sector()
+    test_four_k_pattern()
+    test_multi_sector_text()
+    test_large_file_cluster_chain()
+    test_seek_operations()
+    test_checksum_integrity()
+    test_path_resolution()
+    test_deep_path()
+    test_directory_navigation()
+    test_benchmark_sequential()
+
+    ' Unmount
+    sd.unmount()
+
+    ' Summary
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Test Card Validation V2 Complete")
+    debug("END_SESSION")
+
+
+PRI test_mount_validation() | pLabel
+' Validate that the SD card mounted successfully by checking volume label and free space.
+' @local pLabel - pointer to the volume label string
+
+    utils.startTestGroup(@"Test 1: Mount Validation")
+
+    utils.startTest(@"Card mounted successfully")
+    pLabel := sd.volumeLabel()
+    utils.evaluateNotZero(pLabel, @"volumeLabel() not null")
+
+    utils.startTest(@"Free space is reasonable")
+    utils.evaluateRange(sd.freeSpace(), @"freeSpace()", 1, $7FFF_FFFF)
+
+
+PRI test_root_directory_enum() | count, idx, pEntry
+' Enumerate all entries in the root directory and verify at least 7 are present.
+' Expects the pre-formatted test card with known files and subdirectories.
+' @local count - number of directory entries found
+' @local idx - directory entry index for readDirectory() calls
+' @local pEntry - pointer to current directory entry (0 when no more entries)
+
+    utils.startTestGroup(@"Test 2: Root Directory Enumeration")
+
+    utils.startTest(@"Enumerate root directory entries")
+    count := 0
+    idx := 0
+    repeat
+        pEntry := sd.readDirectory(idx)
+        if pEntry == 0
+            quit
+        debug("  Entry ", udec_(idx), ": ", zstr_(sd.fileName()))
+        count++
+        idx++
+
+    ' Expected: At least 7 items (files + LEVEL1 + MULTI directories)
+    utils.evaluateRange(count, @"directory entry count", 7, 50)
+
+
+PRI test_tiny_file() | handle, fileSize, bytesRead
+' Validate reading a small single-sector file (TINY.TXT, 29 bytes).
+' Verifies file open, size, content match, and first-byte value after seek-to-zero.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+' @local bytesRead - number of bytes returned by readHandle()
+
+    utils.startTestGroup(@"Test 3: Small File Read (TINY.TXT)")
+
+    utils.startTest(@"Open TINY.TXT")
+    handle := sd.openFileRead(@fileTiny)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 29 bytes")
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 29)
+
+    utils.startTest(@"Read and verify content starts correctly")
+    bytesRead := sd.readHandle(handle, @smallBuf, 14)
+    smallBuf[14] := 0  ' null terminate for comparison
+    utils.evaluateStringMatch(@smallBuf, @"content start", @tinyContent)
+
+    utils.startTest(@"Verify first byte is 'T' (0x54)")
+    sd.seekHandle(handle, 0)
+    bytesRead := sd.readHandle(handle, @smallBuf, 1)
+    utils.evaluateSingleValueHex(smallBuf[0], @"first byte", $54)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_exact_sector() | handle, result, idx, allMatch
+' Validate reading a file exactly 512 bytes long (one sector boundary).
+' Opens EXACT512.BIN and verifies all 512 bytes contain 0x58 ('X').
+' @local handle - file handle returned by openFileRead()
+' @local result - bytes read from readHandle()
+' @local idx - byte index within the 512-byte buffer
+' @local allMatch - flag indicating whether all bytes matched expected value
+
+    utils.startTestGroup(@"Test 4: Exact Sector Boundary (EXACT512.BIN)")
+
+    utils.startTest(@"Open EXACT512.BIN")
+    handle := sd.openFileRead(@fileExact512)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is exactly 512 bytes")
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 512)
+
+    utils.startTest(@"Read 512 bytes")
+    result := sd.readHandle(handle, @mediumBuf, 512)
+    utils.evaluateSingleValue(result, @"bytes read", 512)
+
+    utils.startTest(@"Verify all bytes are 0x58 ('X')")
+    allMatch := true
+    repeat idx from 0 to 511
+        if mediumBuf[idx] <> $58
+            debug("  Mismatch at ", udec_(idx), ": got $", uhex_(mediumBuf[idx]))
+            allMatch := false
+            quit
+    utils.evaluateBool(allMatch, @"all bytes = 0x58", true)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_four_k_pattern() | handle, result, idx, expected, allMatch
+' Validate reading a 4096-byte file with a sequential byte pattern across 8 sectors.
+' Each byte in FOUR_K.BIN equals its file offset modulo 256 (byte[n] == n & $FF).
+' Reads sector-by-sector and verifies every byte matches the expected pattern.
+' @local handle - file handle returned by openFileRead()
+' @local result - inner loop byte index within each 512-byte sector
+' @local idx - outer loop sector index (0..7)
+' @local expected - computed expected byte value at each position
+' @local allMatch - flag indicating whether all bytes matched the pattern
+
+    utils.startTestGroup(@"Test 5: Multi-Sector Pattern (FOUR_K.BIN)")
+
+    utils.startTest(@"Open FOUR_K.BIN")
+    handle := sd.openFileRead(@fileFourK)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 4096 bytes")
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 4096)
+
+    utils.startTest(@"Read and verify sequential pattern")
+    allMatch := true
+
+    ' Read in chunks and verify pattern: byte[n] = n & 0xFF
+    repeat idx from 0 to 7  ' 8 sectors
+        sd.readHandle(handle, @mediumBuf, 512)
+        repeat result from 0 to 511
+            expected := ((idx * 512) + result) & $FF
+            if mediumBuf[result] <> expected
+                debug("  Mismatch at ", udec_((idx * 512) + result), ": got $", uhex_(mediumBuf[result]), " expected $", uhex_(expected))
+                allMatch := false
+                quit
+        if not allMatch
+            quit
+
+    utils.evaluateBool(allMatch, @"pattern match", true)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_multi_sector_text() | handle, fileSize
+' Validate reading a text file that spans multiple sectors (TWOSEC.TXT, 2550 bytes).
+' Verifies file size and that the first 8 bytes match the expected "LINE0001" header.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+
+    utils.startTestGroup(@"Test 6: Multi-Sector Text (TWOSEC.TXT)")
+
+    utils.startTest(@"Open TWOSEC.TXT")
+    handle := sd.openFileRead(@fileTwoSec)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 2550 bytes")
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 2550)
+
+    utils.startTest(@"Read first line - should start with LINE0001")
+    sd.readHandle(handle, @smallBuf, 8)
+    smallBuf[8] := 0
+    utils.evaluateStringMatch(@smallBuf, @"first 8 bytes", @"LINE0001")
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
+' Validate reading a 64KB file that spans multiple clusters (SIXTYFK.BIN).
+' Seeks to 8 evenly-spaced positions (every 8KB) and verifies the XOR pattern byte.
+' Pattern: byte[n] = (block << 1) XOR (n & $FF) where block = n / 512.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+' @local pos - seek offset for current sub-test check
+' @local expected - computed expected pattern byte at the seek position
+' @local actual - (unused, reads into smallBuf[0] directly)
+
+    utils.startTestGroup(@"Test 7: Multi-Cluster File (SIXTYFK.BIN)")
+
+    utils.startTest(@"Open SIXTYFK.BIN")
+    handle := sd.openFileRead(@fileSixtyK)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 65536 bytes")
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 65536)
+
+    utils.startTest(@"Verify pattern at various positions")
+    utils.setCheckCountPerTest(8)
+
+    ' Pattern: byte[i] = (block << 1) XOR (i & 0xFF) where block = i / 512
+    repeat pos from 0 to 65535 step 8192  ' Check every 8KB
+        sd.seekHandle(handle, pos)
+        sd.readHandle(handle, @smallBuf, 1)
+        expected := ((pos / 512) << 1) ^ (pos & $FF)
+        utils.evaluateSubValueHex(smallBuf[0], @"pattern byte", expected)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_seek_operations() | handle, result
+' Validate seek operations on SEEKTEST.BIN (2016 bytes = 32 blocks of 63 bytes each).
+' Each block starts with "BLK##---" followed by 55 bytes of $55. Seeks to blocks 0, 1,
+' 10, and 31 and verifies the 8-byte header at each position matches expectations.
+' @local handle - file handle returned by openFileRead()
+' @local result - return value from driver API calls
+
+    utils.startTestGroup(@"Test 8: Seek Operations (SEEKTEST.BIN)")
+
+    utils.startTest(@"Open SEEKTEST.BIN")
+    handle := sd.openFileRead(@fileSeekTest)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 2016 bytes")
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 2016)
+
+    ' File has 32 blocks of 63 bytes each: "BLK##---" + 55 bytes of 0x55
+    utils.startTest(@"Seek to block 0 (offset 0)")
+    sd.seekHandle(handle, 0)
+    sd.readHandle(handle, @smallBuf, 8)
+    smallBuf[8] := 0
+    utils.evaluateStringMatch(@smallBuf, @"block 0 header", @"BLK00---")
+
+    utils.startTest(@"Seek to block 1 (offset 63)")
+    sd.seekHandle(handle, 63)
+    sd.readHandle(handle, @smallBuf, 8)
+    smallBuf[8] := 0
+    utils.evaluateStringMatch(@smallBuf, @"block 1 header", @"BLK01---")
+
+    utils.startTest(@"Seek to block 10 (offset 630)")
+    sd.seekHandle(handle, 630)
+    sd.readHandle(handle, @smallBuf, 8)
+    smallBuf[8] := 0
+    utils.evaluateStringMatch(@smallBuf, @"block 10 header", @"BLK10---")
+
+    utils.startTest(@"Seek to block 31 (offset 1953)")
+    sd.seekHandle(handle, 1953)
+    sd.readHandle(handle, @smallBuf, 8)
+    smallBuf[8] := 0
+    utils.evaluateStringMatch(@smallBuf, @"block 31 header", @"BLK31---")
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_checksum_integrity() | handle, result, idx, sum
+' Validate data integrity of CHECKSUM.BIN (1024 bytes) by computing a byte-sum checksum.
+' The file contains bytes 0-255 repeated 4 times. Expected checksum is 130560.
+' Reads in two 512-byte chunks since the medium buffer is one sector.
+' @local handle - file handle returned by openFileRead()
+' @local result - return value from driver API calls
+' @local idx - byte index within each 512-byte chunk
+' @local sum - running byte-sum accumulator across all 1024 bytes
+
+    utils.startTestGroup(@"Test 9: Checksum Verification (CHECKSUM.BIN)")
+
+    utils.startTest(@"Open CHECKSUM.BIN")
+    handle := sd.openFileRead(@fileChecksum)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 1024 bytes")
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 1024)
+
+    utils.startTest(@"Read and calculate checksum")
+    ' Read in two chunks since buffer is 512
+    sum := 0
+    sd.readHandle(handle, @mediumBuf, 512)
+    repeat idx from 0 to 511
+        sum += mediumBuf[idx]
+    sd.readHandle(handle, @mediumBuf, 512)
+    repeat idx from 0 to 511
+        sum += mediumBuf[idx]
+
+    ' Expected sum: 130560 (bytes 0-255 repeated 4 times: 4 * (0+1+2+...+255) = 4 * 32640)
+    utils.evaluateSingleValue(sum, @"checksum", 130560)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_path_resolution() | handle, fileSize
+' Validate absolute path resolution into a subdirectory (/LEVEL1/INLEVEL1.TXT).
+' Verifies the file can be opened, has the expected 54-byte size, and content matches.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+
+    utils.startTestGroup(@"Test 10: Subdirectory Path Resolution")
+
+    utils.startTest(@"Open /LEVEL1/INLEVEL1.TXT with absolute path")
+    handle := sd.openFileRead(@fileLevel1)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 54 bytes")
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 54)
+
+    utils.startTest(@"Verify content starts correctly")
+    sd.readHandle(handle, @smallBuf, 22)
+    smallBuf[22] := 0
+    utils.evaluateStringMatch(@smallBuf, @"content start", @level1Content)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_deep_path() | handle, fileSize
+' Validate two-level deep path resolution (/LEVEL1/LEVEL2/DEEP.TXT).
+' Verifies the file can be opened, has the expected 71-byte size, and content matches.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+
+    utils.startTestGroup(@"Test 11: Deep Nested Path")
+
+    utils.startTest(@"Open /LEVEL1/LEVEL2/DEEP.TXT")
+    handle := sd.openFileRead(@fileDeep)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
+
+    utils.startTest(@"Verify file size is 71 bytes")
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 71)
+
+    utils.startTest(@"Verify content starts correctly")
+    sd.readHandle(handle, @smallBuf, 13)
+    smallBuf[13] := 0
+    utils.evaluateStringMatch(@smallBuf, @"content start", @deepContent)
+
+    sd.closeFileHandle(handle)
+
+
+PRI test_directory_navigation() | result, count, idx, pEntry
+' Validate changeDirectory() and directory enumeration within a subdirectory.
+' Changes into the MULTI directory, enumerates entries (expecting 5 files),
+' then navigates back to root.
+' @local result - return value from changeDirectory()
+' @local count - number of directory entries found
+' @local idx - directory entry index for readDirectory() calls
+' @local pEntry - pointer to current directory entry (0 when no more entries)
+
+    utils.startTestGroup(@"Test 12: Directory Navigation (MULTI)")
+
+    utils.startTest(@"Change to MULTI directory")
+    result := sd.changeDirectory(@dirMulti)
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.SUCCESS)
+
+    utils.startTest(@"Enumerate files in MULTI - expect 5")
+    count := 0
+    idx := 0
+    repeat
+        pEntry := sd.readDirectory(idx)
+        if pEntry == 0
+            quit
+        debug("  File: ", zstr_(sd.fileName()))
+        count++
+        idx++
+
+    utils.evaluateSingleValue(count, @"file count", 5)
+
+    utils.startTest(@"Navigate back to root")
+    result := sd.changeDirectory(@"/")
+    utils.evaluateSingleValue(result, @"changeDirectory(/)", sd.SUCCESS)
+
+
+PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, idx, bytesPerSec
+' Benchmark sequential read throughput by reading SIXTYFK.BIN (64KB) in 128 sector reads.
+' Measures elapsed clock ticks and computes approximate KB/sec throughput.
+' @local handle - file handle returned by openFileRead()
+' @local start - system counter value at benchmark start (getct())
+' @local elapsed - total clock ticks for the 64KB read
+' @local bytesRead - (unused, reads directly into mediumBuf)
+' @local idx - loop counter for 128 sector reads
+' @local bytesPerSec - computed throughput in bytes per second
+
+    utils.startTestGroup(@"Performance Benchmark")
+
+    utils.startTest(@"Sequential read 64KB - timing")
+    handle := sd.openFileRead(@fileSixtyK)
+
+    start := getct()
+    repeat idx from 0 to 127
+        sd.readHandle(handle, @mediumBuf, 512)
+    elapsed := getct() - start
+
+    sd.closeFileHandle(handle)
+
+    ' Calculate throughput
+    ' elapsed is in clock ticks, convert to microseconds then to bytes/sec
+    bytesPerSec := (65536 * (clkfreq / 1000)) / (elapsed / 1000)
+
+    debug("  64KB read time: ", udec_(elapsed / (clkfreq / 1000000)), " microseconds")
+    debug("  Throughput: ~", udec_(bytesPerSec / 1024), " KB/sec")
+    utils.evaluateBool(elapsed > 0, @"benchmark complete", true)
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

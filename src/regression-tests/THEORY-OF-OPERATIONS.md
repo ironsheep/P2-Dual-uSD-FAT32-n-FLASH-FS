@@ -6,15 +6,15 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **34 test files** across four device categories producing **1,335+ test assertions**, all verified on real P2 hardware.
+The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **33 test files** across four device categories producing **1,308+ test assertions**, all verified on real P2 hardware.
 
-**Verified on hardware (2026-03-04):** 32 standard suites totaling **1,335 tests** -- all passing across 4 suite groups:
+**Verified on hardware (2026-03-07):** 29 standard suites totaling **1,308 tests** -- all passing on both GigaStone 32GB and Elite SD cards:
 
 | Group | Suites | Tests |
 |-------|--------|-------|
 | Dual-device verification | 1 | 36 |
-| SD regression | 20 | 402 |
-| Flash regression | 10 | 876 |
+| SD regression | 17 | 350 |
+| Flash regression | 10 | 901 |
 | Cross-device tests | 1 | 21 |
 
 The tests exercise the driver from dual-device bus switching through both filesystem stacks, including cross-device file copying, multi-cog concurrent access, handle pool management, and filesystem formatting/repair validation. Every test runs on real hardware (P2 Edge + physical SD card + onboard Flash) via the `run_test.sh` headless test runner.
@@ -83,11 +83,9 @@ run_test.sh (from tools/ directory)
 | Script | Purpose |
 |--------|---------|
 | `run_test.sh <file> [-t timeout]` | Run a single test suite |
-| `run_all_regression.sh` | All 4 groups in sequence |
-| `run_sd_regression.sh` | SD suites only (17 standard) |
-| `run_flash_regression.sh` | Flash suites only (9 standard + CWD) |
+| `run_regression.sh` | All 29 standard suites in dependency order (stop on first failure) |
 
-Options: `--include-format` (destructive SD format), `--include-testcard` (test card validation), `--include-8cog` (Flash 8-cog stress), `--compile-only` (compile without running).
+Options: `--from <name>` (resume from suite matching name), `--include-format` (destructive SD format), `--include-8cog` (Flash 8-cog stress), `--compile-only` (compile without running).
 
 ---
 
@@ -95,12 +93,14 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 
 ### 3.1 Dual-Device and Cross-Device Tests (2 suites, 57 tests)
 
+*Standard suites -- included in `run_regression.sh`.*
+
 | File | Tests | Focus Area |
 |------|:-----:|------------|
 | `DFS_RT_dual_device_tests.spin2` | 36 | Flash mount, SPI bus switching, SD integrity after Flash ops, handle pool |
 | `DFS_RT_cross_device_tests.spin2` | 21 | Interleaved I/O on both devices, `copyFile()` SD<->Flash, device alternation |
 
-### 3.2 SD Regression Tests (20 suites, 402 tests)
+### 3.2 SD Regression Tests (17 standard suites, 350 tests)
 
 | File | Tests | Focus Area |
 |------|:-----:|------------|
@@ -115,7 +115,7 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 | `DFS_SD_RT_multicog_tests.spin2` | 14 | Multi-cog singleton, concurrent access, lock serialization |
 | `DFS_SD_RT_multiblock_tests.spin2` | 6 | Multi-sector streamer DMA transfers (CMD18/CMD25) |
 | `DFS_SD_RT_raw_sector_tests.spin2` | 14 | Raw sector read/write round-trips |
-| `DFS_SD_RT_volume_tests.spin2` | 23 | Volume label, VBR access, syncAll, sync, setDate |
+| `DFS_SD_RT_volume_tests.spin2` | 25 | Volume label, VBR access, syncAll, sync, setDate |
 | `DFS_SD_RT_register_tests.spin2` | 6 | Card register access (CID/CSD/SCR/OCR/SD Status) |
 | `DFS_SD_RT_speed_tests.spin2` | 14 | SPI speed control, CMD6 high-speed mode |
 | `DFS_SD_RT_error_handling_tests.spin2` | 17 | Error conditions, invalid handles, state errors |
@@ -123,7 +123,6 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 | `DFS_SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks |
 | `DFS_SD_RT_crc_diag_tests.spin2` | 14 | CRC diagnostic counters, validation toggle |
 | `DFS_SD_RT_parity_tests.spin2` | 32 | Feature parity: exists, file_size, stats, seek, open modes |
-| `DFS_SD_RT_testcard_validation.spin2` | 39 | Test card characterization (read-only) |
 
 **Destructive (run separately):**
 
@@ -131,7 +130,7 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 |------|:-----:|------------|
 | `DFS_SD_RT_format_tests.spin2` | 46 | FAT32 format and verify (erases card!) |
 
-### 3.3 Flash Regression Tests (10 suites, 876 tests)
+### 3.3 Flash Regression Tests (10 standard suites, 901 tests)
 
 | File | Tests | Focus Area |
 |------|:-----:|------------|
@@ -143,7 +142,8 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 | `DFS_FL_RT_seek_tests.spin2` | 81 | Flash seek operations |
 | `DFS_FL_RT_circular_tests.spin2` | 262 | Flash circular file read/write |
 | `DFS_FL_RT_circular_compat_tests.spin2` | 79 | Flash circular file compatibility |
-| `DFS_FL_RT_cwd_tests.spin2` | 31 | Flash CWD emulation, absolute paths |
+| `DFS_FL_RT_cwd_tests.spin2` | 36 | Flash CWD emulation, absolute paths |
+| `DFS_FL_RT_dirhandle_tests.spin2` | 20 | Flash directory handle enumeration |
 
 **Optional stress test:**
 
@@ -396,7 +396,13 @@ Options: `--include-format` (destructive SD format), `--include-testcard` (test 
 - **Absolute path basics** -- exists(), file_size(), create, delete via absolute paths
 - **Absolute path edge cases** -- root path, no double prefix, relative isolation, rename, round-trip
 
-### 4.28 Flash 8-Cog Stress Tests (66 tests)
+### 4.28 Flash Directory Handle Tests (20 tests)
+
+**Purpose:** Validate Flash directory handle enumeration -- `openDirectory()`, `readDirectoryHandle()`, and `closeDirectoryHandle()` on the Flash device.
+
+**Why we test this:** The Flash filesystem is flat (no real directories), but the unified driver provides directory handle enumeration that lists files matching the current CWD prefix. These tests verify that the handle-based enumeration API works correctly for Flash, returning proper filenames, sizes, and attributes.
+
+### 4.29 Flash 8-Cog Stress Tests (66 tests)
 
 **Purpose:** Validate concurrent Flash access from all 8 P2 cogs simultaneously.
 

@@ -2,6 +2,8 @@
 
 A practical guide to determining how much hub RAM your Spin2 program and its component objects consume -- code space, data space, variable space, and total runtime footprint -- using the pnut-ts compiler's `-m` (map) and `-l` (listing) output files.
 
+This document also serves as the **current shipping memory footprint reference** for the P2-uSD-FAT32-FS driver. All example numbers reflect the driver as of v1.0.0 (DFS), SD sub-driver v1.3.1 (2026-03-07).
+
 - **Compiler**: pnut-ts v1.52.2+
 - **Author**: Stephen M. Moraco, Iron Sheep Productions, LLC
 
@@ -109,9 +111,9 @@ The map file (`.map`) is the primary tool for memory analysis. It has five secti
 ```
 === PROGRAM SUMMARY ===
 
-  Total Size:    64604 bytes (64436 code/data + 168 var bytes)
-  Objects:       3
-  Methods:       325
+  Total Size:    69044 bytes (68668 code/data + 376 var bytes)
+  Objects:       4
+  Methods:       392
 ```
 
 This is your top-level answer: **total hub RAM consumed** = code/data + VAR. The binary file will be larger than the code/data value because it includes the P2 loader stub (~6 KB).
@@ -135,15 +137,16 @@ This shows the tree of objects, their instance names, and how many methods each 
 
   Start   End      Size  Object                  Instance         Overrides
   ------  ------  -----  ----------------------  ---------------  ---------
-  $00000  $008C9   2250  DFS_SD_RT_mount_tests   (entry)
-  $008CC  $0F7F5  61226  dual_sd_fat32_flash_fs  DFS
-  $0F7F8  $0FBB3    956  isp_rt_utilities        UTILS
+  $00000  $008BC   2237  DFS_SD_RT_mount_tests   (entry)
+  $008C0  $0120D   2382  dual_sd_fat32_flash_fs  (entry)
+  $01210  $10ADC  63693  isp_stack_check          UTILS
+  $10AE0  $10C3A    347  DFS_RT_utilities         (entry)
 
-    CODE/DATA TOTAL:   64436 bytes
+    CODE/DATA TOTAL:   68668 bytes
 
-  $0FBB4  $0FC5B    168  VAR SPACE               (runtime)
+  $10C3C  $10DB3    376  VAR SPACE               (runtime)
 
-    PROGRAM TOTAL:     64604 bytes
+    PROGRAM TOTAL:     69044 bytes
 ```
 
 This is the key table. It shows:
@@ -151,7 +154,7 @@ This is the key table. It shows:
 - **Size** of each object in bytes (code + DAT combined)
 - The **VAR SPACE** line shows total runtime variable allocation across all objects
 
-From this table you can immediately answer: "How much space does object X add to my program?" For example, the dual-FS driver adds 61,226 bytes of code/data.
+From this table you can immediately answer: "How much space does object X add to my program?" In this example, `isp_stack_check` embeds the dual-FS driver and the test utilities as child objects, so its 63,693 bytes includes the driver's full footprint.
 
 ### 3.4 Object Details
 
@@ -183,20 +186,20 @@ Each object gets a detailed breakdown:
 
 ```
     DAT:
-      LONG      COG_ID                +$0049C  ($00D68)
-      LONG      API_LOCK              +$004A0  ($00D6C)
-      LONG      SD_MOUNTED            +$004A8  ($00D74)
-      LONG      FLASH_MOUNTED         +$004AC  ($00D78)
-      LONG      COG_STACK             +$0053C  ($00E08)
-      LONG      COG_STACK_GUARD       +$0093C  ($01208)
-      BYTE      DIR_BUF               +$00A8D  ($01359)
-      BYTE      FAT_BUF               +$00C8D  ($01559)
-      BYTE      BUF                   +$00E8D  ($01759)
-      BYTE      H_BUF                 +$01367  ($01C33)
-      LONG      H_BUF_SECTOR          +$01F67  ($02833)
-      WORD      FL_IDTOBLOCKS         +$01F83  ($0284F)
-      BYTE      FL_HBLOCKBUFF         +$04032  ($048FE)
-      BYTE      FL_TMPBLOCKBUFF       +$07032  ($078FE)
+      LONG      COG_ID                +$0055C  ($0055C)
+      LONG      API_LOCK              +$00560  ($00560)
+      LONG      SD_MOUNTED            +$00568  ($00568)
+      LONG      FLASH_MOUNTED         +$0056C  ($0056C)
+      LONG      COG_STACK             +$00635  ($00635)
+      LONG      COG_STACK_GUARD       +$008B5  ($008B5)
+      BYTE      DIR_BUF               +$00A06  ($00A06)
+      BYTE      FAT_BUF               +$00C06  ($00C06)
+      BYTE      BUF                   +$00E06  ($00E06)
+      BYTE      H_BUF                 +$012E0  ($012E0)
+      LONG      H_BUF_SECTOR          +$01EE0  ($01EE0)
+      WORD      FL_IDTOBLOCKS         +$01EFC  ($01EFC)
+      BYTE      FL_HBLOCKBUFF         +$03FAB  ($03FAB)
+      BYTE      FL_TMPBLOCKBUFF       +$06FAB  ($06FAB)
 ```
 
 Each DAT variable shows:
@@ -208,9 +211,9 @@ Each DAT variable shows:
 To calculate the size of a DAT variable, subtract its offset from the next variable's offset. For arrays and buffers, this reveals their actual footprint:
 
 ```
-H_BUF    at +$01367
-H_BUF_SECTOR at +$01F67
-  => H_BUF size = $01F67 - $01367 = $0C00 = 3,072 bytes (6 handles x 512 bytes)
+H_BUF    at +$012E0
+H_BUF_SECTOR at +$01EE0
+  => H_BUF size = $01EE0 - $012E0 = $0C00 = 3,072 bytes (6 handles x 512 bytes)
 ```
 
 #### VAR Section
@@ -313,25 +316,25 @@ Every COG running Spin2 code needs a stack. The top-level COG uses the remainder
 Look for stack allocations in the map's DAT section:
 
 ```
-LONG      COG_STACK             +$0053C  ($00E08)
-LONG      COG_STACK_GUARD       +$0093C  ($01208)
-  => Stack size = $0093C - $0053C = $0400 = 1,024 bytes (256 LONGs)
+LONG      COG_STACK             +$00635  ($00635)
+LONG      COG_STACK_GUARD       +$008B5  ($008B5)
+  => Stack size = $008B5 - $00635 = $0280 = 640 bytes (160 LONGs)
 ```
 
-The dual-FS driver allocates a 1,024-byte stack for its worker COG. The `COG_STACK_GUARD` variable at the end allows runtime detection of stack overflow.
+The dual-FS driver allocates a 640-byte stack for its worker COG. The `COG_STACK_GUARD` variable at the end allows runtime detection of stack overflow. The stack was sized via a full audit across all 29 test suites (peak measured: 127 LONGs).
 
 ### Complete Accounting Example
 
 For a test program like `DFS_SD_RT_mount_tests`:
 
 ```
-Code/Data:           64,436 bytes   (from map: CODE/DATA TOTAL)
-VAR:                    168 bytes   (from map: VAR SPACE size)
+Code/Data:           68,668 bytes   (from map: CODE/DATA TOTAL)
+VAR:                    376 bytes   (from map: VAR SPACE size)
                     ---------
-Program Total:       64,604 bytes
+Program Total:       69,044 bytes
 
 P2 Hub RAM:         524,288 bytes   (512 KB)
-Available:          459,684 bytes   (for main COG stack + other uses)
+Available:          455,244 bytes   (for main COG stack + other uses)
 ```
 
 The driver's DAT section contains most of the static data -- SD sector buffers, Flash translation tables, and handle buffers -- so VAR is minimal in typical programs.
@@ -345,19 +348,19 @@ The dual-FS driver supports conditional compilation via preprocessor defines. To
 ```bash
 # Minimal build (no optional SD features)
 pnut-ts -m dual_sd_fat32_flash_fs.spin2
-# => Total Size: 59,340 bytes (59,336 code/data + 4 var bytes), 255 methods
+# => Total Size: 61,240 bytes (61,236 code/data + 4 var bytes), 270 methods
 
 # Full build (all optional SD features)
 pnut-ts -m -D SD_INCLUDE_ALL dual_sd_fat32_flash_fs.spin2
-# => Total Size: 62,196 bytes (62,192 code/data + 4 var bytes), 312 methods
+# => Total Size: 64,700 bytes (64,696 code/data + 4 var bytes), 340 methods
 ```
 
 Comparison:
 
 | | Minimal | Full | Delta |
 |---|---|---|---|
-| Methods | 255 | 312 | +57 |
-| Code/Data | 59,336 B | 62,192 B | +2,856 B |
+| Methods | 270 | 340 | +70 |
+| Code/Data | 61,236 B | 64,696 B | +3,460 B |
 | VAR | 4 B | 4 B | +0 B |
 
 The DAT section is identical in both builds (data doesn't change). Only method table entries and bytecodes are added by optional features. This tells you the conditional compilation gates affect only code, not static data.
@@ -383,15 +386,16 @@ Real programs include multiple objects. The map file shows each object's contrib
 
   Start   End      Size  Object                  Instance
   ------  ------  -----  ----------------------  ---------
-  $00000  $008C9   2250  DFS_SD_RT_mount_tests   (entry)
-  $008CC  $0F7F5  61226  dual_sd_fat32_flash_fs  DFS
-  $0F7F8  $0FBB3    956  isp_rt_utilities        UTILS
+  $00000  $008BC   2237  DFS_SD_RT_mount_tests   (entry)
+  $008C0  $0120D   2382  dual_sd_fat32_flash_fs  (entry)
+  $01210  $10ADC  63693  isp_stack_check          UTILS
+  $10AE0  $10C3A    347  DFS_RT_utilities         (entry)
 
-    CODE/DATA TOTAL:   64436 bytes
+    CODE/DATA TOTAL:   68668 bytes
 
-  $0FBB4  $0FC5B    168  VAR SPACE               (runtime)
+  $10C3C  $10DB3    376  VAR SPACE               (runtime)
 
-    PROGRAM TOTAL:     64604 bytes
+    PROGRAM TOTAL:     69044 bytes
 ```
 
 ### Per-Object Breakdown
@@ -400,27 +404,19 @@ To understand where your memory is going, extract each object's contribution:
 
 | Object | Code/Data | % of Total |
 |---|---|---|
-| DFS_SD_RT_mount_tests (top-level) | 2,250 B | 3.5% |
-| dual_sd_fat32_flash_fs (driver) | 61,226 B | 95.0% |
-| isp_rt_utilities (test framework) | 956 B | 1.5% |
-| **Total** | **64,436 B** | **100%** |
+| DFS_SD_RT_mount_tests (top-level) | 2,237 B | 3.3% |
+| dual_sd_fat32_flash_fs (driver stub) | 2,382 B | 3.5% |
+| isp_stack_check (driver + test utils) | 63,693 B | 92.8% |
+| DFS_RT_utilities (test framework) | 347 B | 0.5% |
+| **Total** | **68,668 B** | **100%** |
 
-This immediately shows that the driver dominates the code/data budget. The dual-FS driver is a large object (~61 KB) because it contains both the SD FAT32 filesystem and the Flash filesystem, along with a worker COG's PASM2 engine, SPI bus management, and all handle/buffer state in DAT.
+Note: `isp_stack_check` wraps the dual-FS driver and test utilities as child objects, so its 63,693 bytes includes the driver's full footprint. The driver itself is ~64 KB standalone (with all optional features). To measure the driver in isolation, compile it as top-level (see Section 6).
 
 ### VAR Contributions
 
-The Object Details section shows each object's VAR variables. To find which object owns the most VAR space, check the VAR Base addresses:
+The Object Details section shows each object's VAR variables. The VAR SPACE line in the memory layout shows total VAR across all objects (376 bytes in this example).
 
-```
-DFS_SD_RT_mount_tests:      VAR Base: $0FBB4
-dual_sd_fat32_flash_fs:     VAR Base: $0FBB8   (= $0FBB4 + 4 bytes for top-level)
-isp_rt_utilities:           VAR Base: $0FBBC   (= $0FBB8 + 4 bytes for driver)
-                            VAR End:  $0FC5B   (= $0FBBC + 160 bytes for utilities)
-```
-
-So: top-level = 4 B, driver = 4 B, utilities = 160 B of VAR.
-
-The driver's minimal VAR (4 bytes) is by design -- nearly all state lives in DAT so the worker COG can access it directly. The test framework's 160 bytes hold runtime counters and string buffers.
+The driver's minimal VAR (4 bytes) is by design -- nearly all state lives in DAT so the worker COG can access it directly. The test framework and stack check wrapper hold runtime counters and string buffers in VAR.
 
 ---
 
@@ -460,16 +456,16 @@ For a more direct approach: since the map shows every DAT variable with its offs
 Walk the DAT variables in the map file. For each variable, compute its size by subtracting its offset from the next variable's offset:
 
 ```
-COG_STACK        +$00568
-COG_STACK_GUARD  +$00968
-  => COG_STACK is $0400 = 1,024 bytes (256 LONGs)
+COG_STACK        +$00635
+COG_STACK_GUARD  +$008B5
+  => COG_STACK is $0280 = 640 bytes (160 LONGs)
 ```
 
 Group variables into logical categories (buffers, state, pin config, etc.) and total each category. This reveals which categories dominate. For example, in the dual-FS driver:
 
 | Category | Key Variables | Approx. Size |
 |---|---|---|
-| Worker COG stack | COG_STACK | 1,024 B |
+| Worker COG stack | COG_STACK | 640 B |
 | SD sector buffers | DIR_BUF, FAT_BUF, BUF | 3 x 512 = 1,536 B |
 | SD handle buffers | H_BUF (6 handles x 512 B) | 3,072 B |
 | SD copy buffer | COPY_BUF | 512 B |
@@ -527,14 +523,14 @@ Compiling the original standalone drivers establishes a baseline for what each f
 | Ref SD (`micro_sd_fat32_fs`, full) | 23,024 B | 206 | 5,727 B | 16,469 B |
 | Ref Flash (`flash_fs`) | 28,744 B | 85 | 20,122 B | 8,278 B |
 | Sum of both | 51,768 B | 291 | 25,849 B | 24,747 B |
-| **Unified driver** (full, default) | **62,192 B** | **312** | **~33,480 B** | **~27,460 B** |
-| **Merging overhead** | **+10,424 B** | +21 | +7,631 B | +2,713 B |
+| **Unified driver** (full, default) | **64,696 B** | **340** | **~33,183 B** | **~30,149 B** |
+| **Merging overhead** | **+12,928 B** | +49 | +7,334 B | +5,402 B |
 
-The unified driver is 20% larger than the sum of the two reference drivers (down from 42% before buffer pool decoupling). Most of the remaining overhead is in DAT (static data).
+The unified driver is 25% larger than the sum of the two reference drivers. Most of the remaining overhead is in DAT (static data) and additional methods for the unified API dispatch layer, diagnostic getters, and SPI bus switching.
 
 ### DAT Breakdown by Subsystem
 
-The DAT section dominates the driver at ~33,480 bytes (54% of total code/data). Here is every significant allocation grouped by subsystem:
+The DAT section dominates the driver at ~33,183 bytes (51% of total code/data). Here is every significant allocation grouped by subsystem:
 
 | Subsystem | DAT Item | Size |
 |---|---|---|
@@ -549,17 +545,17 @@ The DAT section dominates the driver at ~33,480 bytes (54% of total code/data). 
 | **Flash misc** | `FL_COG_CWD` (8 cogs x 128 B) | 1,024 B |
 | | `FL_DIR_ENTRY_NAME`, `FL_ERRORCODE`, etc. | 144 B |
 | *Flash subtotal* | | *25,919 B (77%)* |
-| **SD sector buffers** | `DIR_BUF`, `FAT_BUF`, `BUF` (3 x 512 B + pad) | 1,580 B |
+| **SD sector buffers** | `DIR_BUF`, `FAT_BUF`, `BUF` (3 x 512 B + pad) | 1,568 B |
 | **SD handle buffers** | `H_BUF` (6 handles x 512 B) + `H_BUF_SECTOR` | 3,096 B |
 | **SD handle state** | `H_DEVICE` through `H_CLUSTER` (6 handles) | 174 B |
 | **SD metadata** | FAT pointers, cluster info, card state, diagnostics | 269 B |
 | **SD copy buffer** | `COPY_BUF` (512 B for copyFile) | 512 B |
-| *SD subtotal* | | *5,631 B (12%)* |
-| **Shared** | Worker COG stack (256 LONGs) | 1,040 B |
-| | State vars + IPC parameter block | 216 B |
-| | Error message strings | ~659 B |
-| *Shared subtotal* | | *~1,915 B (4%)* |
-| **Total DAT** | | **~33,480 B** |
+| *SD subtotal* | | *5,619 B (17%)* |
+| **Shared** | Worker COG stack (160 LONGs) | 640 B |
+| | State vars + IPC parameter block | 229 B |
+| | Error message strings | ~696 B |
+| *Shared subtotal* | | *~1,565 B (5%)* |
+| **Total DAT** | | **~33,183 B** |
 
 ### Full Driver by Subsystem
 
@@ -567,12 +563,12 @@ Combining DAT with estimated bytecodes (proportioned from reference driver ratio
 
 | | SD | Flash | Shared | Total |
 |---|---|---|---|---|
-| DAT (buffers + state) | 5,631 B | 25,919 B | 1,930 B | 33,480 B |
-| Bytecodes (est.) | ~17,000 B | ~8,700 B | ~1,760 B | ~27,460 B |
-| Method table | -- | -- | 1,252 B | 1,252 B |
-| **Total** | **~22,600 B (36%)** | **~34,600 B (56%)** | **~4,900 B (8%)** | **~62,200 B** |
+| DAT (buffers + state) | 5,619 B | 25,919 B | 1,645 B | 33,183 B |
+| Bytecodes (est.) | ~19,600 B | ~8,700 B | ~1,849 B | ~30,149 B |
+| Method table | -- | -- | 1,364 B | 1,364 B |
+| **Total** | **~25,200 B (39%)** | **~34,600 B (53%)** | **~4,900 B (8%)** | **~64,700 B** |
 
-Flash accounts for 56% of the driver, reduced from 63% by the buffer pool decoupling. Flash bytecodes are smaller than SD bytecodes (8.7 KB vs 17 KB) because the Flash filesystem is structurally simpler.
+Flash accounts for 53% of the driver. Flash bytecodes are smaller than SD bytecodes (8.7 KB vs 19.6 KB) because the Flash filesystem is structurally simpler. SD bytecodes grew with v1.3.0+ features (CMD13/CMD23 probing, CMD12 tolerance, diagnostic getters, SPI backend consolidation).
 
 > **Note**: These figures reflect default `MAX_FLASH_BUFFERS = 3`. Previous releases allocated one 4 KB buffer per handle (6 x 4,096 = 24,576 B). The buffer pool saves 12,288 bytes with identical functionality for typical applications.
 
@@ -587,13 +583,13 @@ The 10,424-byte overhead from combining the two drivers into one:
 | `COPY_BUF` (cross-device copy) | +512 B | New for copyFile() |
 | `FL_DIR_ENTRY_NAME` | +128 B | CWD directory enumeration buffer |
 | `SAVED_DATA` arrays | +96 B | 3 x 8 LONGs for multi-cog IPC |
-| Error message strings (Flash) | ~659 B | `string_for_error()` lookup table |
-| Bus switching + dispatch bytecodes | ~2,756 B | Device routing, SPI mode switching |
-| Misc (pin vars, device tracking, pad) | ~1,144 B | |
+| Error message strings (Flash) | ~696 B | `string_for_error()` lookup table |
+| Bus switching + dispatch bytecodes | ~5,200 B | Device routing, SPI mode switching, diagnostics |
+| Misc (pin vars, device tracking, pad) | ~1,167 B | |
 | Flash buffer pool tracking | +9 B | `fl_buf_owner[3]` + `fl_hBufIndex[6]` |
-| **Total** | **+10,424 B** | |
+| **Total** | **+12,928 B** | |
 
-With the buffer pool decoupled from handles, the merging overhead is greatly reduced. The reference Flash driver defaults to 2 open files (8 KB of buffers); the unified driver's pool of 3 buffers (12 KB) adds only 4 KB.
+The reference Flash driver defaults to 2 open files (8 KB of buffers); the unified driver's pool of 3 buffers (12 KB) adds only 4 KB. The bus switching and dispatch overhead grew with v1.3.0+ features (CMD13/CMD23 probing, CMD12 tolerance, diagnostic getters, card presence detection).
 
 ### Handle and Buffer Cost per Slot
 
@@ -666,8 +662,8 @@ Available RAM       = 524,288 - Runtime Hub RAM
 
 | Build | Code/Data | Methods | Binary |
 |---|---|---|---|
-| Minimal (no defines) | 59,336 B | 255 | 65,548 B |
-| Full (`SD_INCLUDE_ALL`) | 62,192 B | 312 | 68,404 B |
-| Delta | +2,856 B | +57 | +2,856 B |
+| Minimal (no defines) | 61,236 B | 270 | 67,448 B |
+| Full (`SD_INCLUDE_ALL`) | 64,696 B | 340 | 70,908 B |
+| Delta | +3,460 B | +70 | +3,460 B |
 
-> Default `MAX_FLASH_BUFFERS = 3` (decoupled from `MAX_OPEN_FILES = 6`). Previous releases with per-handle buffers were ~12 KB larger.
+> Default `MAX_FLASH_BUFFERS = 3` (decoupled from `MAX_OPEN_FILES = 6`). Worker COG stack sized at 160 LONGs (640 bytes) based on measured peak of 127 LONGs.

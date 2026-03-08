@@ -1,8 +1,9 @@
 # SD Card Test Specification
 
-**Purpose**: Read-only validation of OB4269 FAT32 driver
+**Purpose**: Read-only validation of the unified dual-FS driver's SD FAT32 subsystem
 **Card Type**: 32GB SDHC (block addressing, FAT32)
 **Date Created**: 2026-01-14
+**Test Program**: `DFS_SD_RT_testcard_validation.spin2` (39 tests)
 
 ---
 
@@ -191,7 +192,7 @@ repeat i from 0 to 1023
 | Size | 54 bytes |
 | Content | `This file is in LEVEL1 subdirectory for path testing.` |
 
-**Test**: `openFile(string("/LEVEL1/INLEVEL1.TXT"))`
+**Test**: `dfs.openFileRead(dfs.DEV_SD, @"/LEVEL1/INLEVEL1.TXT")`
 
 ---
 
@@ -205,7 +206,7 @@ repeat i from 0 to 1023
 | Size | 71 bytes |
 | Content | `Deepest level - LEVEL2 directory test file for nested path resolution.` |
 
-**Test**: `openFile(string("/LEVEL1/LEVEL2/DEEP.TXT"))`
+**Test**: `dfs.openFileRead(dfs.DEV_SD, @"/LEVEL1/LEVEL2/DEEP.TXT")`
 
 ---
 
@@ -221,189 +222,18 @@ repeat i from 0 to 1023
 | FILE4.TXT | `Multi-file test 4` |
 | FILE5.TXT | `Multi-file test 5` |
 
-**Test**: `changeDirectory(string("MULTI"))` then enumerate with `readDirectory()`, expect 5 files.
+**Test**: `dfs.changeDirectory(dfs.DEV_SD, @"MULTI")` then enumerate with `dfs.readDirectory()`, expect 5 files.
 
 ---
 
-## Test Suite
+## Running the Validation Test
 
-### Test 1: Mount Validation
-
-```spin2
-PUB test_mount() : pass
-  pass := sd.mount(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
-  ' Expected: pass == true
+```bash
+cd tools/
+./run_test.sh ../src/regression-tests/DFS_SD_RT_testcard_validation.spin2
 ```
 
-### Test 2: Root Directory Enumeration
-
-```spin2
-PUB test_root_directory() : count
-  count := 0
-  repeat until sd.readDirectory(count) == 0
-    count++
-  ' Expected: count >= 7 (TINY.TXT, EXACT512.BIN, etc. + directories)
-```
-
-### Test 3: Small File Read
-
-```spin2
-PUB test_tiny_read() : pass | size
-  pass := sd.openFile(string("TINY.TXT"))
-  size := sd.fileSize()
-  sd.read(@buffer, size)
-  sd.closeFile()
-  ' Expected: size == 29
-  ' Expected: buffer starts with "TINY TEST"
-```
-
-### Test 4: Exact Sector Boundary
-
-```spin2
-PUB test_exact_512() : pass | i
-  sd.openFile(string("EXACT512.BIN"))
-  sd.read(@buffer, 512)
-  sd.closeFile()
-  pass := true
-  repeat i from 0 to 511
-    if buffer[i] <> $58
-      pass := false
-      quit
-  ' Expected: pass == true (all bytes are 0x58)
-```
-
-### Test 5: Multi-Sector Read
-
-```spin2
-PUB test_four_k() : pass | i, expected
-  sd.openFile(string("FOUR_K.BIN"))
-  sd.read(@buffer, 4096)
-  sd.closeFile()
-  pass := true
-  repeat i from 0 to 4095
-    expected := i & $FF
-    if buffer[i] <> expected
-      pass := false
-      quit
-  ' Expected: pass == true
-```
-
-### Test 6: Seek Test
-
-```spin2
-PUB test_seek() : pass
-  sd.openFile(string("SEEKTEST.BIN"))
-
-  ' Test seek to block 0
-  sd.seek(0)
-  sd.read(@buffer, 8)
-  pass := strcomp(@buffer, string("BLK00---"))
-
-  ' Test seek to block 10
-  sd.seek(630)  ' 10 * 63
-  sd.read(@buffer, 8)
-  pass &= strcomp(@buffer, string("BLK10---"))
-
-  sd.closeFile()
-  ' Expected: pass == true
-```
-
-### Test 7: Path Resolution
-
-```spin2
-PUB test_deep_path() : pass
-  pass := sd.openFile(string("/LEVEL1/LEVEL2/DEEP.TXT"))
-  if pass
-    pass := (sd.fileSize() == 71)
-  sd.closeFile()
-  ' Expected: pass == true
-```
-
-### Test 8: Multi-Cluster File
-
-```spin2
-PUB test_large_file() : pass | pos, expected, actual
-  sd.openFile(string("SIXTYFK.BIN"))
-  pass := (sd.fileSize() == 65536)
-
-  ' Check bytes at various positions
-  repeat pos from 0 to 65535 step 1024
-    sd.seek(pos)
-    sd.read(@buffer, 1)
-    expected := ((pos / 512) << 1) ^ (pos & $FF)
-    if buffer[0] <> expected
-      pass := false
-      quit
-
-  sd.closeFile()
-  ' Expected: pass == true
-```
-
-### Test 9: Directory Navigation
-
-```spin2
-PUB test_directory_nav() : pass | count
-  pass := sd.changeDirectory(string("MULTI"))
-  count := 0
-  repeat until sd.readDirectory(count) == 0
-    count++
-  sd.changeDirectory(string(".."))
-  ' Expected: pass == true, count == 5
-```
-
-### Test 10: Checksum Verification
-
-```spin2
-PUB test_checksum() : pass | i, sum
-  sd.openFile(string("CHECKSUM.BIN"))
-  sd.read(@buffer, 1024)
-  sd.closeFile()
-  sum := 0
-  repeat i from 0 to 1023
-    sum += buffer[i]
-  pass := (sum == 130560)
-  ' Expected: pass == true
-```
-
----
-
-## Performance Benchmarks
-
-### Sector Read Timing
-
-```spin2
-PUB benchmark_sector_read() : microseconds | start, i
-  sd.openFile(string("SIXTYFK.BIN"))
-  start := getct()
-  repeat i from 0 to 127
-    sd.read(@buffer, 512)
-  microseconds := (getct() - start) / (clkfreq / 1_000_000)
-  sd.closeFile()
-  ' Report: microseconds for 128 sector reads (64 KB)
-  ' Calculate: bytes/second = 65536 * 1000000 / microseconds
-```
-
-### Sequential vs Random Access
-
-```spin2
-PUB benchmark_sequential() : us_seq, us_random | start, i
-  ' Sequential read
-  sd.openFile(string("SIXTYFK.BIN"))
-  start := getct()
-  repeat 64
-    sd.read(@buffer, 1024)
-  us_seq := (getct() - start) / (clkfreq / 1_000_000)
-  sd.closeFile()
-
-  ' Random access read
-  sd.openFile(string("SIXTYFK.BIN"))
-  start := getct()
-  repeat i from 0 to 63
-    sd.seek((i * 17) & $FFFF)  ' Pseudo-random positions
-    sd.read(@buffer, 512)
-  us_random := (getct() - start) / (clkfreq / 1_000_000)
-  sd.closeFile()
-```
+The test is read-only and produces 39 assertions across 13 test groups: mount validation, root directory enumeration, file reads at various sizes and boundaries, seek operations, checksum integrity, path resolution (1 and 2 levels deep), directory navigation, and a sequential read benchmark.
 
 ---
 
@@ -423,4 +253,4 @@ md5sum /Volumes/SDCARD/*.BIN /Volumes/SDCARD/*.TXT
 
 ---
 
-*Test specification for OB4269 FAT32 driver validation*
+*Test specification for the P2 Dual SD FAT32 + Flash Filesystem project -- Iron Sheep Productions*
