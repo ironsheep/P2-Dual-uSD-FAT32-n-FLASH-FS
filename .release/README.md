@@ -47,7 +47,7 @@ dual-fs-driver/
     │   ├── isp_mem_strings.spin2             String utilities
     │   └── isp_string_fifo.spin2             Inter-cog string FIFO
     └── regression-tests/                  Regression test suites
-        ├── DFS_SD_RT_*_tests.spin2           SD test suites (20)
+        ├── DFS_SD_RT_*_tests.spin2           SD test suites (17)
         ├── DFS_FL_RT_*_tests.spin2           Flash test suites (10)
         ├── DFS_RT_*_tests.spin2              Cross-device test suites (2)
         └── DFS_RT_utilities.spin2             Unified test framework
@@ -87,36 +87,42 @@ Copy `src/dual_sd_fat32_flash_fs.spin2` into your project directory, then:
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
-PUB main() | status, handle, buffer[128], bytes_read
-    status := dfs.startDriver()
+DAT
+    sdFile    BYTE  "DATA.TXT", 0
+    flFile    BYTE  "config", 0
+    sdMsg     BYTE  "Hello from the dual driver!", 0
+    flMsg     BYTE  "sensor_interval=5", 0
+
+PUB main() | status, handle
+    ' Initialize driver (starts worker cog)
+    dfs.init(60, 59, 58, 61)          ' CS, MOSI, MISO, SCK for P2 Edge
+
+    ' Mount both devices
+    status := dfs.mount(dfs.DEV_SD)
     if status < 0
-        debug("Driver start failed!")
+        debug("SD mount failed: ", sdec_(status))
         return
 
-    status := dfs.sd_mount()
+    status := dfs.mount(dfs.DEV_FLASH)
     if status < 0
-        debug("SD mount failed!")
-        return
-
-    status := dfs.fl_mount()
-    if status < 0
-        debug("Flash mount failed!")
+        debug("Flash mount failed: ", sdec_(status))
         return
 
     ' Write to SD
-    handle := dfs.open(@"DATA.TXT", dfs.MODE_WRITE)
+    handle := dfs.open(dfs.DEV_SD, @sdFile, dfs.MODE_WRITE)
     if handle >= 0
-        dfs.wr_str(handle, @"Hello from the dual driver!")
+        dfs.wr_str(handle, @sdMsg)
         dfs.close(handle)
 
     ' Write to Flash
-    handle := dfs.open(@"config", dfs.MODE_WRITE_FL)
+    handle := dfs.open(dfs.DEV_FLASH, @flFile, dfs.MODE_WRITE)
     if handle >= 0
-        dfs.wr_str(handle, @"sensor_interval=5")
+        dfs.wr_str(handle, @flMsg)
         dfs.close(handle)
 
-    dfs.sd_unmount()
-    dfs.fl_unmount()
+    dfs.unmount(dfs.DEV_SD)
+    dfs.unmount(dfs.DEV_FLASH)
+    dfs.stop()
 ```
 
 ### Running the Demo Shell
@@ -151,7 +157,7 @@ See `src/UTILS/README.md` for all available utilities.
 
 ## Regression Tests
 
-The regression test suite (1,300+ tests across 32 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (1,308 tests across 29 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 
