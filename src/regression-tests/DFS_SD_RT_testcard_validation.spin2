@@ -78,7 +78,6 @@ deepContent     BYTE    "Deepest level", 0     ' First 13 chars
 ' Buffers
 smallBuf        BYTE    0[SMALL_BUF]
 mediumBuf       BYTE    0[MEDIUM_BUF]
-largeBuf        BYTE    0[LARGE_BUF]
 
 PUB go() | workerCog, result
 '' Validate SD test card configuration and basic operations.
@@ -169,7 +168,7 @@ PRI test_root_directory_enum() | count, idx, pEntry
     utils.evaluateRange(count, @"directory entry count", 7, 50)
 
 
-PRI test_tiny_file() | result, fileSize, bytesRead, handle
+PRI test_tiny_file() | fileSize, bytesRead, handle
     utils.startTestGroup(@"Test 3: Small File Read (TINY.TXT)")
 
     utils.startTest(@"Open TINY.TXT")
@@ -249,7 +248,7 @@ PRI test_four_k_pattern() | result, i, expected, allMatch, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_multi_sector_text() | result, fileSize, handle
+PRI test_multi_sector_text() | fileSize, handle
     utils.startTestGroup(@"Test 6: Multi-Sector Text (TWOSEC.TXT)")
 
     utils.startTest(@"Open TWOSEC.TXT")
@@ -268,7 +267,7 @@ PRI test_multi_sector_text() | result, fileSize, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_large_file_cluster_chain() | result, fileSize, pos, expected, actual, handle
+PRI test_large_file_cluster_chain() | fileSize, pos, expected, handle
     utils.startTestGroup(@"Test 7: Multi-Cluster File (SIXTYFK.BIN)")
 
     utils.startTest(@"Open SIXTYFK.BIN")
@@ -292,7 +291,7 @@ PRI test_large_file_cluster_chain() | result, fileSize, pos, expected, actual, h
     dfs.closeFileHandle(handle)
 
 
-PRI test_seek_operations() | result, handle
+PRI test_seek_operations() | handle
     utils.startTestGroup(@"Test 8: Seek Operations (SEEKTEST.BIN)")
 
     utils.startTest(@"Open SEEKTEST.BIN")
@@ -330,7 +329,7 @@ PRI test_seek_operations() | result, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_checksum_integrity() | result, i, sum, handle
+PRI test_checksum_integrity() | i, sum, handle
     utils.startTestGroup(@"Test 9: Checksum Verification (CHECKSUM.BIN)")
 
     utils.startTest(@"Open CHECKSUM.BIN")
@@ -356,7 +355,7 @@ PRI test_checksum_integrity() | result, i, sum, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_path_resolution() | result, fileSize, handle
+PRI test_path_resolution() | fileSize, handle
     utils.startTestGroup(@"Test 10: Subdirectory Path Resolution")
 
     utils.startTest(@"Open /LEVEL1/INLEVEL1.TXT with absolute path")
@@ -375,7 +374,7 @@ PRI test_path_resolution() | result, fileSize, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_deep_path() | result, fileSize, handle
+PRI test_deep_path() | fileSize, handle
     utils.startTestGroup(@"Test 11: Deep Nested Path")
 
     utils.startTest(@"Open /LEVEL1/LEVEL2/DEEP.TXT")
@@ -394,7 +393,7 @@ PRI test_deep_path() | result, fileSize, handle
     dfs.closeFileHandle(handle)
 
 
-PRI test_directory_navigation() | result, status, count, idx, pEntry
+PRI test_directory_navigation() | status, count, idx, pEntry
     utils.startTestGroup(@"Test 12: Directory Navigation (MULTI)")
 
     utils.startTest(@"Change to MULTI directory")
@@ -419,7 +418,7 @@ PRI test_directory_navigation() | result, status, count, idx, pEntry
     utils.evaluateSingleValue(status, @"changeDirectory(/)", dfs.SUCCESS)
 
 
-PRI test_benchmark_sequential() | start, elapsed, bytesRead, i, bytesPerSec, handle
+PRI test_benchmark_sequential() | start, elapsed, i, bytesPerSec, handle
     utils.startTestGroup(@"Performance Benchmark")
 
     utils.startTest(@"Sequential read 64KB - timing")

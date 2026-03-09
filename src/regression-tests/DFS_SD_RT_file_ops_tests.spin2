@@ -103,7 +103,6 @@ testfile2       BYTE    "RTFILE2.BIN", 0
 testfile3       BYTE    "RTFILE3.DAT", 0
 renamedFile     BYTE    "RENAMED.TXT", 0
 testContent1    BYTE    "Hello, SD Card!", 0
-testContent2    BYTE    "This is test content for file operations.", 0
 testdir1        BYTE    "RTDIR1", 0
 nonexistent     BYTE    "NOEXIST.TXT", 0
 
@@ -112,7 +111,7 @@ readBuffer_guard BYTE   0[GUARD_SIZE]
 sectorBuffer    BYTE    0[BYTES_PER_SECTOR]        ' For reading raw sectors during diagnostics
 sectorBuffer_guard BYTE 0[GUARD_SIZE]
 
-PUB go() | workerCog, result, status, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten, bytesRead, root_sec, i, pEntry, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
+PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_sec, i, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
 '' Main entry point for file operations regression tests
 ''
 '' Tests file create, open, close, delete, rename using V3 handle API

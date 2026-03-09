@@ -49,7 +49,7 @@ testfile5       BYTE    "apLongsHeadBody.bin", 0
 testfile6       BYTE    "apLongsHead2xBody.bin", 0
 testfile7       BYTE    "apLongsHead3xBody.bin", 0
 
-PUB go() | hundreds, tens, units, snHi, snLo, nbrLongs, workerCog, handle, status
+PUB go() | snHi, snLo, nbrLongs, workerCog, handle, status
 '' Run Flash append operation regression tests.
 ''
 ' @local hundreds - Hundreds digit of serial number
@@ -207,7 +207,7 @@ pri testAppendWithIntermedFlush(initialLongsCount, startingFileCount, startingBl
     utils.evaluateFSStats(@"post file write", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testNewAppendBytes(pFilename, count, startingFileCount, startingBlockCount) | bExists, startLength, bytesUsed, blocksUsed, blocksAdded, pBlock, handle, testValue, status
+pri testNewAppendBytes(pFilename, count, startingFileCount, startingBlockCount) | bExists, handle, testValue, status
 
     utils.startTest(@"Ensure file doesn't exist")
     utils.setCheckCountPerTest(2)
@@ -287,7 +287,7 @@ pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | by
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendBytes(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, pBlock, blocksAdded, handle, testValue, status
+pri testAppendBytes(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksUsed, blocksAdded, handle, testValue, status
 
     utils.startTest(@"Get starting length before append of BYTEs")
     utils.setCheckCountPerTest(2)
@@ -372,7 +372,7 @@ pri testWriteWords(pFilename, count, startingFileCount, startingBlockCount) | bl
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendWords(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, pBlock, blocksAdded, blocksUsed, handle, testValue, status
+pri testAppendWords(pFilename, initialCount, count, startingFileCount, startingBlockCount) | startLength, bytesUsed, blocksAdded, blocksUsed, handle, testValue, status
 
     utils.startTest(@"Get starting length before append of WORDs")
     utils.setCheckCountPerTest(2)
@@ -506,7 +506,7 @@ pri testAppendLongs(pFilename, initialCount, count, startingFileCount, startingB
     utils.evaluateFSStats(@"post file append", startingFileCount, startingBlockCount + blocksAdded)
 
 
-pri testFlushAppendLongs(appendHandle, pFilename, initialLongCount, count) | startLength, bytesUsed, blocksUsed, blocksAdded, testValue, status
+pri testFlushAppendLongs(appendHandle, pFilename, initialLongCount, count) | startLength, bytesUsed, blocksUsed, testValue, status
 
     utils.showFileDetails(pFilename)
 
@@ -585,7 +585,7 @@ testStrBuffer       BYTE    0[MAX_STRING_SIZE]
 idxStringWritten    BYTE    0[MAX_STRINGS_WRITTEN]               ' index to strings in order written
 expectedStrFileSize LONG    0
 
-pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): strFileSize | strIdx, pString, readWriteIdx, blocksUsed, pBlock, handle, status
+pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): strFileSize | strIdx, pString, readWriteIdx, blocksUsed, handle, status
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -625,7 +625,7 @@ pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount): s
     utils.evaluateFSStats(@"post file write", startingFileCount + 1, startingBlockCount + blocksUsed)
 
 
-pri testAppendStrings(pFilename, count, initialFileSize, startingFileCount, startingBlockCount) : strFileSize | startLength, readWriteIdx, strIdx, pString, pBlock, blocksAdded, blocksUsed, handle, status
+pri testAppendStrings(pFilename, count, initialFileSize, startingFileCount, startingBlockCount) : strFileSize | startLength, readWriteIdx, strIdx, pString, blocksAdded, blocksUsed, handle, status
 
     utils.startTest(@"Get starting length before append of STRINGs")
     utils.setCheckCountPerTest(2)

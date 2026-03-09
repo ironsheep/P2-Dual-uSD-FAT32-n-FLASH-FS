@@ -78,9 +78,8 @@ writeBuffer     BYTE    0[LARGE_BUF_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuf_guard   BYTE    0[16]
 readBuffer2     BYTE    0[BUFFER_SIZE]
-readBuf2_guard  BYTE    0[16]
 
-PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWritten, bMatch, sdFree, flBlocks, flFree, flFiles, fileSize
+PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWritten, bMatch
 '' Main entry point for cross-device regression tests
 
     debug(" ")

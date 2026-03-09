@@ -72,7 +72,7 @@ writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | workerCog, result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
+PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
 '' Main entry point for CRC diagnostic regression tests
 
     debug(" ")

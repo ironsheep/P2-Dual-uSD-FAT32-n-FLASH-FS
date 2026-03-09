@@ -82,7 +82,7 @@ readBuffer2_guard BYTE  0[16]
 beforeContent   BYTE    "BEFORE", 0
 afterContent    BYTE    "AFTER", 0
 
-PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWritten
+PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
 '' Main entry point for recovery scenario regression tests
 
     debug(" ")

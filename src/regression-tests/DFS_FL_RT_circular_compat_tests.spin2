@@ -56,7 +56,6 @@ testfileB2      BYTE    "rw3KB-B2-blocks.bin", 0
 testfileB3      BYTE    "rw3KB-B3-blocks.bin", 0
 testfileB3a      BYTE   "rw3KB-B3a-blocks.bin", 0
 testfileB4      BYTE    "rw3KB-B4-blocks.bin", 0
-testfileB5      BYTE    "rw3KB-B5-blocks.bin", 0
 testfileC1      BYTE    "rw8KB-C1-blocks.bin", 0
 testfileC2      BYTE    "rw8KB-C2-blocks.bin", 0
 'testfileC3      BYTE    "rw8KB-C3-blocks.bin", 0
@@ -419,7 +418,7 @@ PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, s
 
 
 
-PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC, endPosition
+PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, endPosition
 
     utils.startTestGroup(@"Exercise seeks in new format circular file")
 
@@ -511,7 +510,7 @@ PRI verifyRecord(pRcd, rcdSize, expectedId, readLength) : bStatus | calcCRC
     utils.evaluateSubValue(recordID, @"recordID", expectedId)
     bStatus |= recordID <> expectedId ? true : false
     ' ensure record CRC is same as expected
-    calcCRC := utils.record_crc(@record, rcdSize)
+    calcCRC := utils.record_crc(pRcd, rcdSize)
     utils.evaluateSubValue(calcCRC, @"recordCRC", recordCRC)
     bStatus |= calcCRC <> recordCRC ? true : false
 

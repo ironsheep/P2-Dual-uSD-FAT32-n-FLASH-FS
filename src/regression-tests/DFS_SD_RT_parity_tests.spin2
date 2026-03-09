@@ -80,7 +80,6 @@ appendContent   BYTE    "APPENDED", 0
 
 ' Buffers
 readBuf         BYTE    0[TEST_BUF_SIZE]
-readBuf_guard   BYTE    0[16]
 
 PUB go() | workerCog, status, handle, size, sn_hi, sn_lo, used, free_ct, file_count, pos, bytesWritten, bytesRead, sn_lo2
 '' Main entry point for feature parity regression tests

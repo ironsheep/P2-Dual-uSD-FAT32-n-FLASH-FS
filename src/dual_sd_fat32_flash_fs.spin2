@@ -190,11 +190,7 @@ CON ' command codes for worker cog
   CMD_FLASH_STATS       = 64       ' Get Flash device stats
   CMD_FLASH_DIRECTORY   = 65       ' Open Flash directory iteration
   ' Unified device queries:
-  CMD_CAN_MOUNT         = 66       ' Non-destructive mount check
   CMD_SERIAL_NUMBER     = 67       ' Get device serial number
-  CMD_MOUNTED_Q         = 68       ' Query device mount status
-  ' Cross-device:
-  CMD_COPY_FILE         = 70       ' Copy file between devices
   ' Flash byte-level I/O:
   CMD_FL_WR_BYTE        = 71       ' Write single byte to Flash handle
   CMD_FL_RD_BYTE        = 72       ' Read single byte from Flash handle
@@ -256,7 +252,6 @@ CON ' error codes
   E_FLASH_BAD_BLOCKS       = -108  ' Block bit failure detected, bad blocks removed
   E_FLASH_TRUNCATED_STR    = -109  ' Buffer full before reaching string terminator
   E_FLASH_INCOMPLETE_STR   = -110  ' End of file reached before string terminator
-  E_FLASH_SHORT_TRANSFER   = -111  ' Too few bytes read or written
   E_FLASH_BAD_FILE_LENGTH  = -112  ' File length given is negative or zero
   E_FLASH_BAD_SEEK_ARG     = -113  ' Invalid seek argument
   E_FLASH_FILE_EXISTS      = -114  ' Flash file already exists (rename/create_file target)
@@ -341,7 +336,6 @@ CON ' ---- FAT32 Date/Time Encoding ----
 
 CON ' ---- Timeout and Speed Constants ----
   INIT_TIMEOUT_SEC      = 2           ' Card initialization timeout (ACMD41)
-  CMD_TIMEOUT_SEC       = 1           ' Single command timeout
   RESPONSE_TIMEOUT_DIV  = 10          ' clkfreq / 10 = 100ms timeout
   SD_INIT_SPEED_HZ      = 400_000     ' Card init speed per SD spec
   SD_FALLBACK_SPEED_HZ  = 25_000_000  ' Safe fallback / max SPI speed
@@ -353,7 +347,6 @@ CON ' ---- Flash Page/Block Constants ----
 
 CON ' ---- SD Register Sizes ----
   CSD_CID_BYTES         = 16          ' CSD and CID register size
-  SCR_LONGS             = 2           ' SCR register (8 bytes)
   SD_STATUS_BYTES       = 64
 
 CON ' ---- Hex Dump Display ----
@@ -384,12 +377,6 @@ CON ' Flash filesystem geometry and constants
   FL_BLOCKS        = LAST_BLOCK - FIRST_BLOCK + 1   ' 3968 blocks available
   BLOCK_SIZE       = $1000                           ' 4KB block size
   BLOCK_SIZE_EXP   = encod BLOCK_SIZE
-
-  ' Block internal offsets
-  ADDR_HEAD_FN_CRC = $004                           ' Offset: filename CRC in head block
-  ADDR_HEAD_SONAME = $008                           ' Offset: first filename byte in head block
-  ADDR_HEAD_DATA   = $088                           ' Offset: first data byte in head block
-  ADDR_BODY_DATA   = $004                           ' Offset: first data byte in body block
 
   ' Filename storage
   FL_FILENAME_SIZE = $088 - $008                    ' 128 bytes (127 chars + null)
@@ -450,7 +437,6 @@ CON ' SD card command codes and tokens for multi-block operations
   CRC_CMD9   = $AF              ' CRC for CMD9 (SEND_CSD, arg=0)
   CRC_CMD10  = $1B              ' CRC for CMD10 (SEND_CID, arg=0)
   CRC_CMD12  = $61              ' CRC for CMD12 (STOP_TRANSMISSION)
-  CRC_CMD55  = $65              ' CRC for CMD55 (APP_CMD, arg=0)
   CRC_ACMD51 = $55              ' CRC for ACMD51 (SEND_SCR, arg=0)
   CRC_NONE   = $FF              ' CRC not validated in SPI mode after init (CMD6, ACMD13)
 
@@ -484,8 +470,6 @@ CON ' SD card initialization constants
   ' Data Response Token format (after each block write): xxx0sss1
   ' sss = status: 010 = accepted, 101 = CRC error, 110 = write error
   DATA_ACCEPTED          = $05 ' Lower 5 bits = xxx00101 = data accepted
-  DATA_CRC_ERROR         = $0B ' Lower 5 bits = xxx01011 = CRC error
-  DATA_WRITE_ERROR       = $0D ' Lower 5 bits = xxx01101 = write error
 
 CON ' card warning/capability flags (bitmask, returned by cardWarnings())
   CW_NONE              = $00     ' No warnings or capabilities
@@ -803,9 +787,6 @@ DAT ' singleton control - SHARED across all object instances
   ' Per-cog Flash CWD prefix string (128 bytes per cog, 8 cogs = 1KB)
   ' Empty string = root directory. Example: "subdir" or "dir1/dir2"
   fl_cog_cwd       BYTE    0[8 * FL_FILENAME_SIZE]
-
-  ' Temporary full-path filename buffer used by Flash directory listing worker commands
-  fl_dir_entry_name BYTE   0[FL_FILENAME_SIZE]
 
 #ifdef SD_INCLUDE_STACK_CHECK
 OBJ
@@ -6698,7 +6679,6 @@ CON ' ---- Flash Directory Handle Support ----
   FL_DH_PREFIX_SIZE     = 128       ' Max prefix length including null
   FL_DH_DEDUP_OFFSET    = 128       ' Offset in handle buffer for dedup area
   FL_DH_DEDUP_SIZE      = 256       ' Size of dedup area (fits ~28 names at 9 bytes each)
-  FL_DH_MAX_DIR_NAME    = 8         ' Max directory name length (FAT32 8.3 convention)
 
 PRI fl_open_directory(p_path) : handle | p_buf, p_prefix, p_cwd, cwd_len, path_len
 ' Open a Flash directory for handle-based enumeration.

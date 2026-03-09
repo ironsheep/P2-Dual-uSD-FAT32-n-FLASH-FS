@@ -175,7 +175,7 @@ pri writeAddressedLongs(pFilename, count, startingFileCount, startingBlockCount)
 
 
 
-pri verifyAddressedLongs(pFilename, count) | relativeOfs, handle, status, endPosition, longValue, byteOffset
+pri verifyAddressedLongs(pFilename, count) | handle, status, endPosition, longValue, byteOffset
     '  open file for read
     utils.startTest(@"Open File for read")
     utils.setCheckCountPerTest(2)

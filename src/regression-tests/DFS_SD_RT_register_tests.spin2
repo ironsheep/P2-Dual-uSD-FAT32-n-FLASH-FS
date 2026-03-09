@@ -80,7 +80,7 @@ scrBuf_guard    BYTE    0[16]
 sdsBuf          BYTE    0[64]
 sdsBuf_guard    BYTE    0[16]
 
-PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, ocr, mid, r2, sdSpec
+PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, ocr, mid, sdSpec
 '' Main entry point for register access regression tests
 
     debug(" ")

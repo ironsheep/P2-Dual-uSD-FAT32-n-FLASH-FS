@@ -260,7 +260,7 @@ PUB go() | snHi, snLo, lenBytes, desiredLenBytes, fillByteValue, blocksUsed, wor
     dfs.stop()
 
 
-PRI verifyFileFillContent(pFilename, fillValue, lenBytes) | blocksUsed, badCt, handle, status, testValue
+PRI verifyFileFillContent(pFilename, fillValue, lenBytes) | badCt, handle, status, testValue
 
     utils.startTest(@"Open File for read")
     handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
@@ -289,7 +289,7 @@ PRI verifyFileFillContent(pFilename, fillValue, lenBytes) | blocksUsed, badCt, h
 
 
 
-pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | blocksUsed, handle, status, testValue
+pri testWriteBytes(pFilename, count, startingFileCount, startingBlockCount) | handle, status, testValue
     '  open file for write
     '  ensure returns SUCCESS
     utils.startTest(@"Open File for write")
@@ -526,7 +526,7 @@ con   MAX_STRING_SIZE = (9*16)+1
 dat   testStrBuffer     BYTE    0[MAX_STRING_SIZE]
       idxStringWritten     BYTE    0[MAX_STRINGS_WRITTEN]               ' index to strings in order written
 
-pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount) | strIdx, pString, expectedFileSize, expectedFileBlocks, foundFileSize, rdLength, readWriteIdx, expectedLength, compareResult, pBlock, handle, status
+pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount) | strIdx, pString, expectedFileSize, expectedFileBlocks, foundFileSize, rdLength, readWriteIdx, expectedLength, compareResult, handle, status
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -537,7 +537,7 @@ pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount) | 
     utils.startTest(@"Write 10 STRINGs")
     utils.setCheckCountPerTest(1)
     expectedFileSize := 0
-    repeat readWriteIdx from 0 to MAX_STRINGS_WRITTEN - 1
+    repeat readWriteIdx from 0 to count - 1
         strIdx := (GETRND() +// stringIdCt)
         pString := WORD[@stringIdTable][strIdx] ' get ptr to string
         BYTE[@idxStringWritten][readWriteIdx] := strIdx
@@ -572,7 +572,7 @@ pri testWriteStrings(pFilename, count, startingFileCount, startingBlockCount) | 
     utils.startTest(@"read expected 10 STRINGs")
     utils.setCheckCountPerTest(3)
     foundFileSize := 0
-    repeat readWriteIdx from 0 to MAX_STRINGS_WRITTEN - 1
+    repeat readWriteIdx from 0 to count - 1
          strIdx := BYTE[@idxStringWritten][readWriteIdx]
         pString := WORD[@stringIdTable][strIdx] ' get ptr to string
         ' the read call doesn't count terminator in length

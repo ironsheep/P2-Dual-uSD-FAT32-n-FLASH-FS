@@ -79,7 +79,7 @@ dhContent       BYTE    "Directory handle test content", 0
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | workerCog, result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs
+PUB go() | workerCog, result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs
 '' Main entry point for directory handle regression tests
 ''
 '' Tests V3 directory handle enumeration API

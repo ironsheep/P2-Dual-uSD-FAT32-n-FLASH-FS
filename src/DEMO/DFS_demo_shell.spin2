@@ -25,8 +25,6 @@
 CON { timing }
 
   CLK_FREQ = 350_000_000                                        ' system freq as a constant
-  MS_001   = CLK_FREQ / 1_000                                   ' ticks in 1ms
-  US_001   = CLK_FREQ / 1_000_000                               ' ticks in 1us
 
   _clkfreq = CLK_FREQ                                           ' set system clock
 
@@ -39,25 +37,7 @@ CON { terminal }
   DEBUG_DISABLE = 1                                                ' suppress debug() in this file
 
 
-CON { SD card pins }
-
-  ' P2 Edge module SD slot pins
-  SD_CS    = 60  { O }                                          ' chip select
-  SD_SCK   = 61  { O }                                          ' serial clock
-  SD_MOSI  = 59  { O }                                          ' master out, slave in
-  SD_MISO  = 58  { I }                                          ' master in, slave out
-
-
-CON { fixed io pins }
-
-  PGM_RX   = 63  { I }                                          ' programming / debug
-  PGM_TX   = 62  { O }
-
-
 CON { constants }
-
-  #true,  ON, OFF
-  #false, NO, YES
 
   MAX_PATH    = 128                                             ' max path length
   BUFFER_SIZE = 512                                             ' read/write buffer
@@ -246,7 +226,6 @@ VAR { Flash directory }
 
   long  flDirBlockId                                             ' Flash directory iteration counter
   byte  flDirName[MAX_PATH]                                       ' Flash directory filename buffer
-  long  flDirSize                                                ' Flash directory file size
 
 
 VAR { parser }
@@ -1082,7 +1061,7 @@ PUB do_move() | p_src, p_dst, dh, status
         serial.fstr2(@"Failed to rename '%s' (error: %d)\r\n", p_src, status)
 
 
-PUB do_copy() | p_src, p_dst, srcDev, dstDev, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total, status, is_cross, mountsOk
+PUB do_copy() | p_src, p_dst, srcDev, dstDev, status, is_cross, mountsOk
 
 '' Copy file. Supports same-device and cross-device copy.
 '' Cross-device syntax: copy sd:FILE flash:FILE
@@ -1399,7 +1378,7 @@ PUB do_card_info() | wasMounted, cardOk, ...
       stop_driver()
 
 
-PUB do_audit() | pStr, status, used, free_ct, file_count, iter_count, iter_bytes, fsize
+PUB do_audit() | pStr
 
 '' Audit filesystem integrity.
 '' SD: delegates to isp_fsck_utility (requires driver stop/restart).
@@ -1514,7 +1493,7 @@ PRI do_flash_audit() | status, used, free_ct, file_count, iter_count, iter_bytes
         serial.fstr0(@"AUDIT WARNING - File count mismatch\r\n")
 
 
-PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after, free_after, files_after, doFsck
+PUB do_fsck() | pStr, doFsck
 
 '' Check and repair filesystem.
 '' SD: delegates to isp_fsck_utility (requires driver stop/restart).
@@ -1620,7 +1599,7 @@ PRI do_flash_fsck() | status, used_before, free_before, files_before, used_after
         serial.fstr0(@"  Flash may need format to recover.\r\n")
 
 
-PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, i, rate, readResult, msPerTick
+PUB do_bench() | wasMounted, cardOk, tStart, tElapsed, sector, rate, readResult, msPerTick
 
 '' Read-only throughput benchmark (SD only)
 
@@ -2477,7 +2456,6 @@ DAT { manufacturer lookup table }
   midAngelbird    byte    "Angelbird", 0
   midSharedOEM    byte    "OEM", 0
   midLongsys      byte    "Longsys", 0
-  midUnknown      byte    "MID:$", 0
   midFmtBuf       byte    "MID:$XX", 0
 
 DAT { filesystem type strings }

@@ -148,7 +148,7 @@ PUB go() | cogIdx, totalFiles, status, workerCog
 
 con ' ---- file tests ---
 
-pri genTwoFiles(pByteFileCountAr) | myId, fileType, delayMS, fType1, fType2, status
+pri genTwoFiles(pByteFileCountAr) | myId, delayMS, fType1, fType2
 
     myId := cogid()
     delayMS := (GETRND() +// 3000)        ' reduced from 30s; serialized worker needs less spread
@@ -212,7 +212,7 @@ pri readWriteStrings(pFilename)
     utils.showFiles()
 
 
-pri testWriteBytes(pFilename, count) | blocksUsed, handle, status, testValue
+pri testWriteBytes(pFilename, count) | handle, status, testValue
     '  open file for write
     '  ensure returns SUCCESS
     debug("- testWriteBytes(", zstr_(pFilename), ", ", udec_(count), ")")
@@ -700,7 +700,7 @@ PRI setTitle(rcdNunber) | units, tens
     BYTE[@rcdNbr][0] := tens
     BYTE[@rcdNbr][1] := units
 
-PRI dumpRecords(pFilename, handle, totalRecordsWritten, pRcdBuffer, rcdSize) | status, lenBytes, recordNbr, rdLength, pErr
+PRI dumpRecords(pFilename, handle, totalRecordsWritten, pRcdBuffer, rcdSize) | lenBytes, recordNbr, rdLength, pErr
 
     '  file is already open  for read
     lenBytes := dfs.file_size(dfs.DEV_FLASH, pFilename)
@@ -710,7 +710,7 @@ PRI dumpRecords(pFilename, handle, totalRecordsWritten, pRcdBuffer, rcdSize) | s
     debug("** /----- dumping ", udec_(totalRecordsWritten), " records [contains ", udec_(lenBytes/rcdSize), " records]")
     repeat recordNbr from 1 to totalRecordsWritten
         setTitle(recordNbr)
-        rdLength := dfs.readHandle(handle, @record, RECORD_LEN)
+        rdLength := dfs.readHandle(handle, pRcdBuffer, RECORD_LEN)
         if rdLength >= 0 and rdLength <> RECORD_LEN
             debug("-- bad length [", udec_(rdLength), " vs. ", udec_(RECORD_LEN), "]")
         elseif rdLength < 0
@@ -740,7 +740,7 @@ pri openWaitOnHandle(pFilename, mode) : handle, status | pErr
         debug("openWaitOnHandle() - ", sdec(handle), " [", zstr_(pErr), "]")
 
 
-pri writeAndVerifyATestFile(fileType, myId, fileIndex) | BYTE filename[FILE_NAME_LEN], fileCount, blockCount
+pri writeAndVerifyATestFile(fileType, myId, fileIndex) | BYTE filename[FILE_NAME_LEN]
     case fileType
       0:
         fillinFilename(@filename, myId, fileIndex, @"by", @"file.bin", FILE_NAME_LEN)

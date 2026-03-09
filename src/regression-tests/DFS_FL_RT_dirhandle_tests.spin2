@@ -69,9 +69,7 @@ dhSubFile       BYTE    "dhtdir/dhsub/sub1.dat", 0
 ' Directory names for openDirectory
 dhDirName       BYTE    "dhtdir", 0
 dhSubDirName    BYTE    "dhtdir/dhsub", 0
-dhNonExist      BYTE    "nxdir99", 0
 dhAbsRoot       BYTE    "/", 0
-dhAbsDirPath    BYTE    "/dhtdir", 0
 dhDot           BYTE    ".", 0
 dhEmpty         BYTE    0
 
@@ -81,7 +79,7 @@ cwdRoot         BYTE    "/", 0
 ' Test data
 dhContent       BYTE    "DirHandle test content", 0
 
-PUB go() | workerCog, status, dh, dh2, h1, h2, h3, h4, h5, p_entry, p_name, attrib, fsize, entryCount, foundFiles, foundDirs
+PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsize, entryCount, foundFiles, foundDirs
 '' Run Flash directory handle regression tests.
 ''
 ' @local workerCog - Driver worker cog ID

@@ -62,9 +62,6 @@ cwdFileAlpha    BYTE    "alpha.dat", 0
 cwdFileBeta     BYTE    "beta.dat", 0
 cwdFileGamma    BYTE    "gamma.dat", 0
 
-' Full paths (for verification -- stored on Flash as "dirA/alpha.dat")
-fullPathDirA    BYTE    "dirA/alpha.dat", 0
-
 ' Test data
 cwdTestData     BYTE    "CWD-TEST-DATA", 0
 cwdRenameTarget BYTE    "renamed.dat", 0
@@ -83,9 +80,8 @@ absFile         BYTE    "absfile.dat", 0
 rootAbsFile     BYTE    "rootabs.dat", 0
 absRenameFile   BYTE    "absrename.dat", 0
 absTestData     BYTE    "ABS-PATH-DATA", 0
-absVerifyData   BYTE    "ABS-VERIFY", 0
 
-PUB go() | workerCog, blockId, fileSize, found, lenBytes, byte filename[dfs.FL_FILENAME_SIZE], handle, status, testValue
+PUB go() | workerCog, fileSize, found, lenBytes, byte filename[dfs.FL_FILENAME_SIZE], handle, status, testValue
 '' Run Flash current working directory regression tests.
 ''
 ' @local workerCog - Driver worker cog ID

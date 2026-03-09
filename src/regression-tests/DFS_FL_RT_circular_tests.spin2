@@ -59,7 +59,6 @@ testfileB1      BYTE    "rw3KB-B1-blocks.bin", 0
 testfileB2      BYTE    "rw3KB-B2-blocks.bin", 0
 testfileB3      BYTE    "rw3KB-B3-blocks.bin", 0
 testfileB4      BYTE    "rw3KB-B4-blocks.bin", 0
-testfileB5      BYTE    "rw3KB-B5-blocks.bin", 0
 testfileC1      BYTE    "rw8KB-C1-blocks.bin", 0
 testfileC2      BYTE    "rw8KB-C2-blocks.bin", 0
 testfileC3      BYTE    "rw8KB-C3-blocks.bin", 0
@@ -598,7 +597,7 @@ PRI testVerifySecRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC, endPosition
+PRI testVerifySeekRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, endPosition
 
     '  get total file size
     utils.startTest(@"Determine size of file in records")
@@ -679,7 +678,7 @@ PRI verifyRecord(pRcd, rcdSize, expectedId, readLength) | calcCRC
     ' ensure record ID is same as expected
     utils.evaluateSubValue(recordID, @"recordID", expectedId)
     ' ensure record CRC is same as expected
-    calcCRC := utils.record_crc(@record, rcdSize)
+    calcCRC := utils.record_crc(pRcd, rcdSize)
     utils.evaluateSubValue(calcCRC, @"recordCRC", recordCRC)
 
 con { license }

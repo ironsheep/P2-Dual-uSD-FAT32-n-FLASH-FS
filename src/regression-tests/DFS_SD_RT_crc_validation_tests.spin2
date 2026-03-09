@@ -61,9 +61,8 @@ crcTestFile     BYTE    "CRCVAL.TXT", 0
 ' Buffers
 writeBuffer     BYTE    0[dfs.SECTOR_SIZE]
 readBuffer      BYTE    0[64]
-readBuffer_guard BYTE   0[16]
 
-PUB go() | workerCog, result, handle, matchBefore, matchAfter, mismatchBefore, mismatchAfter, errorCount, bytesRead
+PUB go() | workerCog, result, handle, mismatchBefore, mismatchAfter, errorCount, bytesRead
 '' Main entry point for CRC validation regression tests
 ''
 '' Tests CRC error injection hooks for the SD card driver

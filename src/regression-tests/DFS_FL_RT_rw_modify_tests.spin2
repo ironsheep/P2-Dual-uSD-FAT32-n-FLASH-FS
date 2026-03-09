@@ -47,8 +47,6 @@ DAT
 testfile         BYTE    "rw4blocks.bin", 0
 testfile2        BYTE    "rw2blocks.bin", 0
 testfile3        BYTE    "rw3blocks.bin", 0
-testfile4        BYTE    "rwxblocks.bin", 0
-
 record
 recordMARK       LONG    $adbeedfe              ' visual start of record marker (FEED BEED in memory)
 recordID         LONG    0
@@ -56,7 +54,7 @@ recordData       LONG    0[RECORD_DATA_LEN/4]
 recordCRC        LONG    0
 recordEnd
 
-PUB go() | status, handle, testValue, expectedValue, bytePattern, endPosn, recordOffset, expectedFileBlocks, expectedFileSize, workerCog, recordsThisTest
+PUB go() | status, handle, recordOffset, expectedFileBlocks, expectedFileSize, workerCog, recordsThisTest
 '' Run Flash read/write/modify regression tests.
 ''
 ' @local status - Operation status code
@@ -284,7 +282,7 @@ PRI setMsgRcdNbr(rcdNumber) | units, tens
     BYTE[@crcNbr][1] := units
 
 
-PRI testWriteRecords(pFilename, recordCount, initialFiles, initialBlocks) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize, writeLength
+PRI testWriteRecords(pFilename, recordCount, initialFiles, initialBlocks) | status, handle, recordNbr, expectedFileSize, expectedFileBlocks, sizeUnused, allocatedFileSize, writeLength
     ' ----------------------------------
     ' TEST
         '  open file for write
@@ -337,7 +335,7 @@ PRI testWriteRecords(pFilename, recordCount, initialFiles, initialBlocks) | stat
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI testVerifyRecords(pFilename, recordCount) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize
+PRI testVerifyRecords(pFilename, recordCount) | status, handle, recordNbr, rdLength, calcCRC
 
     debug("  ")
     debug(" ------------ Verify Original Records ---------------- ")
@@ -380,7 +378,7 @@ PRI testVerifyRecords(pFilename, recordCount) | status, handle, testValue, expec
     utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-PRI testReplaceRecordWithinFile(pFilename, maxRecords, recordNumber) : handle | status, newRecordNbr, recordOffset
+PRI testReplaceRecordWithinFile(pFilename, maxRecords, recordNumber) : handle | status, newRecordNbr
     debug("  ")
     debug(" ----------- Overwrite single Record ----------- ")
     '  open file for modify writes
@@ -405,7 +403,7 @@ PRI testReplaceRecordWithinFile(pFilename, maxRecords, recordNumber) : handle | 
 
 
 
-PRI testReplaceWithinFile(pFilename, maxRecords) : handle | status, recordNbr, recordOffset, newRecordNbr
+PRI testReplaceWithinFile(pFilename, maxRecords) : handle | status, recordNbr, newRecordNbr
 
     debug("  ")
     debug(" ----------- Overwrite 1st/mid/last Records ----------- ")

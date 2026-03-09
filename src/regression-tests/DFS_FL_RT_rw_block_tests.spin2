@@ -55,7 +55,7 @@ recordData       LONG    0[RECORD_DATA_LEN/4]
 recordCRC        LONG    0
 recordEnd
 
-PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, workerCog
+PUB go() | status, workerCog
 '' Run Flash read/write block-level regression tests.
 ''
 ' @local status - Operation status code
@@ -97,7 +97,7 @@ PUB go() | status, handle, testValue, expectedValue, pFilename, bytePattern, wor
     debug("* Test Complete")
     debug("END_SESSION")
 
-pri testWriteRecords(pFilename, recordCount, fileCount, blocksAllocated) | status, handle, testValue, expectedValue, recordNbr, wrLength, rdLength, pBlock, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize, writeLength
+pri testWriteRecords(pFilename, recordCount, fileCount, blocksAllocated) | status, handle, testValue, recordNbr, rdLength, expectedFileSize, expectedFileBlocks, calcCRC, sizeUnused, allocatedFileSize, writeLength
     ' ----------------------------------
     ' TEST
         '  open file for write

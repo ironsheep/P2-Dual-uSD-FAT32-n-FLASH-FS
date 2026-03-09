@@ -56,7 +56,7 @@ readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 rdByteBuf        BYTE   0[1]
 
-PUB go() | workerCog, result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
+PUB go() | workerCog, result, bytesRead, idx, fileSize, actualByte, handle
 '' Main entry point for seek operation regression tests
 ''
 '' Tests seek operations and random access reading

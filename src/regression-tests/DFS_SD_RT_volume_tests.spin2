@@ -123,13 +123,10 @@ vbrBuf          BYTE    0[BYTES_PER_SECTOR]
 vbrBuf_guard    BYTE    0[GUARD_SIZE]
 vbrBuf2         BYTE    0[BYTES_PER_SECTOR]
 vbrBuf2_guard   BYTE    0[GUARD_SIZE]
-readBuffer      BYTE    0[256]
-readBuffer_guard BYTE   0[GUARD_SIZE]
-
 ' Saved original label
 origLabel       BYTE    0[LABEL_BUF_SIZE]
 
-PUB go() | workerCog, result, status, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, fileSize, vbrSector, found
+PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found
 '' Main entry point for volume operation regression tests
 
     debug(" ")

@@ -73,7 +73,7 @@ content4        BYTE    "Content for file FOUR - fourth test file", 0
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | workerCog, result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
+PUB go() | workerCog, result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, size
 '' Main entry point for multi-handle regression tests
 ''
 '' Tests V3 handle-based file API with multiple simultaneous file handles

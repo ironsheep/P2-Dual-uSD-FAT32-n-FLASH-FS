@@ -76,7 +76,7 @@ dotPath        BYTE    ".", 0
 dotdotPath     BYTE    "..", 0
 testContent1   BYTE    "Hello from subdir", 0
 
-PUB go() | workerCog, result, status, handle, dh, count, pEntry, i
+PUB go() | workerCog, result, status, handle, dh, count, pEntry
 '' Main entry point for subdirectory operations regression tests
 
     debug(" ")
