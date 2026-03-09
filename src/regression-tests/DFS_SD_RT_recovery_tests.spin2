@@ -45,19 +45,19 @@ CON
      MAX_READ_CRC_RETRIES = 3  ' Must match driver constant
 
 ' Enable all features including debug/test hooks
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -91,7 +91,7 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWr
     debug("==============================================")
 
     ' Mount the card first
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     result := dfs.mount(dfs.DEV_SD)
     if result == dfs.SUCCESS
 
@@ -348,10 +348,10 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWr
 
     dfs.unmount(dfs.DEV_SD)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

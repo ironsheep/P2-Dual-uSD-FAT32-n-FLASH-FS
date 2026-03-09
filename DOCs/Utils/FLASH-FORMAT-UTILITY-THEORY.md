@@ -60,7 +60,7 @@ After cancelling all blocks, the format clears the `flash_mounted` flag and call
 OBJ dfs : "dual_sd_fat32_flash_fs"
 
 ' Initialize and mount
-dfs.init(CS, MOSI, MISO, SCK)
+dfs.init()
 status := dfs.mount(dfs.DEV_FLASH)
 
 ' Format (erases all files)

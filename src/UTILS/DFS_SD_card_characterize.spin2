@@ -201,14 +201,14 @@ CON
   TABLE_END_MARKER     = $FF
 
 ' Enable full driver features for this utility
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
   dfs : "dual_sd_fat32_flash_fs"
@@ -419,7 +419,7 @@ PUB main() | result
   ' Initialize card WITHOUT mounting filesystem
   ' This allows characterization of cards with any filesystem (exFAT, NTFS, etc.)
   debug("Initializing SD card (no-mount mode)...")
-  dfs.init(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
+  dfs.init()
   result := dfs.initCardOnly()
   if result <> dfs.SUCCESS
     debug("FATAL: Failed to initialize SD card!")

@@ -37,13 +37,8 @@ This tutorial shows how to perform common filesystem operations using the unifie
 OBJ
   fs : "dual_sd_fat32_flash_fs"
 
-CON
+CON  ' Application constants
   ' P2 Edge Module default pins
-  SD_CS   = 60
-  SD_MOSI = 59
-  SD_MISO = 58
-  SD_SCK  = 61
-
 DAT
   testFile    BYTE  "TEST.TXT", 0
   sensorLog   BYTE  "sensor-log.dat", 0
@@ -51,7 +46,7 @@ DAT
 
 PUB main() | workerCog, status, handle, buf[128], bytesRead
   ' Step 1: Initialize driver (starts worker cog)
-  workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  workerCog := fs.init()
   if workerCog >= 0
     ' Step 2: Mount one or both devices
     status := fs.mount(fs.DEV_BOTH)
@@ -79,7 +74,7 @@ Key differences from the SD-only reference driver:
 | SD-only driver | Unified driver |
 |----------------|----------------|
 | `sd : "micro_sd_fat32_fs"` | `fs : "dual_sd_fat32_flash_fs"` |
-| `sd.mount(CS, MOSI, MISO, SCK)` | `fs.init(CS, MOSI, MISO, SCK)` then `fs.mount(dev)` |
+| `sd.mount(CS, MOSI, MISO, SCK)` | `fs.init()` then `fs.mount(dev)` |
 | `sd.openFileRead(@"FILE")` | `fs.openFileRead(fs.DEV_SD, @"FILE")` |
 | (no Flash support) | `fs.open(fs.DEV_FLASH, @"file", mode)` |
 
@@ -92,13 +87,13 @@ Initialization and mounting are separate steps in the unified driver. This allow
 ### Step 1: Initialize
 
 ```spin2
-PUB init(sd_cs, mosi, miso, sd_sck) : workerCog
+PUB init() : workerCog
 ```
 
-`init()` stores the pin assignments, allocates a hardware lock, starts the worker cog, and returns the worker's cog ID (0–7). Call it once at startup. If it returns a negative value, initialization failed.
+`init()` allocates a hardware lock, starts the worker cog, and returns the worker's cog ID (0-7). Pin assignments are fixed CON constants for the P2 Edge Module (CS=P60, MOSI=P59, MISO=P58, SCK=P61). Call it once at startup. If it returns a negative value, initialization failed.
 
 ```spin2
-workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+workerCog := fs.init()
 if workerCog < 0
   debug("Init failed!")
   return
@@ -170,7 +165,7 @@ The P2 Edge Module uses a fixed pin mapping where MISO and MOSI are shared betwe
 | P60 | CS | SCK |
 | P61 | SCK | CS |
 
-You pass the SD pin assignments to `init()`. The driver derives the Flash pins automatically by swapping P60/P61.
+The pin assignments are fixed CON constants in the driver. The Flash pins are the SD pins with P60/P61 swapped (CS and SCK exchange roles).
 
 ---
 
@@ -760,7 +755,7 @@ The main cog owns the driver lifecycle. It initializes the worker cog and mounts
 
 ```spin2
 PUB go() | workerCog
-    workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := fs.init()
 
     fs.mount(fs.DEV_BOTH)       ' or DEV_SD / DEV_FLASH if only one is needed
 
@@ -928,7 +923,7 @@ DAT
   configFile  BYTE  "CONFIG.TXT", 0
 
 PUB safeOperation() | workerCog, handle, status
-  workerCog := fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  workerCog := fs.init()
   if workerCog >= 0
     status := fs.mount(fs.DEV_BOTH)
     if status == fs.SUCCESS
@@ -966,7 +961,6 @@ A common pattern: write high-frequency data to Flash for speed, then archive to 
 
 ```spin2
 CON
-  SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
   NUM_READINGS = 100
 
 OBJ
@@ -977,7 +971,7 @@ DAT
   sdReadings  BYTE  "READINGS.DAT", 0
 
 PUB main() | status, handle, readingIdx, value
-  fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  fs.init()
   status := fs.mount(fs.DEV_BOTH)
   if status == fs.SUCCESS
     ' --- Phase 1: Fast logging to Flash ---
@@ -1009,7 +1003,6 @@ PRI readSensor() : value
 
 ```spin2
 CON
-  SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
   MAX_LINE = 80
   LF = 10
   CR = 13
@@ -1025,7 +1018,7 @@ VAR
 
 PUB readConfig() : status | handle, charIdx, charVal
   status := fs.E_NOT_MOUNTED
-  fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  fs.init()
   status := fs.mount(fs.DEV_SD)
   if status == fs.SUCCESS
     handle := fs.openFileRead(fs.DEV_SD, @configIni)
@@ -1059,7 +1052,6 @@ PUB readConfig() : status | handle, charIdx, charVal
 
 ```spin2
 CON
-  SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
   LOG_HEADER_LEN = 19
   LOG_FOOTER_LEN = 17
   CRLF_LEN = 2
@@ -1079,7 +1071,7 @@ VAR
   long logHandle
 
 PUB startLogging() | status
-  fs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  fs.init()
   status := fs.mount(fs.DEV_SD)
   if status == fs.SUCCESS
     ' Set timestamp
@@ -1235,7 +1227,7 @@ if fs.checkCMD6Support()
 
 | Method | Description |
 |--------|-------------|
-| `init(cs, mosi, miso, sck)` | Start worker cog, returns cog ID |
+| `init()` | Start worker cog, returns cog ID |
 | `stop()` | Stop worker cog, release lock |
 | `mount(dev)` | Mount one or both devices |
 | `unmount(dev)` | Flush and unmount |

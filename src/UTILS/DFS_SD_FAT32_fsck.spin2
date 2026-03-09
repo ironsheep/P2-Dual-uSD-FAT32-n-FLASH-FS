@@ -45,7 +45,7 @@ PUB go() | pStr
     debug("==============================================")
     debug(" ")
 
-    if fsck.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> SUCCESS
+    if fsck.startFsck() <> SUCCESS
         debug("FATAL: Could not start FSCK cog")
     else
         ' Pump FIFO output to debug

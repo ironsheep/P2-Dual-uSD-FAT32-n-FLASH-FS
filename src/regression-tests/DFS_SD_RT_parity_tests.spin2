@@ -38,23 +38,23 @@ CON
 
      TEST_BUF_SIZE = 256    ' size of readBuf
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -91,7 +91,7 @@ PUB go() | workerCog, status, handle, size, sn_hi, sn_lo, used, free_ct, file_co
     debug("==============================================")
 
     ' Initialize worker cog
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     ' Mount SD card
     status := dfs.mount(dfs.DEV_SD)
@@ -432,10 +432,10 @@ PUB go() | workerCog, status, handle, size, sn_hi, sn_lo, used, free_ct, file_co
 
         dfs.unmount(dfs.DEV_SD)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

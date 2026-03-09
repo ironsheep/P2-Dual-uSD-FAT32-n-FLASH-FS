@@ -61,7 +61,7 @@ PUB go() | workerCog, status, handle, bytes_read, free_sectors
     debug(" ")
 
     ' --- Step 1: Initialize driver ---
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     if workerCog < 0
         debug("ERROR: Could not start driver")
     else

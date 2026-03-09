@@ -20,6 +20,7 @@
 ''   Type 'help' for list of available commands.
 ''
 '' =================================================================================================
+{Spin2_v49}
 
 CON { timing }
 
@@ -195,14 +196,14 @@ CON { command enums }
 
 
 ' Enable full driver features for card info display
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
 
@@ -665,9 +666,9 @@ PRI format_sd(p_label, pStr, ok, status) | labelOk
 
       ' Launch format in utility cog
       if (p_label)
-        ok := fmtUtil.startFormatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, p_label)
+        ok := fmtUtil.startFormatWithLabel(p_label)
       else
-        ok := fmtUtil.startFormat(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        ok := fmtUtil.startFormat()
 
       if (ok <> 0)
         serial.fstr0(@"ERROR: Could not start format cog\r\n")
@@ -1421,7 +1422,7 @@ PUB do_audit() | pStr, status, used, free_ct, file_count, iter_count, iter_bytes
       serial.fstr0(@"Unmounted for audit.\r\n")
     stop_driver()
 
-    if (fsckUtil.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> 0)
+    if (fsckUtil.startAudit() <> 0)
       serial.fstr0(@"ERROR: Could not start audit cog\r\n")
     else
       repeat
@@ -1542,7 +1543,7 @@ PUB do_fsck() | pStr, status, used_before, free_before, files_before, used_after
     if doFsck
       stop_driver()
 
-      if (fsckUtil.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> 0)
+      if (fsckUtil.startFsck() <> 0)
         serial.fstr0(@"ERROR: Could not start FSCK cog\r\n")
       else
         repeat
@@ -1818,7 +1819,7 @@ PRI start_driver() : status
   if (driverStarted)
     status := 0
   else
-    status := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    status := dfs.init()
     if status >= 0
       driverStarted := true
 

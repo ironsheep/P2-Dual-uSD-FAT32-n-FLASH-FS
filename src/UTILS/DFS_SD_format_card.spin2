@@ -29,14 +29,14 @@ CON
     SUCCESS = 0                     ' Successful operation (matches dfs.SUCCESS)
 
 ' Enable full driver features (inherited through isp_format_utility)
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
     fmt : "isp_format_utility"
@@ -54,7 +54,7 @@ PUB go() | result
     debug(" ")
 
     debug("Formatting card with label 'P2-BENCH'...")
-    result := fmt.formatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, @label)
+    result := fmt.formatWithLabel(@label)
 
     if result == SUCCESS
         debug(" ")

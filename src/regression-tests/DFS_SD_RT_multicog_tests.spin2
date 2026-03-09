@@ -41,15 +41,15 @@ CON
      STATUS_FAIL      = -1
 
 ' Enable stack depth measurement
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -99,7 +99,7 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
     debug("==============================================")
 
     ' Initialize worker cog
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     debug(" ")
     debug("  Testing singleton pattern, concurrent access,")
     debug("  and API lock serialization with ", udec_(NUM_WORKER_COGS), " worker cogs")
@@ -118,15 +118,15 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
     utils.startTestGroup(@"Singleton Pattern Verification")
 
     utils.startTest(@"First init() returns valid cog ID")
-    firstCogId := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    firstCogId := dfs.init()
     utils.evaluateRange(firstCogId, @"init() cog ID", 0, 7)
 
     utils.startTest(@"Second init() returns SAME cog ID (singleton)")
-    result := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.init()
     utils.evaluateSingleValue(result, @"second init()", firstCogId)
 
     utils.startTest(@"Third init() returns SAME cog ID (singleton)")
-    result := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.init()
     utils.evaluateSingleValue(result, @"third init()", firstCogId)
 
     ' Mount the filesystem for subsequent tests
@@ -304,10 +304,10 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         result := dfs.unmount(dfs.DEV_SD)
         utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
         utils.startTest(@"stop() releases resources")
         dfs.stop()
@@ -336,7 +336,7 @@ PRI worker_singleton_test(worker_id) | cogResult
     repeat until sync_barrier <> 0
 
     ' Call init() - should return same cog ID as main cog got
-    cogResult := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    cogResult := dfs.init()
     worker_cogid[worker_id] := cogResult
 
     if cogResult >= 0 and cogResult <= 7

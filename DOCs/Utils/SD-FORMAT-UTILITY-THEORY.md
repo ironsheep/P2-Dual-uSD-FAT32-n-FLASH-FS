@@ -174,10 +174,10 @@ The default label is `"P2-XFER    "`.
 OBJ fmt : "isp_format_utility"
 
 ' Format with default label "P2-XFER"
-result := fmt.format(cs, mosi, miso, sck)
+result := fmt.format()
 
 ' Format with custom label (max 11 chars)
-result := fmt.formatWithLabel(cs, mosi, miso, sck, @"MYVOLUME")
+result := fmt.formatWithLabel(@"MYVOLUME")
 
 ' Release SPI pins after formatting
 fmt.stop()

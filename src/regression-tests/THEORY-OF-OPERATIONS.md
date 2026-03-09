@@ -473,7 +473,7 @@ OBJ
     utils : "DFS_RT_utilities"
 
 PUB go() | status, handle
-    dfs.init(utils.SD_CS, utils.SD_MOSI, utils.SD_MISO, utils.SD_SCK)
+    dfs.init()
     status := dfs.mount(dfs.DEV_SD)
 
     utils.startTestGroup(@"My Test Group")

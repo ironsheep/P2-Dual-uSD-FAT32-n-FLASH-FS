@@ -37,19 +37,19 @@ CON
      BUFFER_SIZE     = 512
      LARGE_BUF_SIZE  = 2048
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -94,7 +94,7 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
     utils.startTestGroup(@"Prerequisites")
 
     utils.startTest(@"init() succeeds")
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     utils.evaluateBool(workerCog >= 0, @"init() returns cog", true)
 
     utils.startTest(@"mount(DEV_SD) succeeds")
@@ -519,10 +519,10 @@ PUB go() | workerCog, status, handle, h_sd, h_fl, bytesRead, bytesRead2, bytesWr
         dfs.unmount(dfs.DEV_SD)
         dfs.unmount(dfs.DEV_FLASH)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

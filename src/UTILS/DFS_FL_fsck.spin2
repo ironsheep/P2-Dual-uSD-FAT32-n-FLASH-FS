@@ -42,7 +42,7 @@ PUB go() | status, used_before, free_before, files_before, used_after, free_afte
     debug(" ")
 
     ' Initialize driver
-    dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    dfs.init()
 
     ' --- Phase 1: Non-destructive health check ---
     debug("Phase 1: Read-only health check (canMount)...")

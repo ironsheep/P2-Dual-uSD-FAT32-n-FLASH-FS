@@ -35,12 +35,12 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_SPEED
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_SPEED
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_RAW
@@ -49,14 +49,14 @@ CON
 #pragma exportdef SD_INCLUDE_SPEED
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
+#else
 '' Enable register and raw access
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_SPEED
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -89,7 +89,7 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
     debug("==============================================")
 
     ' Initialize worker cog
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
@@ -162,10 +162,10 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
         result := (csdBuf[0] >> 6) & $03
         utils.evaluateSubValue(result, @"CSD version matches", csdVer)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
         dfs.stop()
 

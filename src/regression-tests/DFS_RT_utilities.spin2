@@ -18,16 +18,7 @@
 
 CON
 
-  MAX_OPEN_FILES = 6          ' Default (match dual_sd_fat32_flash_fs default); overridable by parent OBJ
-
-#IFDEF __SPINTOOLS__
-#DEFINE MAX_OPEN_FILES
-#ELSEIFDEF __FLEXSPIN__
-#define MAX_OPEN_FILES
-#pragma exportdef MAX_OPEN_FILES
-#ELSE
-#PRAGMA EXPORTDEF MAX_OPEN_FILES
-#ENDIF
+  MAX_OPEN_FILES = 6          ' Default (match dual_sd_fat32_flash_fs default); overridable by parent OBJ |
 
   TEST_SIGNATURE = $12345678
 

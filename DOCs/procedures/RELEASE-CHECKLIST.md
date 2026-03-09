@@ -72,6 +72,10 @@ cd src/UTILS && for f in DFS_SD_*.spin2 DFS_FL_*.spin2; do pnut-ts -d -I .. "$f"
 - [ ] [Flash FS Theory](../FLASH-FS-THEORY.md) -- block format, wear leveling, mount process match implementation
 - [ ] [Memory Sizing Guide](../Reference/MEMORY-SIZING-GUIDE.md) -- hub RAM figures match current driver
 
+### Regression test docs
+
+- [ ] [Regression Testing Strategy](REGRESSION-TESTING-STRATEGY.md) -- test types, priorities, and audit patterns match current test suite practices
+
 ### Utility theory docs
 
 - [ ] [SD FAT32 FSCK Theory](../Utils/SD-FAT32-FSCK-THEORY.md) -- matches current FSCK implementation

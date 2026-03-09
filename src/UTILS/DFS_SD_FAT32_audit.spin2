@@ -39,7 +39,7 @@ PUB go() | pStr
     debug("==============================================")
     debug(" ")
 
-    if fsck.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> SUCCESS
+    if fsck.startAudit() <> SUCCESS
         debug("FATAL: Could not start Audit cog")
     else
         ' Pump FIFO output to debug

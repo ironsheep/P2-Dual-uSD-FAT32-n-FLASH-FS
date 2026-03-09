@@ -791,7 +791,7 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 
 | Method | Description |
 |--------|-------------|
-| `init(sd_cs, mosi, miso, sd_sck)` | Store pins, start worker cog, allocate lock |
+| `init()` | Start worker cog, allocate lock (pins are fixed CON constants) |
 | `stop()` | Stop worker cog, release lock |
 | `mount(dev)` | Mount one or both filesystems |
 | `unmount(dev)` | Flush and unmount one or both filesystems |

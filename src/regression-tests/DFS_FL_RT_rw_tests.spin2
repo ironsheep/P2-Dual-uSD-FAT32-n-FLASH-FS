@@ -18,15 +18,15 @@ CON
      DEBUG_BAUD       = 2_000_000
 
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -83,7 +83,7 @@ PUB go() | snHi, snLo, lenBytes, desiredLenBytes, fillByteValue, blocksUsed, wor
 ' @local blocksUsed - Number of blocks used by file
 ' @local workerCog - Driver worker cog ID
 
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     status := dfs.format(dfs.DEV_FLASH)
     if status < 0
@@ -249,10 +249,10 @@ PUB go() | snHi, snLo, lenBytes, desiredLenBytes, fillByteValue, blocksUsed, wor
 
     utils.ShowTestEndCounts()
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     debug("* Test Complete")
     debug("END_SESSION")

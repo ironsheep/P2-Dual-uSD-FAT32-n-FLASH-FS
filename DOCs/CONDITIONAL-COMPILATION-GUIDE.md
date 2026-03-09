@@ -63,7 +63,6 @@ If you only need to compile with pnut-ts (the primary compiler for this project)
 ```spin2
 CON
     _CLKFREQ = 350_000_000
-    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
 
 ' Enable raw sector access and debug diagnostics
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
@@ -95,7 +94,7 @@ OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
 PUB go() | workerCog, depth
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     dfs.mount(dfs.DEV_BOTH)
 
     ' This #IFDEF needs the local #DEFINE to work:
@@ -344,7 +343,7 @@ OBJ
 
 PUB go() | workerCog
     debug("Starting application")     ' This WILL appear in debug output
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     dfs.mount(dfs.DEV_BOTH)
     ' Internal driver debug() calls are still suppressed
 ```
@@ -422,13 +421,12 @@ The Flash filesystem has **no conditional compilation flags**. It is always comp
 ```spin2
 CON
     _CLKFREQ = 350_000_000
-    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
 PUB go() | workerCog, handle
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     dfs.mount(dfs.DEV_SD)
     handle := dfs.createFileNew(dfs.DEV_SD, @"HELLO.TXT")
     dfs.wr_str(handle, @"Hello, world!")
@@ -444,13 +442,12 @@ No feature flags needed.
 ```spin2
 CON
     _CLKFREQ = 350_000_000
-    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
 PUB go() | workerCog, sdHandle, flHandle
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     dfs.mount(dfs.DEV_BOTH)
 
     ' Write to SD
@@ -501,7 +498,7 @@ OBJ
     dfs : "dual_sd_fat32_flash_fs"
 
 PUB go() | workerCog, matchCount, mismatchCount
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
     dfs.mount(dfs.DEV_SD)
     ' ... perform operations ...
     matchCount := dfs.getCRCMatchCount()

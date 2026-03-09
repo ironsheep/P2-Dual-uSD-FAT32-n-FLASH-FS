@@ -63,20 +63,20 @@ CON
     ' High sector number for LBA addressing test
     HIGH_SECTOR_NUM  = 1_000_000
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
+#else
 '' Enable full driver features for raw sector testing
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#pragma exportdef SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -98,7 +98,7 @@ PUB go() | workerCog, result, i, sector
     debug("==============================================")
 
     ' Initialize worker cog
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     ' Initialize card only (no filesystem mount - we're doing raw sector access)
     debug("Initializing SD card (V2 driver with streamer)...")
@@ -200,10 +200,10 @@ PUB go() | workerCog, result, i, sector
         debug("  High sector read result: ", sdec_(result))
         utils.evaluateBool(result == dfs.SUCCESS or result == dfs.E_TIMEOUT, @"large LBA read", true)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

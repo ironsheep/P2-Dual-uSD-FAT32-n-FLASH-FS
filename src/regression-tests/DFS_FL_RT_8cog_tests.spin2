@@ -24,23 +24,19 @@ CON
 
      MAX_OPEN_FILES   = 8
 
-#IFDEF __SPINTOOLS__
-#DEFINE MAX_OPEN_FILES
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
-#define MAX_OPEN_FILES
-#pragma exportdef MAX_OPEN_FILES
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#PRAGMA EXPORTDEF MAX_OPEN_FILES
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
-    dfs   : "dual_sd_fat32_flash_fs"
-    utils : "DFS_RT_utilities"
+    dfs   : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 8
+    utils : "DFS_RT_utilities" | MAX_OPEN_FILES = 8
 
 CON
     RECORD_LEN = 88 ' just for fun, tiny but even number of longs
@@ -84,7 +80,7 @@ PUB go() | cogIdx, totalFiles, status, workerCog
 ' @local status - Operation status code
 ' @local workerCog - Driver worker cog ID
 
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     utils.startTest(@"Format the FLASH")
     status := dfs.format(dfs.DEV_FLASH)
@@ -139,10 +135,10 @@ PUB go() | cogIdx, totalFiles, status, workerCog
     ' TEST SCENARIO 2: read/write tests by all cogs individually but at same time
     ' ---------------------------------------------------------------------
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

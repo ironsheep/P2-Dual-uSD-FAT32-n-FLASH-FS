@@ -41,20 +41,20 @@ CON
      FL_TEST_FILE_SIZE    = 100  ' Size for Flash create_file test
      SD_TAG_LENGTH        = 3    ' Length of "SD1", "SD2", "SD3" tags
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
+#else
 '' Enable debug diagnostics
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -105,7 +105,7 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.startTestGroup(@"SD regression: init and mount")
 
     utils.startTest(@"init() with valid pins")
-    result := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := dfs.init()
     utils.evaluateRange(result, @"init() returns cog ID", 0, dfs.MAX_P2_COGS - 1)
 
     utils.startTest(@"mount(DEV_SD)")
@@ -454,18 +454,18 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     ' the $CC guard sentinel with its own DO_NOT_WRITE_MARK ($ADDEE5E5).
     ' checkStackGuard() looks for $CC, so it will always return FALSE in that case.
     ' The stack check utility has its own overflow detection via reportStackDepth().
-#IFNDEF SD_INCLUDE_STACK_CHECK
+#ifndef SD_INCLUDE_STACK_CHECK
     utils.startTest(@"checkStackGuard() intact")
     result := dfs.checkStackGuard()
     utils.evaluateBool(result, @"stack guard intact", true)
-#ENDIF
+#endif
 
     ' Final cleanup
     dfs.unmount(dfs.DEV_BOTH)
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

@@ -45,7 +45,7 @@ PUB go() | status, used, free_ct, file_count, iter_count, iter_bytes, blockId, f
     debug(" ")
 
     ' Initialize driver
-    dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    dfs.init()
 
     ' --- Phase 1: Non-destructive mount check ---
     debug("Phase 1: canMount() health check...")

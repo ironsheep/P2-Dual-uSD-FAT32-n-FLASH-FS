@@ -44,24 +44,24 @@ CON
 
      BUFFER_SIZE = 512
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_SPEED
-#DEFINE SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_SPEED
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_SPEED
 #pragma exportdef SD_INCLUDE_SPEED
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
+#else
 '' Enable speed and register features
-#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#pragma exportdef SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
@@ -87,7 +87,7 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
     debug("==============================================")
 
     ' Initialize worker cog
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     ' Mount the card first
     result := dfs.mount(dfs.DEV_SD)
@@ -277,10 +277,10 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
 
         dfs.unmount(dfs.DEV_SD)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 

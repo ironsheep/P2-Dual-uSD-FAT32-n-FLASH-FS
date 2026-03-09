@@ -111,6 +111,7 @@ jobs:
           # src/regression-tests/ - test suites and framework
           mkdir -p "${DEST}/src/regression-tests"
           [ -f src/regression-tests/README.md ] && cp src/regression-tests/README.md "${DEST}/src/regression-tests/"
+          [ -f src/regression-tests/THEORY-OF-OPERATIONS.md ] && cp src/regression-tests/THEORY-OF-OPERATIONS.md "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_SD_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_FL_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_RT_*.spin2 "${DEST}/src/regression-tests/"

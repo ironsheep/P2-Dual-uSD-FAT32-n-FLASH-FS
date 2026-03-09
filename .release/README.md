@@ -75,7 +75,7 @@ dual-fs-driver/
 | P60 | CS (DAT3) | SCK |
 | P61 | SCK (CLK) | CS |
 
-The SD card and Flash chip share the same four SPI pins, with P60 and P61 swapping roles between devices. Pin assignments are configurable at `init()` time.
+The SD card and Flash chip share the same four SPI pins, with P60 and P61 swapping roles between devices. Pin assignments are fixed CON constants for the P2 Edge Module.
 
 ## Quick Start
 
@@ -95,7 +95,7 @@ DAT
 
 PUB main() | status, handle
     ' Initialize driver (starts worker cog)
-    dfs.init(60, 59, 58, 61)          ' CS, MOSI, MISO, SCK for P2 Edge
+    dfs.init()                         ' Starts worker cog (P2 Edge Module pins)
 
     ' Mount both devices
     status := dfs.mount(dfs.DEV_SD)

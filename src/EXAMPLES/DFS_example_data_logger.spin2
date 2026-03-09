@@ -67,7 +67,7 @@ PUB go() | status, handle, sample, reading, bytes_read
 
     ' --- Initialize and mount ---
     status := dfs.SUCCESS                                       ' assume success
-    if dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+    if dfs.init() < 0
         debug("ERROR: Driver init failed")
         status := -1
     if status == dfs.SUCCESS

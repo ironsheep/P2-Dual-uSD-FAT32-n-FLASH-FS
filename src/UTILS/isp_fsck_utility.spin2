@@ -20,14 +20,14 @@
 ''
 ''  Usage:
 ''    caller: dfs.stop()
-''    caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit()
+''    caller: fsck.startFsck()   ' or startAudit()
 ''    caller: repeat
 ''              if fsck.hasOutput()
 ''                display(fsck.getOutput())
 ''              if fsck.isDone()
 ''                drain remaining, quit
 ''    caller: fsck.stop()
-''    caller: dfs.init(cs, mosi, miso, sck)
+''    caller: dfs.init()
 ''    caller: dfs.mount(dfs.DEV_SD)
 ''
 '' =================================================================================================
@@ -167,14 +167,14 @@ CON { FAT32 structure constants }
   STACK_GUARD_BYTE  = $CC
 
 ' Enable full driver features
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
 
@@ -229,10 +229,6 @@ cog_id      LONG    -1                   ' cog number (-1 = not running)
 op_mode     LONG    0                    ' MODE_AUDIT or MODE_FSCK
 op_done     LONG    0                    ' TRUE when cog finished
 
-pin_cs      LONG    0                    ' SD pin configuration
-pin_mosi    LONG    0
-pin_miso    LONG    0
-pin_sck     LONG    0
 
 cog_stack   LONG    0[STACK_LONGS]
 cog_guard   LONG    0[STACK_GUARD_LONGS]
@@ -248,28 +244,20 @@ PUB null()
 '' This is not a top level object
 
 
-PUB startFsck(cs, mosi, miso, sck) : status
+PUB startFsck() : status
 '' Launch FSCK (check and repair) in a new cog
 ''
-'' @param cs - SD card CS pin
-'' @param mosi - SD card MOSI pin
-'' @param miso - SD card MISO pin
-'' @param sck - SD card SCK pin
 '' @returns status - dfs.SUCCESS (0) if cog launched, negative error code if failed
 
-    status := doStart(cs, mosi, miso, sck, MODE_FSCK)
+    status := doStart(MODE_FSCK)
 
 
-PUB startAudit(cs, mosi, miso, sck) : status
+PUB startAudit() : status
 '' Launch Audit (read-only check) in a new cog
 ''
-'' @param cs - SD card CS pin
-'' @param mosi - SD card MOSI pin
-'' @param miso - SD card MISO pin
-'' @param sck - SD card SCK pin
 '' @returns status - dfs.SUCCESS (0) if cog launched, negative error code if failed
 
-    status := doStart(cs, mosi, miso, sck, MODE_AUDIT)
+    status := doStart(MODE_AUDIT)
 
 
 PUB hasOutput() : yes
@@ -331,18 +319,12 @@ PUB stop()
 ' Cog launch (private)
 ' =========================================================================
 
-PRI doStart(cs, mosi, miso, sck, mode) : status
-' Store pin configuration, init FIFO, launch cog
+PRI doStart(mode) : status
+' Init FIFO and launch cog
 '
-' @param cs, mosi, miso, sck - SD pin configuration
 ' @param mode - MODE_AUDIT or MODE_FSCK
 ' @returns status - dfs.SUCCESS if cog launched, dfs.E_IO_ERROR if failed
 
-    ' Store pins for the new cog to read
-    pin_cs := cs
-    pin_mosi := mosi
-    pin_miso := miso
-    pin_sck := sck
     op_mode := mode
     op_done := false
 
@@ -369,7 +351,7 @@ PRI run() | result, cardSectors
 ' When this method returns, the cog stops automatically
 
     ' Initialize card for raw sector access
-    dfs.init(pin_cs, pin_mosi, pin_miso, pin_sck)
+    dfs.init()
     result := dfs.initCardOnly()
     if result <> dfs.SUCCESS
         fifo.put(@"FATAL: Cannot initialize card!")

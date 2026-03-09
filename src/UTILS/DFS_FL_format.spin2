@@ -43,7 +43,7 @@ PUB go() | status
     debug(" ")
 
     ' Initialize driver and mount Flash
-    dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    dfs.init()
     status := dfs.mount(dfs.DEV_FLASH)
     if status < 0
         debug("Mount failed (status=", sdec_(status), "), attempting format anyway...")

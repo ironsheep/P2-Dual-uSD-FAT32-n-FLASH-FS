@@ -118,20 +118,20 @@ CON
     ASCII_SPACE          = $20
     ASCII_TILDE          = $7E
 
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
+#else
 '' Enable full driver features for format testing
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#pragma exportdef SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
 
@@ -169,14 +169,14 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
     utils.startTestGroup(@"Format Operation")
     utils.startTest(@"Format card with default label")
 
-    result := fmt.format(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := fmt.format()
     utils.evaluateSingleValue(result, @"format() returns SUCCESS", dfs.SUCCESS)
 
     ' Release format utility's worker cog before using dfs driver for verification
     fmt.stop()
 
     ' Initialize unified driver worker cog
-    workerCog := dfs.init(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    workerCog := dfs.init()
 
     ' Initialize card for raw access (no filesystem mount)
     result := dfs.initCardOnly()
@@ -499,10 +499,10 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
     ' ----------------------------------------
     ' Summary
     ' ----------------------------------------
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     dfs.stop()
 
