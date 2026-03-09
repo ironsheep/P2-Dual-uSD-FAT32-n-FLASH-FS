@@ -505,3 +505,58 @@ PUB go() | workerCog, matchCount, mismatchCount
     mismatchCount := dfs.getCRCMismatchCount()
     debug("CRC match=", udec_(matchCount), " mismatch=", udec_(mismatchCount))
 ```
+
+---
+
+## DEBUG_MASK: Selective Debug Channels
+
+The driver uses `DEBUG_MASK` with 12 named debug channels to solve the P2 compiler's 255 debug record limit. All 448 debug statements in the driver use the `debug[CH_xxx]()` form, so only channels with their bit set in `DEBUG_MASK` compile into the binary. Disabled channels produce zero code and zero overhead.
+
+Channels 0-9 use the same names and meanings as the standalone SD driver (`micro_sd_fat32_fs.spin2`), so developers familiar with either driver use the same channel values.
+
+### Channel Assignments
+
+| Channel | Constant | Purpose |
+|---------|----------|---------|
+| 0 | `CH_INIT` | Card/device initialization, SPI pin setup, speed config |
+| 1 | `CH_MOUNT` | Mount/unmount, filesystem geometry, FSInfo, Flash block scan |
+| 2 | `CH_FILE` | File handle operations: open, close, read, write, seek, sync |
+| 3 | `CH_DIR` | Directory operations: search, create, rename, move, CWD |
+| 4 | `CH_SECTOR` | Sector I/O, FAT chain walking, cluster allocation |
+| 5 | `CH_STATUS` | CMD13/CMD23 probe and runtime status checks |
+| 6 | `CH_IDENT` | Card/device identity: CID/CSD/SCR, Flash serial number |
+| 7 | `CH_HSPEED` | High-speed mode: CMD6 query, switch, verification |
+| 8 | `CH_API` | Public API entry points, worker cog dispatch, stack guard |
+| 9 | `CH_RECOVER` | Error recovery: CMD12, bus recovery, SPI bus switching |
+| 10 | `CH_FL_BLOCK` | Flash block-level I/O: read/write/erase 4KB blocks |
+| 11 | `CH_FL_CIRC` | Flash circular files: froncate, wrap, old-format detection |
+
+### How to Use
+
+`DEBUG_MASK` is a CON constant inside the driver. To change which channels are active, edit the `DEBUG_MASK` line in `dual_sd_fat32_flash_fs.spin2`:
+
+```spin2
+  ' Default: init + mount channels only
+  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT)
+
+  ' Debug file operations and directory operations
+  DEBUG_MASK = (1 << CH_FILE) | (1 << CH_DIR)
+
+  ' Production: zero debug overhead
+  DEBUG_MASK = 0
+```
+
+Enable 2-3 channels at a time to stay under the 255 debug record limit. The largest channels have ~76 statements each, so any 3 channels combined stay well under 255.
+
+### Interaction with Feature Gates
+
+A debug statement inside an `#ifdef SD_INCLUDE_*` block must pass both gates to compile:
+
+1. The `#ifdef` flag must be defined (the method exists)
+2. The channel's bit must be set in `DEBUG_MASK` (the debug statement compiles)
+
+For example, a `debug[CH_HSPEED](...)` inside `#ifdef SD_INCLUDE_SPEED` only compiles if both `SD_INCLUDE_SPEED` is defined AND bit 7 is set in `DEBUG_MASK`.
+
+### Consumer Impact
+
+`DEBUG_MASK` and the channel constants are internal to the driver object. Consumer files (test suites, demo shell, examples, utilities) use their own regular `debug()` statements with a separate record budget. Consumers do not need to define `DEBUG_MASK`.

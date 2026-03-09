@@ -602,6 +602,29 @@ OBJ
   fs : "dual_sd_fat32_flash_fs"
 ```
 
+## Debug Channel Scheme (DEBUG_MASK)
+
+The driver contains ~448 debug statements, which exceeds the P2 compiler's 255 debug record limit. All debug statements use the `debug[CH_xxx]()` selective channel form with a `DEBUG_MASK` constant that controls which channels compile. This replaces the previous `DEBUG_DISABLE` constant.
+
+Channels 0-9 use the same names and meanings as the standalone SD driver for cross-project consistency:
+
+| Channel | Constant | Purpose | Both Devices? |
+|---------|----------|---------|---------------|
+| 0 | `CH_INIT` | Initialization, SPI pin setup, speed config | Yes |
+| 1 | `CH_MOUNT` | Mount/unmount, filesystem geometry | Yes |
+| 2 | `CH_FILE` | File handle lifecycle | Yes |
+| 3 | `CH_DIR` | Directory operations, CWD | Yes |
+| 4 | `CH_SECTOR` | Sector I/O, FAT chains, cluster allocation | SD only |
+| 5 | `CH_STATUS` | CMD13/CMD23 probes, card status | SD only |
+| 6 | `CH_IDENT` | CID/CSD/SCR, Flash serial number | Yes |
+| 7 | `CH_HSPEED` | CMD6 high-speed mode | SD only |
+| 8 | `CH_API` | PUB wrappers, worker cog dispatch | Yes |
+| 9 | `CH_RECOVER` | Error recovery, SPI bus switching | Yes |
+| 10 | `CH_FL_BLOCK` | Flash block I/O, wear leveling | Flash only |
+| 11 | `CH_FL_CIRC` | Flash circular files | Flash only |
+
+Enable 2-3 channels at a time. Set `DEBUG_MASK = 0` for production builds. See [Conditional Compilation Guide](CONDITIONAL-COMPILATION-GUIDE.md) for details.
+
 ## Multi-Cog Support
 
 ### Per-Cog Current Working Directory

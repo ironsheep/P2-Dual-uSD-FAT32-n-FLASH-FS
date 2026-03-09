@@ -1,4 +1,4 @@
-{Spin2_v45}
+{Spin2_v46}
 '' =================================================================================================
 ''
 ''   File....... dual_sd_fat32_flash_fs.spin2
@@ -86,12 +86,27 @@ CON ' ---- Flash File Open Mode Constants ----
   FILEMODE_READ_EXTENDED   = $2B72    ' "r+"
   FILEMODE_WRITE_EXTENDED  = $2B77    ' "w+"
 
-CON  ' flags
-  ' NOTE: V3 driver exceeds 255 debug record limit when debug is fully enabled
-  ' pnut-ts error: "DEBUG data is too long: too many records: max 255"
-  ' Set to 1 to disable debug in driver and avoid compilation errors
-  DEBUG_DISABLE = 1
+CON ' ---- Debug Channel Assignments for Selective Debug Output ----
+    ' Channels 0-9 match the standalone SD driver for cross-project consistency.
+    ' Channels 10-11 are Flash-unique operations with no SD equivalent.
+    ' Enable 2-3 channels at a time to stay under the 255 debug record limit.
+    ' Set DEBUG_MASK = 0 for production builds (zero debug overhead).
+  CH_INIT    = 0              ' Card/device initialization, pin setup, speed config
+  CH_MOUNT   = 1              ' Mount/unmount, filesystem geometry, FSInfo
+  CH_FILE    = 2              ' File handle operations: open, close, read, write, seek, sync
+  CH_DIR     = 3              ' Directory operations: search, create, rename, move, CWD
+  CH_SECTOR  = 4              ' Sector I/O, FAT chain walking, cluster allocation
+  CH_STATUS  = 5              ' CMD13/CMD23 probe and runtime status checks
+  CH_IDENT   = 6              ' Card/device identity: CID/CSD/SCR, Flash serial number
+  CH_HSPEED  = 7              ' High-speed mode: CMD6 query, switch, verification
+  CH_API     = 8              ' Public API entry points, worker cog dispatch, stack guard
+  CH_RECOVER = 9              ' Error recovery: CMD12, bus recovery, SPI bus switching
+  CH_FL_BLOCK = 10            ' Flash block-level I/O: read/write/erase 4KB blocks, wear leveling
+  CH_FL_CIRC  = 11            ' Flash circular files: froncate, wrap, old-format detection
 
+  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT)   ' Default: init + mount channels
+
+CON  ' flags
   F_NEWDIR  = decod 1
   F_MOUNTED = decod 3
 
@@ -813,7 +828,7 @@ PUB init() : workerCog
 
   ' Check if already started (singleton pattern)
   if cog_id <> -1
-    debug("  [init] Already started (cog ", udec_(cog_id), ")")
+    debug[CH_INIT]("  [init] Already started (cog ", udec_(cog_id), ")")
     workerCog := cog_id
 
   else
@@ -824,7 +839,7 @@ PUB init() : workerCog
     ' Allocate hardware lock for API serialization
     api_lock := locknew()
     if api_lock == -1
-      debug("  [init] FAIL: Could not allocate lock")
+      debug[CH_INIT]("  [init] FAIL: Could not allocate lock")
       workerCog := set_error(E_NO_LOCK)
 
     ' Initialize parameter block
@@ -845,11 +860,11 @@ PUB init() : workerCog
       if cog_id == -1
         lockret(api_lock)
         api_lock := -1
-        debug("  [init] FAIL: Could not start worker cog")
+        debug[CH_INIT]("  [init] FAIL: Could not start worker cog")
         workerCog := set_error(E_NO_LOCK)
 
       else
-        debug("  [init] Worker cog ", udec_(cog_id), " started, lock ", udec_(api_lock))
+        debug[CH_INIT]("  [init] Worker cog ", udec_(cog_id), " started, lock ", udec_(api_lock))
         workerCog := cog_id
 
 PUB stop()
@@ -863,7 +878,7 @@ PUB stop()
 
     ' Stop the worker cog
     cogstop(cog_id)
-    debug("  [stop] Worker cog ", udec_(cog_id), " stopped")
+    debug[CH_INIT]("  [stop] Worker cog ", udec_(cog_id), " stopped")
     cog_id := -1
 
   ' Release hardware lock
@@ -888,7 +903,7 @@ PUB mount(dev) : status
 
   ' Require init() to have been called
   if cog_id == -1
-    debug("  [mount] ERROR: init() not called, worker not running")
+    debug[CH_MOUNT]("  [mount] ERROR: init() not called, worker not running")
     set_error(E_NOT_MOUNTED)
     status := E_NOT_MOUNTED
 
@@ -896,30 +911,30 @@ PUB mount(dev) : status
   else
     if dev == DEV_SD or dev == DEV_BOTH
       if sd_mounted
-        debug("  [mount] SD already mounted")
+        debug[CH_MOUNT]("  [mount] SD already mounted")
       else
         ' MODE_RAW -> MODE_FILESYSTEM upgrade is allowed
         if driver_mode == MODE_RAW
-          debug("  [mount] Upgrading from RAW to FILESYSTEM mode")
+          debug[CH_MOUNT]("  [mount] Upgrading from RAW to FILESYSTEM mode")
         status := send_command(CMD_MOUNT, 0, 0, 0, 0)
         if status == SUCCESS
           sd_mounted := TRUE
-          debug("  [mount] SD mount successful")
+          debug[CH_MOUNT]("  [mount] SD mount successful")
         else
-          debug("  [mount] SD mount failed with error ", sdec_(status))
+          debug[CH_MOUNT]("  [mount] SD mount failed with error ", sdec_(status))
           set_error(status)
 
     ' Mount Flash if requested
     if dev == DEV_FLASH or dev == DEV_BOTH
       if flash_mounted
-        debug("  [mount] Flash already mounted")
+        debug[CH_MOUNT]("  [mount] Flash already mounted")
       else
         status := send_command(CMD_FLASH_MOUNT, 0, 0, 0, 0)
         if status == SUCCESS
           flash_mounted := TRUE
-          debug("  [mount] Flash mount successful")
+          debug[CH_MOUNT]("  [mount] Flash mount successful")
         else
-          debug("  [mount] Flash mount failed with error ", sdec_(status))
+          debug[CH_MOUNT]("  [mount] Flash mount failed with error ", sdec_(status))
           set_error(status)
 
     ' Set final status based on mounted state
@@ -959,7 +974,7 @@ PUB unmount(dev) : status | did_unmount
       status := send_command(CMD_UNMOUNT, 0, 0, 0, 0)
       sd_mounted := FALSE
       did_unmount := TRUE
-      debug("  [unmount] SD unmounted")
+      debug[CH_MOUNT]("  [unmount] SD unmounted")
     elseif dev == DEV_SD
       status := set_error(E_NOT_MOUNTED)
 
@@ -974,7 +989,7 @@ PUB unmount(dev) : status | did_unmount
         bytefill(@fl_hBufIndex, $FF, MAX_OPEN_FILES)
         flash_mounted := FALSE
         did_unmount := TRUE
-        debug("  [unmount] Flash unmounted")
+        debug[CH_MOUNT]("  [unmount] Flash unmounted")
       elseif dev == DEV_FLASH
         status := set_error(E_NOT_MOUNTED)
 
@@ -1074,20 +1089,20 @@ PUB format(dev) : status
   case dev
     DEV_SD:
       ' SD format is handled by external utility (SD_format_card)
-      debug("  [format] SD format not supported in driver (use SD_format_card utility)")
+      debug[CH_MOUNT]("  [format] SD format not supported in driver (use SD_format_card utility)")
       set_error(E_NOT_SUPPORTED)
       status := E_NOT_SUPPORTED
     DEV_FLASH:
       if cog_id == -1
-        debug("  [format] ERROR: init() not called")
+        debug[CH_MOUNT]("  [format] ERROR: init() not called")
         set_error(E_NOT_MOUNTED)
         status := E_NOT_MOUNTED
       else
         status := send_command(CMD_FLASH_FORMAT, 0, 0, 0, 0)
         if status == SUCCESS
-          debug("  [format] Flash formatted and remounted")
+          debug[CH_MOUNT]("  [format] Flash formatted and remounted")
         else
-          debug("  [format] Flash format failed")
+          debug[CH_MOUNT]("  [format] Flash format failed")
     other:
       set_error(E_BAD_DEVICE)
       status := E_BAD_DEVICE
@@ -1099,7 +1114,7 @@ PUB sync() : status
 '' @returns status - SUCCESS or negative error code
 
   status := send_command(CMD_SYNC, 0, 0, 0, 0)
-  debug("  [sync] Buffers flushed")
+  debug[CH_FILE]("  [sync] Buffers flushed")
   if status <> SUCCESS
     set_error(status)
 
@@ -1248,9 +1263,9 @@ PUB openFileRead(dev, p_path) : handle | fl_path[32]
     other:
       handle := set_error(E_BAD_DEVICE)
   if handle >= 0
-    debug("  [openFileRead] Opened handle ", udec_(handle))
+    debug[CH_FILE]("  [openFileRead] Opened handle ", udec_(handle))
   else
-    debug("  [openFileRead] Failed: ", sdec_(handle))
+    debug[CH_FILE]("  [openFileRead] Failed: ", sdec_(handle))
     set_error(handle)
 
 PUB openFileWrite(dev, p_path) : handle | fl_path[32]
@@ -1275,9 +1290,9 @@ PUB openFileWrite(dev, p_path) : handle | fl_path[32]
     other:
       handle := set_error(E_BAD_DEVICE)
   if handle >= 0
-    debug("  [openFileWrite] Opened handle ", udec_(handle))
+    debug[CH_FILE]("  [openFileWrite] Opened handle ", udec_(handle))
   else
-    debug("  [openFileWrite] Failed: ", sdec_(handle))
+    debug[CH_FILE]("  [openFileWrite] Failed: ", sdec_(handle))
     set_error(handle)
 
 PUB createFileNew(dev, p_path) : handle | fl_path[32]
@@ -1302,9 +1317,9 @@ PUB createFileNew(dev, p_path) : handle | fl_path[32]
     other:
       handle := set_error(E_BAD_DEVICE)
   if handle >= 0
-    debug("  [createFileNew] Created handle ", udec_(handle))
+    debug[CH_FILE]("  [createFileNew] Created handle ", udec_(handle))
   else
-    debug("  [createFileNew] Failed: ", sdec_(handle))
+    debug[CH_FILE]("  [createFileNew] Failed: ", sdec_(handle))
     set_error(handle)
 
 PUB closeFileHandle(handle) : status
@@ -1324,9 +1339,9 @@ PUB closeFileHandle(handle) : status
     else
       status := send_command(CMD_CLOSE_H, handle, 0, 0, 0)
     if status == SUCCESS
-      debug("  [closeFileHandle] Closed handle ", udec_(handle))
+      debug[CH_FILE]("  [closeFileHandle] Closed handle ", udec_(handle))
     else
-      debug("  [closeFileHandle] Failed: ", sdec_(status))
+      debug[CH_FILE]("  [closeFileHandle] Failed: ", sdec_(status))
       set_error(status)
 
 PUB readHandle(handle, p_buffer, count) : bytes_read
@@ -1349,7 +1364,7 @@ PUB readHandle(handle, p_buffer, count) : bytes_read
       send_command(CMD_READ_H, handle, p_buffer, count, 0)
     bytes_read := LONG[@saved_data0][COGID()]
     if bytes_read < 0
-      debug("  [readHandle] Failed: ", sdec_(bytes_read))
+      debug[CH_FILE]("  [readHandle] Failed: ", sdec_(bytes_read))
       set_error(bytes_read)
     ' Note: send_command already propagates negative pb_status via set_error()
 
@@ -1377,7 +1392,7 @@ PUB writeHandle(handle, p_buffer, count) : bytes_written
       send_command(CMD_WRITE_H, handle, p_buffer, count, 0)
     bytes_written := LONG[@saved_data0][COGID()]
     if bytes_written < 0
-      debug("  [writeHandle] Failed: ", sdec_(bytes_written))
+      debug[CH_FILE]("  [writeHandle] Failed: ", sdec_(bytes_written))
       set_error(bytes_written)
 
 PUB seekHandle(handle, position) : status
@@ -1398,7 +1413,7 @@ PUB seekHandle(handle, position) : status
     else
       status := send_command(CMD_SEEK_H, handle, position, 0, 0)
     if status <> SUCCESS
-      debug("  [seekHandle] Failed: ", sdec_(status))
+      debug[CH_FILE]("  [seekHandle] Failed: ", sdec_(status))
       set_error(status)
 
 PUB seek(handle, position, whence) : end_position | abs_pos
@@ -1545,7 +1560,7 @@ PUB syncHandle(handle) : status
     else
       status := send_command(CMD_SYNC_H, handle, 0, 0, 0)
     if status <> SUCCESS
-      debug("  [syncHandle] Failed: ", sdec_(status))
+      debug[CH_FILE]("  [syncHandle] Failed: ", sdec_(status))
       set_error(status)
 
 PUB syncAllHandles() : status
@@ -1556,7 +1571,7 @@ PUB syncAllHandles() : status
 
   status := send_command(CMD_SYNC_ALL, 0, 0, 0, 0)
   if status <> SUCCESS
-    debug("  [syncAllHandles] Failed: ", sdec_(status))
+    debug[CH_FILE]("  [syncAllHandles] Failed: ", sdec_(status))
     set_error(status)
 
 PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status | srcHandle, dstHandle, bytes_read, bytes_written
@@ -2450,7 +2465,7 @@ PUB checkStackGuard() : bIntact | idx
   repeat idx from 0 to (STACK_GUARD_LONGS * 4) - 1
     if BYTE[@cog_stack_guard][idx] <> STACK_GUARD_BYTE
       bIntact := false
-      debug("  STACK GUARD VIOLATION at offset ", udec_(idx), ": $", uhex_byte_(BYTE[@cog_stack_guard][idx]), " (expected $CC)")
+      debug[CH_API]("  STACK GUARD VIOLATION at offset ", udec_(idx), ": $", uhex_byte_(BYTE[@cog_stack_guard][idx]), " (expected $CC)")
       quit
 
 #ifdef SD_INCLUDE_STACK_CHECK
@@ -2483,26 +2498,26 @@ PUB initCardOnly() : status
 
   ' Require init() to have been called
   if cog_id == -1
-    debug("  [initCardOnly] FAIL: init() not called, worker not running")
+    debug[CH_API]("  [initCardOnly] FAIL: init() not called, worker not running")
     status := set_error(E_NOT_MOUNTED)
 
   ' Check if already in filesystem mode - reject (must unmount first)
   elseif driver_mode == MODE_FILESYSTEM
-    debug("  [initCardOnly] REJECTED: Already mounted as filesystem, unmount first")
+    debug[CH_API]("  [initCardOnly] REJECTED: Already mounted as filesystem, unmount first")
     status := set_error(E_NOT_MOUNTED)
 
   ' Check if already in raw mode - already initialized
   elseif driver_mode == MODE_RAW
-    debug("  [initCardOnly] Already initialized in raw mode")
+    debug[CH_API]("  [initCardOnly] Already initialized in raw mode")
     status := SUCCESS
 
   ' Send init command to worker
   else
     status := send_command(CMD_INIT_CARD_ONLY, 0, 0, 0, 0)
     if status == SUCCESS
-      debug("  [initCardOnly] Card initialized successfully via worker")
+      debug[CH_API]("  [initCardOnly] Card initialized successfully via worker")
     else
-      debug("  [initCardOnly] Card initialization failed, error=", sdec_(status))
+      debug[CH_API]("  [initCardOnly] Card initialization failed, error=", sdec_(status))
       set_error(status)
 
 PUB cardSizeSectors() : sector_count
@@ -2512,15 +2527,15 @@ PUB cardSizeSectors() : sector_count
 '' @returns sector_count - Total number of 512-byte sectors on the card
 
   if cog_id == -1
-    debug("  [cardSizeSectors] ERROR: Worker not running")
+    debug[CH_API]("  [cardSizeSectors] ERROR: Worker not running")
     sector_count := 0
   elseif driver_mode == MODE_NONE
-    debug("  [cardSizeSectors] ERROR: SD not initialized")
+    debug[CH_API]("  [cardSizeSectors] ERROR: SD not initialized")
     sector_count := 0
   else
     send_command(CMD_GET_CARD_SIZE, 0, 0, 0, 0)
     sector_count := LONG[@saved_data0][COGID()]
-    debug("  [cardSizeSectors] ", udec(sector_count), " sectors")
+    debug[CH_API]("  [cardSizeSectors] ", udec(sector_count), " sectors")
 
 PUB testCMD13() : r2_response | r1, status
 '' TEST ONLY: Send CMD13 and return raw R2 response via worker cog.
@@ -2541,41 +2556,41 @@ PUB testCMD13() : r2_response | r1, status
     r1 := r2_response >> 8
     status := r2_response & $FF
 
-    debug("  [testCMD13] R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), " -> R2=$", uhex_word_(r2_response))
+    debug[CH_STATUS]("  [testCMD13] R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), " -> R2=$", uhex_word_(r2_response))
     if r1 <> 0
-      debug("    R1 errors:")
+      debug[CH_STATUS]("    R1 errors:")
       if r1 & $40
-        debug("      -> PARAMETER_ERROR")
+        debug[CH_STATUS]("      -> PARAMETER_ERROR")
       if r1 & $20
-        debug("      -> ADDRESS_ERROR")
+        debug[CH_STATUS]("      -> ADDRESS_ERROR")
       if r1 & $10
-        debug("      -> ERASE_SEQ_ERROR")
+        debug[CH_STATUS]("      -> ERASE_SEQ_ERROR")
       if r1 & $08
-        debug("      -> COM_CRC_ERROR")
+        debug[CH_STATUS]("      -> COM_CRC_ERROR")
       if r1 & $04
-        debug("      -> ILLEGAL_COMMAND")
+        debug[CH_STATUS]("      -> ILLEGAL_COMMAND")
       if r1 & $02
-        debug("      -> ERASE_RESET")
+        debug[CH_STATUS]("      -> ERASE_RESET")
       if r1 & $01
-        debug("      -> IN_IDLE_STATE")
+        debug[CH_STATUS]("      -> IN_IDLE_STATE")
     if status <> 0
-      debug("    STATUS errors:")
+      debug[CH_STATUS]("    STATUS errors:")
       if status & CSR_OUT_OF_RANGE
-        debug("      -> OUT_OF_RANGE")
+        debug[CH_STATUS]("      -> OUT_OF_RANGE")
       if status & CSR_ERASE_PARAM
-        debug("      -> ERASE_PARAM")
+        debug[CH_STATUS]("      -> ERASE_PARAM")
       if status & CSR_WP_VIOLATION
-        debug("      -> WP_VIOLATION")
+        debug[CH_STATUS]("      -> WP_VIOLATION")
       if status & CSR_CARD_ECC_FAILED
-        debug("      -> CARD_ECC_FAILED")
+        debug[CH_STATUS]("      -> CARD_ECC_FAILED")
       if status & CSR_CC_ERROR
-        debug("      -> CC_ERROR")
+        debug[CH_STATUS]("      -> CC_ERROR")
       if status & CSR_ERROR
-        debug("      -> ERROR")
+        debug[CH_STATUS]("      -> ERROR")
       if status & CSR_WP_ERASE_SKIP
-        debug("      -> WP_ERASE_SKIP")
+        debug[CH_STATUS]("      -> WP_ERASE_SKIP")
       if status & CSR_CARD_IS_LOCKED
-        debug("      -> CARD_IS_LOCKED")
+        debug[CH_STATUS]("      -> CARD_IS_LOCKED")
 
 PUB writeSectorRaw(sector, p_buffer) : status
 '' Write a sector at absolute LBA address - low-level for formatting/partitioning.
@@ -2587,18 +2602,18 @@ PUB writeSectorRaw(sector, p_buffer) : status
 
   ' Require worker cog to be running (no direct access allowed)
   if cog_id == -1
-    debug("  [writeSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
+    debug[CH_SECTOR]("  [writeSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
     status := set_error(E_NOT_MOUNTED)
   ' Require SD card to be initialized (mount or initCardOnly)
   elseif driver_mode == MODE_NONE
-    debug("  [writeSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
+    debug[CH_SECTOR]("  [writeSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
     status := set_error(E_NOT_MOUNTED)
   else
     status := send_command(CMD_WRITE_SECTOR_RAW, sector, p_buffer, 0, 0)
     if status == SUCCESS
-      debug("  [writeSectorRaw] Wrote sector ", udec(sector))
+      debug[CH_SECTOR]("  [writeSectorRaw] Wrote sector ", udec(sector))
     else
-      debug("  [writeSectorRaw] FAILED to write sector ", udec(sector))
+      debug[CH_SECTOR]("  [writeSectorRaw] FAILED to write sector ", udec(sector))
       set_error(status)
 
 PUB readSectorRaw(sector, p_buffer) : status
@@ -2611,17 +2626,17 @@ PUB readSectorRaw(sector, p_buffer) : status
 
   ' Require worker cog to be running (no direct access allowed)
   if cog_id == -1
-    debug("  [readSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
+    debug[CH_SECTOR]("  [readSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
     status := set_error(E_NOT_MOUNTED)
   ' Require SD card to be initialized (mount or initCardOnly)
   elseif driver_mode == MODE_NONE
-    debug("  [readSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
+    debug[CH_SECTOR]("  [readSectorRaw] ERROR: SD not initialized - call initCardOnly() or mount() first")
     status := set_error(E_NOT_MOUNTED)
   else
     status := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0)
     if status <> SUCCESS
       set_error(status)
-    debug("  [readSectorRaw] Read sector ", udec(sector))
+    debug[CH_SECTOR]("  [readSectorRaw] Read sector ", udec(sector))
 
 PUB readSectorsRaw(start_sector, count, p_buffer) : status
 '' Read multiple consecutive sectors - multi-block read using CMD18.
@@ -2671,7 +2686,7 @@ PUB readVBRRaw(p_buf) : status
 '' @returns status - SUCCESS or negative error code
 
   if not (flags & F_MOUNTED)
-    debug("  [readVBRRaw] FAILED: Card not mounted")
+    debug[CH_SECTOR]("  [readVBRRaw] FAILED: Card not mounted")
     status := set_error(E_NOT_MOUNTED)
   else
     status := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0)
@@ -2719,9 +2734,9 @@ PUB readCIDRaw(p_buf) : status
   else
     status := send_command(CMD_READ_CID, p_buf, 0, 0, 0)
     if status == SUCCESS
-      debug("  [readCIDRaw] CID read successfully")
+      debug[CH_IDENT]("  [readCIDRaw] CID read successfully")
     else
-      debug("  [readCIDRaw] CID read FAILED")
+      debug[CH_IDENT]("  [readCIDRaw] CID read FAILED")
       set_error(status)
 
 PUB readCSDRaw(p_buf) : status
@@ -2739,9 +2754,9 @@ PUB readCSDRaw(p_buf) : status
   else
     status := send_command(CMD_READ_CSD, p_buf, 0, 0, 0)
     if status == SUCCESS
-      debug("  [readCSDRaw] CSD read successfully")
+      debug[CH_IDENT]("  [readCSDRaw] CSD read successfully")
     else
-      debug("  [readCSDRaw] CSD read FAILED")
+      debug[CH_IDENT]("  [readCSDRaw] CSD read FAILED")
       set_error(status)
 
 PUB readSCRRaw(p_buf) : status
@@ -2759,9 +2774,9 @@ PUB readSCRRaw(p_buf) : status
   else
     status := send_command(CMD_READ_SCR, p_buf, 0, 0, 0)
     if status == SUCCESS
-      debug("  [readSCRRaw] SCR read successfully")
+      debug[CH_IDENT]("  [readSCRRaw] SCR read successfully")
     else
-      debug("  [readSCRRaw] SCR read FAILED")
+      debug[CH_IDENT]("  [readSCRRaw] SCR read FAILED")
       set_error(status)
 
 PUB readSDStatusRaw(p_buf) : status
@@ -2778,9 +2793,9 @@ PUB readSDStatusRaw(p_buf) : status
   else
     status := send_command(CMD_READ_SD_STATUS, p_buf, 0, 0, 0)
     if status == SUCCESS
-      debug("  [readSDStatusRaw] SD Status read successfully")
+      debug[CH_IDENT]("  [readSDStatusRaw] SD Status read successfully")
     else
-      debug("  [readSDStatusRaw] SD Status read FAILED")
+      debug[CH_IDENT]("  [readSDStatusRaw] SD Status read FAILED")
       set_error(status)
 
 PUB getOCR() : ocr
@@ -2790,7 +2805,7 @@ PUB getOCR() : ocr
 '' @returns ocr - 32-bit OCR value, or 0 if card not initialized
 
   ocr := ocr_value
-  debug("  [getOCR] OCR = $", uhex_long(ocr))
+  debug[CH_IDENT]("  [getOCR] OCR = $", uhex_long(ocr))
 
 #endif
 
@@ -2836,11 +2851,11 @@ PUB checkCMD6Support() : supported | scr[2], sd_spec
   elseif driver_mode == MODE_NONE
     supported := false
   elseif readSCRRaw(@scr) <> SUCCESS
-    debug("  [checkCMD6Support] Failed to read SCR")
+    debug[CH_HSPEED]("  [checkCMD6Support] Failed to read SCR")
     supported := false
   else
     sd_spec := scr.byte[0] & $0F                                                  '  SD_SPEC in bits [3:0]
-    debug("  [checkCMD6Support] SCR: $", uhex_byte_(scr.byte[0]), " $", uhex_byte_(scr.byte[1]), " SD_SPEC=", udec_(sd_spec))
+    debug[CH_HSPEED]("  [checkCMD6Support] SCR: $", uhex_byte_(scr.byte[0]), " $", uhex_byte_(scr.byte[1]), " SD_SPEC=", udec_(sd_spec))
     supported := sd_spec >= 2  '  CMD6 supported in SD 2.0+
 
 PUB checkHighSpeedCapability() : capable
@@ -3243,23 +3258,23 @@ PUB debugDumpRootDir() | sec, idx, p_entry, local_buf[128]
 ' @local local_buf - Local 512-byte buffer for sector data (128 longs)
 
   if cog_id == -1
-    debug("  [debugDumpRootDir] ERROR: Worker not running")
+    debug[CH_DIR]("  [debugDumpRootDir] ERROR: Worker not running")
   else
     sec := root_sec
-    debug("  [debugDumpRootDir] root_sec=", udec_(sec), " cog_dir_sec=", udec_(cog_dir_sec[COGID()]))
+    debug[CH_DIR]("  [debugDumpRootDir] root_sec=", udec_(sec), " cog_dir_sec=", udec_(cog_dir_sec[COGID()]))
     if send_command(CMD_READ_SECTOR_RAW, sec, @local_buf, 0, 0) <> SUCCESS
-      debug("  [debugDumpRootDir] FAILED to read root directory sector")
+      debug[CH_DIR]("  [debugDumpRootDir] FAILED to read root directory sector")
     else
-      debug("  [debugDumpRootDir] Read sector ", udec_(sec), " via worker cog")
+      debug[CH_DIR]("  [debugDumpRootDir] Read sector ", udec_(sec), " via worker cog")
       repeat idx from 0 to ENTRIES_PER_SECTOR - 1                                     ' First 16 entries
         p_entry := @local_buf + (idx * DIR_ENTRY_SIZE)
         if byte[p_entry] == 0
-          debug("  Entry ", udec_(idx), ": [END OF DIR]")
+          debug[CH_DIR]("  Entry ", udec_(idx), ": [END OF DIR]")
           quit
         elseif byte[p_entry] == $E5
-          debug("  Entry ", udec_(idx), ": [DELETED]")
+          debug[CH_DIR]("  Entry ", udec_(idx), ": [DELETED]")
         else
-          debug("  Entry ", udec_(idx), ": [", lstr_(p_entry, FILENAME_83_LEN), "] attr=$", uhex_byte_(byte[p_entry+DIR_ATTR_OFFSET]), " clus=", udec_(word[p_entry+DIR_CLUS_LO_OFFSET] | (word[p_entry+DIR_CLUS_HI_OFFSET] << 16)))
+          debug[CH_DIR]("  Entry ", udec_(idx), ": [", lstr_(p_entry, FILENAME_83_LEN), "] attr=$", uhex_byte_(byte[p_entry+DIR_ATTR_OFFSET]), " clus=", udec_(word[p_entry+DIR_CLUS_LO_OFFSET] | (word[p_entry+DIR_CLUS_HI_OFFSET] << 16)))
 
 PUB displaySector() | address, char, ascii_ptr, idx
 '' Display sector in buffer - prints hex dump with ASCII representation.
@@ -3279,7 +3294,7 @@ PUB displaySector() | address, char, ascii_ptr, idx
             byte[ascii_ptr + idx] := "."
           else
             byte[ascii_ptr + idx] := char // 26 + "a"
-    debug(uhex_word_(address),uhex_byte_array_(@buf + address,8),"-",uhex_byte_array_(@buf + address + 8,8)," | ",lstr_(ascii_ptr,HEX_BYTES_PER_ROW))
+    debug[CH_DIR](uhex_word_(address),uhex_byte_array_(@buf + address,8),"-",uhex_byte_array_(@buf + address + 8,8)," | ",lstr_(ascii_ptr,HEX_BYTES_PER_ROW))
 
 PUB displayEntry() | address, char, ascii_ptr, idx
 '' Display directory entry - prints hex dump of entry_buffer with ASCII representation.
@@ -3299,7 +3314,7 @@ PUB displayEntry() | address, char, ascii_ptr, idx
             byte[ascii_ptr + idx] := "."
           else
             byte[ascii_ptr + idx] := char // 26 + "a"
-    debug(uhex_word_(address),uhex_byte_array_(@entry_buffer + address,8),"-",uhex_byte_array_(@entry_buffer + address + 8,8)," | ",lstr_(ascii_ptr,16))
+    debug[CH_DIR](uhex_word_(address),uhex_byte_array_(@entry_buffer + address,8),"-",uhex_byte_array_(@entry_buffer + address + 8,8)," | ",lstr_(ascii_ptr,16))
 
 PUB displayFAT(cluster) | local_buf[128]
 '' Display FAT sector containing cluster number via worker cog.
@@ -3310,11 +3325,11 @@ PUB displayFAT(cluster) | local_buf[128]
 ' @local local_buf - Local 512-byte buffer for sector data (128 longs)
 
   if cog_id == -1
-    debug("  [displayFAT] ERROR: Worker not running")
+    debug[CH_DIR]("  [displayFAT] ERROR: Worker not running")
   else
     n_sec := fat_sec + cluster >> 7
     if send_command(CMD_READ_SECTOR_RAW, n_sec, @local_buf, 0, 0) <> SUCCESS
-      debug("  [displayFAT] FAILED to read FAT sector")
+      debug[CH_DIR]("  [displayFAT] FAILED to read FAT sector")
     else
       bytemove(@buf, @local_buf, SECTOR_SIZE)                                            ' Copy to @buf for displaySector()
       displaySector()
@@ -3339,14 +3354,14 @@ PRI fs_worker() | cur_cmd
 '
 ' @local cur_cmd - Current command being processed
 
-  debug("  [fs_worker] Starting on cog ", udec_(COGID()))
+  debug[CH_API]("  [fs_worker] Starting on cog ", udec_(COGID()))
 
   ' Initialize SPI pins (this cog owns them)
   pinh(PIN_SD_CS)                                                                      ' CS HIGH = deselected
   pinh(PIN_MOSI)                                                                    ' MOSI HIGH idle
   pinl(PIN_SD_SCK)                                                                     ' SCK LOW (SPI mode 0)
 
-  debug("  [fs_worker] Pins initialized: CS=P", udec_(PIN_SD_CS), " MOSI=P", udec_(PIN_MOSI), " MISO=P", udec_(PIN_MISO), " SCK=P", udec_(PIN_SD_SCK))
+  debug[CH_API]("  [fs_worker] Pins initialized: CS=P", udec_(PIN_SD_CS), " MOSI=P", udec_(PIN_MOSI), " MISO=P", udec_(PIN_MISO), " SCK=P", udec_(PIN_SD_SCK))
 
   ' Main command loop
   repeat
@@ -3363,7 +3378,7 @@ PRI fs_worker() | cur_cmd
       repeat  ' halt worker cog
 #endif
 
-    debug("  [fs_worker] Received command ", udec_(cur_cmd))
+    debug[CH_API]("  [fs_worker] Received command ", udec_(cur_cmd))
 
     ' =======================================================================
     ' MODE ENFORCEMENT: Reject commands invalid for current mode
@@ -3374,7 +3389,7 @@ PRI fs_worker() | cur_cmd
     ' V3: Include handle-based commands (CMD_OPEN_READ through CMD_SD_FILE_SIZE_UNUSED)
     if (cur_cmd >= CMD_NEWDIR and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SD_FILE_SIZE_UNUSED)
       if driver_mode <> MODE_FILESYSTEM
-        debug("  [fs_worker] REJECTED: File operation requires MODE_FILESYSTEM")
+        debug[CH_API]("  [fs_worker] REJECTED: File operation requires MODE_FILESYSTEM")
         pb_status := E_NOT_MOUNTED
         pb_data0 := E_NOT_MOUNTED
         pb_cmd := CMD_NONE
@@ -3385,7 +3400,7 @@ PRI fs_worker() | cur_cmd
     ' Allow: CMD_FLASH_MOUNT (need to mount), CMD_FLASH_FORMAT (creates FS), CMD_FL_CAN_MOUNT (HW check)
     if cur_cmd > CMD_FLASH_FORMAT and cur_cmd < CMD_FL_CAN_MOUNT
       ifnot flash_mounted
-        debug("  [fs_worker] REJECTED: Flash not mounted for cmd ", udec_(cur_cmd))
+        debug[CH_API]("  [fs_worker] REJECTED: Flash not mounted for cmd ", udec_(cur_cmd))
         pb_status := E_NOT_MOUNTED
         pb_data0 := E_NOT_MOUNTED
         pb_cmd := CMD_NONE
@@ -3473,7 +3488,7 @@ PRI fs_worker() | cur_cmd
 
       CMD_WRITE_SECTOR_RAW:
         bytemove(@buf, pb_param1, SECTOR_SIZE)
-        debug("  [WRITE_RAW] after bytemove: buf[0..3]=$", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " sig=$", uhex_word_(WORD[@buf + $1FE]))
+        debug[CH_SECTOR]("  [WRITE_RAW] after bytemove: buf[0..3]=$", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " sig=$", uhex_word_(WORD[@buf + $1FE]))
         if writeSector(pb_param0, BUF_DATA)                                     ' writeSector returns true on success
           pb_status := SUCCESS
         else
@@ -3715,7 +3730,7 @@ PRI fs_worker() | cur_cmd
 #endif
 
       other:
-        debug("  [fs_worker] Unknown command: ", udec_(cur_cmd))
+        debug[CH_API]("  [fs_worker] Unknown command: ", udec_(cur_cmd))
         pb_status := E_BAD_RESPONSE
 
     ' Signal completion
@@ -3737,7 +3752,7 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 
   ' Verify worker cog is running
   if cog_id == -1
-    debug("  [send_command] ERROR: Worker not running")
+    debug[CH_API]("  [send_command] ERROR: Worker not running")
     LONG[@saved_data0][COGID()] := E_NOT_MOUNTED
     LONG[@saved_data1][COGID()] := 0
     LONG[@saved_data2][COGID()] := 0
@@ -3764,7 +3779,7 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
     ' (Skip when stack checker is active -- prepStackForCheck sentinel overlaps guard[0])
 #ifndef SD_INCLUDE_STACK_CHECK
     if not checkStackGuard()
-      debug("  [send_command] STACK OVERFLOW after cmd ", udec_(op_cmd))
+      debug[CH_API]("  [send_command] STACK OVERFLOW after cmd ", udec_(op_cmd))
 #endif
 
     ' Snapshot results while still holding lock (multi-cog safety, per-cog storage)
@@ -4074,52 +4089,52 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
   ' Skip card init if already in RAW mode (card already initialized)
   ' This avoids reinitializing smart pins which would corrupt pin states
   if driver_mode == MODE_RAW
-    debug("  [do_mount] Upgrading from RAW mode - skipping initCard()")
+    debug[CH_MOUNT]("  [do_mount] Upgrading from RAW mode - skipping initCard()")
   else
-    debug("  [do_mount] Calling initCard()...")
+    debug[CH_MOUNT]("  [do_mount] Calling initCard()...")
     if not initCard()
-      debug("  [do_mount] FAIL: initCard() returned false")
+      debug[CH_MOUNT]("  [do_mount] FAIL: initCard() returned false")
       status := last_init_error
 
   ' Card is initialized (either fresh or from RAW mode)
   if status == SUCCESS
-    debug("  [do_mount] Reading MBR sector 0...")
+    debug[CH_MOUNT]("  [do_mount] Reading MBR sector 0...")
     if readSector(0, BUF_DATA) < 0                                                '  read master boot record
-      debug("  [do_mount] FAIL: MBR read error")
+      debug[CH_MOUNT]("  [do_mount] FAIL: MBR read error")
       status := E_IO_ERROR
     else
       pPart := @buf + $1BE                                                          '  overlay partition entry 1
-      debug("  [do_mount] MBR type code: ", uhex_(partType(pPart)))
+      debug[CH_MOUNT]("  [do_mount] MBR type code: ", uhex_(partType(pPart)))
       if partType(pPart) == $0B or partType(pPart) == $0C                           '  $0B and $0C specify FAT32
         vbr_sec := partLbaStart(pPart)                                              '  volume boot record sector number
-        debug("  [do_mount] FAT32 detected, VBR at sector ", udec(vbr_sec))
+        debug[CH_MOUNT]("  [do_mount] FAT32 detected, VBR at sector ", udec(vbr_sec))
         if readSector(vbr_sec, BUF_DATA) < 0                                        '  read volume boot record
-          debug("  [do_mount] FAIL: VBR read error")
+          debug[CH_MOUNT]("  [do_mount] FAIL: VBR read error")
           status := E_IO_ERROR
       else
-        debug("  [do_mount] FAIL: Not FAT32 (type=", uhex_(partType(pPart)), ")")
+        debug[CH_MOUNT]("  [do_mount] FAIL: Not FAT32 (type=", uhex_(partType(pPart)), ")")
         status := E_NOT_FAT32
 
   if status == SUCCESS
     pVBR := @buf                                                                  '  overlay VBR
-    debug("  [do_mount] Bytes/sector: ", udec(vbrBytesPerSec(pVBR)))
+    debug[CH_MOUNT]("  [do_mount] Bytes/sector: ", udec(vbrBytesPerSec(pVBR)))
     if vbrBytesPerSec(pVBR) <> SECTOR_SIZE
-      debug("  [do_mount] FAIL: Bytes/sector not 512")
+      debug[CH_MOUNT]("  [do_mount] FAIL: Bytes/sector not 512")
       status := E_BAD_SECTOR_SIZE
 
   if status == SUCCESS
     sec_per_clus := vbrSecPerClus(pVBR)
-    debug("  [do_mount] Sectors/cluster: ", udec(sec_per_clus))
+    debug[CH_MOUNT]("  [do_mount] Sectors/cluster: ", udec(sec_per_clus))
     if (sec_per_clus & (sec_per_clus - 1))
-      debug("  [do_mount] FAIL: sec_per_clus not power of 2")
+      debug[CH_MOUNT]("  [do_mount] FAIL: sec_per_clus not power of 2")
       status := E_NOT_FAT32
 
   if status == SUCCESS
     reserved := vbrReservedSec(pVBR)
-    debug("  [do_mount] Reserved sectors: ", udec(reserved))
-    debug("  [do_mount] Number of FATs: ", udec(vbrNumFats(pVBR)))
+    debug[CH_MOUNT]("  [do_mount] Reserved sectors: ", udec(reserved))
+    debug[CH_MOUNT]("  [do_mount] Number of FATs: ", udec(vbrNumFats(pVBR)))
     if vbrNumFats(pVBR) <> 2
-      debug("  [do_mount] FAIL: FAT count not 2")
+      debug[CH_MOUNT]("  [do_mount] FAIL: FAT count not 2")
       status := E_NOT_FAT32
 
   if status == SUCCESS
@@ -4132,7 +4147,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
     cluster_offset := root_sec // sec_per_clus
     bytemove(@vol_label, vbrVolLabelAddr(pVBR), 11)
     vol_label[11] := 0
-    debug("  [do_mount] VBR volume label: ", zstr(@vol_label))
+    debug[CH_MOUNT]("  [do_mount] VBR volume label: ", zstr(@vol_label))
 
     ' Check root directory for authoritative volume label entry (ATTR_VOLUME_ID)
     ' The root directory entry is the primary source per the FAT32 spec;
@@ -4144,7 +4159,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
       sector := clus2sec(cluster)
       repeat sec_idx from 0 to sec_per_clus - 1
         if readSector(sector + sec_idx, BUF_DIR) < 0
-          debug("  [do_mount] Root dir read failed, using VBR label")
+          debug[CH_MOUNT]("  [do_mount] Root dir read failed, using VBR label")
           found := true
           quit
         repeat idx from 0 to ENTRIES_PER_SECTOR - 1
@@ -4155,7 +4170,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
           if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                         '  volume label entry
             bytemove(@vol_label, p_entry, 11)
             vol_label[11] := 0
-            debug("  [do_mount] Root dir volume label: ", zstr(@vol_label))
+            debug[CH_MOUNT]("  [do_mount] Root dir volume label: ", zstr(@vol_label))
             found := true
             quit
         if found
@@ -4170,7 +4185,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
     ' Read FSInfo sector for free cluster count and next-free hint
     if fsinfo_sec > 0 and fsinfo_sec < reserved
       if readSector(vbr_sec + fsinfo_sec, BUF_DATA) < 0
-        debug("  [do_mount] FSInfo read failed, continuing without free count")
+        debug[CH_MOUNT]("  [do_mount] FSInfo read failed, continuing without free count")
         fsi_free_count := $FFFF_FFFF
         fsi_nxt_free := $FFFF_FFFF
       else
@@ -4178,26 +4193,26 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
         if fsiLeadSig(pFSI) == $4161_5252 and fsiStructSig(pFSI) == $6141_7272
           fsi_free_count := fsiFreeClusters(pFSI)
           fsi_nxt_free := fsiNextFreeHint(pFSI)
-          debug("  [do_mount] FSInfo: free_count=", udec(fsi_free_count), " nxt_free=", udec(fsi_nxt_free))
+          debug[CH_MOUNT]("  [do_mount] FSInfo: free_count=", udec(fsi_free_count), " nxt_free=", udec(fsi_nxt_free))
         else
           fsi_free_count := $FFFF_FFFF
           fsi_nxt_free := $FFFF_FFFF
-          debug("  [do_mount] FSInfo: invalid signatures, ignoring")
+          debug[CH_MOUNT]("  [do_mount] FSInfo: invalid signatures, ignoring")
     else
       fsi_free_count := $FFFF_FFFF
       fsi_nxt_free := $FFFF_FFFF
-      debug("  [do_mount] FSInfo: sector not present")
+      debug[CH_MOUNT]("  [do_mount] FSInfo: sector not present")
 
-    debug("  [do_mount] SUCCESS")
+    debug[CH_MOUNT]("  [do_mount] SUCCESS")
     if date_stamp == 0
       setdate(2009,01,27,07,00,00)
     flags |= F_MOUNTED
     sd_mounted := TRUE
 
     driver_mode := MODE_FILESYSTEM
-    debug("  [do_mount] SUCCESS, mode=FILESYSTEM")
+    debug[CH_MOUNT]("  [do_mount] SUCCESS, mode=FILESYSTEM")
     if card_warning_flags & CW_CMD13_UNRELIABLE
-      debug("  [do_mount] WARNING: CMD13 unreliable on this card - status checks disabled")
+      debug[CH_MOUNT]("  [do_mount] WARNING: CMD13 unreliable on this card - status checks disabled")
     status := SUCCESS
 
 PRI do_unmount() : status
@@ -4212,7 +4227,7 @@ PRI do_unmount() : status
   flags := flags & !F_MOUNTED
   sd_mounted := FALSE
   driver_mode := MODE_NONE
-  debug("  [do_unmount] Card unmounted cleanly, mode=NONE")
+  debug[CH_MOUNT]("  [do_unmount] Card unmounted cleanly, mode=NONE")
   status := SUCCESS
 
 PRI do_open(name_ptr) : status | search_result, p_leaf, saved_sec
@@ -4247,12 +4262,12 @@ PRI do_close() : status
   ' Update directory entry on disk
   if flags & F_NEWDIR
     if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-      debug("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+      debug[CH_FILE]("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
       status := E_IO_ERROR
     else
       bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
       if not writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
-        debug("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+        debug[CH_FILE]("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
         status := E_IO_ERROR
 
   bytefill(@entry_buffer, 0, 32)
@@ -4283,17 +4298,17 @@ PRI do_open_read(p_path) : handle | start_cluster, p_leaf, saved_sec
   else
     handle := allocateHandle()
     if handle < 0
-      debug("  [do_open_read] No free handles")
+      debug[CH_FILE]("  [do_open_read] No free handles")
 
     ' Search for the file
     elseif not searchDirectory(p_leaf)
-      debug("  [do_open_read] File not found: ", zstr_(p_leaf))
+      debug[CH_FILE]("  [do_open_read] File not found: ", zstr_(p_leaf))
       freeHandle(handle)
       handle := E_FILE_NOT_FOUND
 
     ' Verify it's a file, not a directory
     elseif attributes() & DIR_ATTR_DIRECTORY                                                ' Directory bit
-      debug("  [do_open_read] Path is a directory, not a file")
+      debug[CH_FILE]("  [do_open_read] Path is a directory, not a file")
       freeHandle(handle)
       handle := E_NOT_A_FILE
 
@@ -4311,7 +4326,7 @@ PRI do_open_read(p_path) : handle | start_cluster, p_leaf, saved_sec
       h_buf_sector[handle] := -1                                                  ' No sector cached yet
       h_flags[handle] := HF_READ
 
-      debug("  [do_open_read] Success: handle=", udec_(handle), " size=", udec_(h_size[handle]), " cluster=", udec_(start_cluster))
+      debug[CH_FILE]("  [do_open_read] Success: handle=", udec_(handle), " size=", udec_(h_size[handle]), " cluster=", udec_(start_cluster))
 
   sd_restore_path(saved_sec)
 
@@ -4339,23 +4354,23 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     ' Allocate a handle slot
     handle := allocateHandle()
     if handle < 0
-      debug("  [do_open_write] No free handles")
+      debug[CH_FILE]("  [do_open_write] No free handles")
 
     ' Search for the file
     elseif not searchDirectory(p_leaf)
-      debug("  [do_open_write] File not found: ", zstr_(p_leaf))
+      debug[CH_FILE]("  [do_open_write] File not found: ", zstr_(p_leaf))
       freeHandle(handle)
       handle := E_FILE_NOT_FOUND
 
     ' Verify it's a file, not a directory
     elseif attributes() & DIR_ATTR_DIRECTORY                                                ' Directory bit
-      debug("  [do_open_write] Path is a directory, not a file")
+      debug[CH_FILE]("  [do_open_write] Path is a directory, not a file")
       freeHandle(handle)
       handle := E_NOT_A_FILE
 
     ' Check single-writer policy
     elseif isFileOpenForWrite(entry_address >> SECTOR_BITS, entry_address & SECTOR_MASK)
-      debug("  [do_open_write] File already open for write")
+      debug[CH_FILE]("  [do_open_write] File already open for write")
       freeHandle(handle)
       handle := E_FILE_ALREADY_OPEN
 
@@ -4391,7 +4406,7 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
       h_buf_sector[handle] := -1                                                  ' No sector cached yet
       h_flags[handle] := HF_WRITE
 
-      debug("  [do_open_write] Success: handle=", udec_(handle), " size=", udec_(f_size), " pos=", udec_(h_position[handle]))
+      debug[CH_FILE]("  [do_open_write] Success: handle=", udec_(handle), " size=", udec_(f_size), " pos=", udec_(h_position[handle]))
 
   sd_restore_path(saved_sec)
 
@@ -4415,17 +4430,17 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
   else
     handle := allocateHandle()
     if handle < 0
-      debug("  [do_create] No free handles")
+      debug[CH_FILE]("  [do_create] No free handles")
 
     ' Check if file already exists
     elseif searchDirectory(p_leaf)
-      debug("  [do_create] File already exists: ", zstr_(p_leaf))
+      debug[CH_FILE]("  [do_create] File already exists: ", zstr_(p_leaf))
       freeHandle(handle)
       handle := E_FILE_EXISTS
 
     ' Guard: entry_address 0 means searchDirectory never found a valid directory
     elseif entry_address == 0
-      debug("  [do_create] entry_address=0 -- path not valid, aborting")
+      debug[CH_FILE]("  [do_create] entry_address=0 -- path not valid, aborting")
       freeHandle(handle)
       handle := E_FILE_NOT_FOUND
 
@@ -4437,7 +4452,7 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
         if dir_buf[480] == $00                                                    ' End of directory
           temp := allocateCluster(byte2clus(entry_address))
           if temp < 0
-            debug("  [do_create] Failed to allocate dir cluster")
+            debug[CH_FILE]("  [do_create] Failed to allocate dir cluster")
             freeHandle(handle)
             handle := E_DISK_FULL
           else
@@ -4446,7 +4461,7 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
       ' Allocate first cluster for the new file
       first_cluster := allocateCluster(0)
       if first_cluster < 0
-        debug("  [do_create] Failed to allocate file cluster")
+        debug[CH_FILE]("  [do_create] Failed to allocate file cluster")
         freeHandle(handle)
         handle := E_DISK_FULL
 
@@ -4460,13 +4475,13 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
 
         ' Write directory entry to disk
         if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-          debug("  [do_create] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+          debug[CH_FILE]("  [do_create] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
           freeHandle(handle)
           handle := E_IO_ERROR
         else
           bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
           if not writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
-            debug("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+            debug[CH_FILE]("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
             freeHandle(handle)
             handle := E_IO_ERROR
 
@@ -4483,7 +4498,7 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
             h_buf_sector[handle] := -1                                                  ' No sector cached yet
             h_flags[handle] := HF_WRITE
 
-            debug("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
+            debug[CH_FILE]("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
 
   sd_restore_path(saved_sec)
 
@@ -4497,7 +4512,7 @@ PRI do_close_h(handle) : status | p_buf
 
   ' Validate handle
   if not validateHandle(handle)
-    debug("  [do_close_h] Invalid handle: ", sdec_(handle))
+    debug[CH_FILE]("  [do_close_h] Invalid handle: ", sdec_(handle))
     status := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     status := E_NOT_A_DIR_HANDLE
@@ -4510,18 +4525,18 @@ PRI do_close_h(handle) : status | p_buf
       p_buf := getHandleBuffer(handle)
       bytemove(@buf, p_buf, SECTOR_SIZE)                                                    ' Copy to shared buffer
       if not writeSector(h_buf_sector[handle], BUF_DATA)
-        debug("  [do_close_h] Data write FAILED for sector ", udec_(h_buf_sector[handle]))
+        debug[CH_FILE]("  [do_close_h] Data write FAILED for sector ", udec_(h_buf_sector[handle]))
         status := E_IO_ERROR
 
     ' If opened for write, update directory entry with final size
     if h_flags[handle] & HF_WRITE
       if readSector(h_dir_sector[handle], BUF_DIR) < 0
-        debug("  [do_close_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
+        debug[CH_FILE]("  [do_close_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
         status := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + 28] := h_size[handle]                ' Update size field
         if not writeSector(h_dir_sector[handle], BUF_DIR)
-          debug("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
+          debug[CH_FILE]("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
           status := E_IO_ERROR
 
     ' Free the handle
@@ -4545,7 +4560,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
 
   ' Validate handle
   if not validateHandle(handle)
-    debug("  [do_read_h] Invalid handle: ", sdec_(handle))
+    debug[CH_FILE]("  [do_read_h] Invalid handle: ", sdec_(handle))
     bytes_read := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     bytes_read := E_NOT_A_DIR_HANDLE
@@ -4554,12 +4569,12 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
   else
     available := h_size[handle] - h_position[handle]
     if available <= 0
-      debug("  [do_read_h] EOF reached")
+      debug[CH_FILE]("  [do_read_h] EOF reached")
       bytes_read := 0  ' EOF
 
     else
       count := count <# available                                                     ' Cap at available bytes
-      debug("  [do_read_h] handle=", udec_(handle), " pos=", udec_(h_position[handle]), " count=", udec_(count))
+      debug[CH_FILE]("  [do_read_h] handle=", udec_(handle), " pos=", udec_(h_position[handle]), " count=", udec_(count))
 
       ' Get pointer to handle's buffer
       p_hbuf := getHandleBuffer(handle)
@@ -4573,13 +4588,13 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
           ' Follow FAT chain to next cluster
           cluster := h_cluster[handle]
           if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
-            debug("  [do_read_h] FAT chain follow FAILED at boundary advance")
+            debug[CH_FILE]("  [do_read_h] FAT chain follow FAILED at boundary advance")
             bytes_read := 0
           else
             fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             next_cluster := long[fat_addr]
             if next_cluster +>= $0FFF_FFF8
-              debug("  [do_read_h] End of chain at boundary advance")
+              debug[CH_FILE]("  [do_read_h] End of chain at boundary advance")
               bytes_read := 0
             else
               h_cluster[handle] := next_cluster
@@ -4591,7 +4606,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
         if h_buf_sector[handle] <> h_sector[handle]
           ' Load sector into shared buffer, then copy to handle's buffer
           if readSector(h_sector[handle], BUF_DATA) < 0
-            debug("  [do_read_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
+            debug[CH_FILE]("  [do_read_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
             quit  ' Return partial read count
           bytemove(p_hbuf, @buf, SECTOR_SIZE)
           h_buf_sector[handle] := h_sector[handle]
@@ -4617,18 +4632,18 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
             ' Follow FAT chain to next cluster
             cluster := h_cluster[handle]
             if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
-              debug("  [do_read_h] FAT read FAILED for cluster ", udec_(cluster))
+              debug[CH_FILE]("  [do_read_h] FAT read FAILED for cluster ", udec_(cluster))
               quit  ' Return partial read count
             fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             next_cluster := long[fat_addr]
             if next_cluster +>= $0FFF_FFF8
               ' End of chain - shouldn't happen if h_size is correct
-              debug("  [do_read_h] Unexpected end of FAT chain")
+              debug[CH_FILE]("  [do_read_h] Unexpected end of FAT chain")
               quit
             h_cluster[handle] := next_cluster
             h_sector[handle] := clus2sec(next_cluster)
 
-      debug("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
+      debug[CH_FILE]("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
 
 PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster, fat_addr
 ' Handle-based write (V3) - writes data from user buffer to file handle.
@@ -4647,21 +4662,21 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 
   ' Validate handle
   if not validateHandle(handle)
-    debug("  [do_write_h] Invalid handle: ", sdec_(handle))
+    debug[CH_FILE]("  [do_write_h] Invalid handle: ", sdec_(handle))
     bytes_written := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     bytes_written := E_NOT_A_DIR_HANDLE
 
   ' Verify handle is open for writing
   elseif not (h_flags[handle] & HF_WRITE)
-    debug("  [do_write_h] Handle not open for write")
+    debug[CH_FILE]("  [do_write_h] Handle not open for write")
     bytes_written := E_INVALID_HANDLE
 
   elseif count <= 0
     bytes_written := 0
 
   else
-    debug("  [do_write_h] handle=", udec_(handle), " pos=", udec_(h_position[handle]), " count=", udec_(count))
+    debug[CH_FILE]("  [do_write_h] handle=", udec_(handle), " pos=", udec_(h_position[handle]), " count=", udec_(count))
 
     ' Get pointer to handle's buffer
     p_hbuf := getHandleBuffer(handle)
@@ -4670,7 +4685,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
     ' Without this, the next write overwrites the unflushed handle buffer before it reaches disk.
     if (h_position[handle] & SECTOR_MASK) == 0 and h_position[handle] > 0 and h_buf_sector[handle] == h_sector[handle]
       if h_flags[handle] & HF_DIRTY
-        debug("  [do_write_h] Flushing stale sector ", udec_(h_buf_sector[handle]))
+        debug[CH_FILE]("  [do_write_h] Flushing stale sector ", udec_(h_buf_sector[handle]))
         bytemove(@buf, p_hbuf, SECTOR_SIZE)
         writeSector(h_buf_sector[handle], BUF_DATA)
         h_flags[handle] &= !HF_DIRTY
@@ -4679,7 +4694,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
       if ((h_sector[handle] - cluster_offset) & (sec_per_clus - 1)) == 0
         new_cluster := allocateCluster(h_cluster[handle])
         if new_cluster < 0
-          debug("  [do_write_h] Failed to allocate cluster at boundary advance")
+          debug[CH_FILE]("  [do_write_h] Failed to allocate cluster at boundary advance")
           bytes_written := 0
         else
           h_cluster[handle] := new_cluster
@@ -4691,7 +4706,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
       if h_buf_sector[handle] <> h_sector[handle]
         ' Flush dirty buffer first if needed
         if h_flags[handle] & HF_DIRTY
-          debug("  [do_write_h] Flushing dirty sector ", udec_(h_buf_sector[handle]))
+          debug[CH_FILE]("  [do_write_h] Flushing dirty sector ", udec_(h_buf_sector[handle]))
           bytemove(@buf, p_hbuf, SECTOR_SIZE)
           writeSector(h_buf_sector[handle], BUF_DATA)
           h_flags[handle] &= !HF_DIRTY
@@ -4700,7 +4715,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         if h_position[handle] < h_size[handle]
           ' Within existing file - load sector
           if readSector(h_sector[handle], BUF_DATA) < 0
-            debug("  [do_write_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
+            debug[CH_FILE]("  [do_write_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
             quit  ' Return partial write count
           bytemove(p_hbuf, @buf, SECTOR_SIZE)
         else
@@ -4729,7 +4744,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
       ' If we've filled this sector, flush and advance to next
       if (h_position[handle] & SECTOR_MASK) == 0 and count > 0
         ' Flush current sector
-        debug("  [do_write_h] Sector full, flushing sector ", udec_(h_sector[handle]))
+        debug[CH_FILE]("  [do_write_h] Sector full, flushing sector ", udec_(h_sector[handle]))
         bytemove(@buf, p_hbuf, SECTOR_SIZE)
         writeSector(h_sector[handle], BUF_DATA)
         h_flags[handle] &= !HF_DIRTY
@@ -4741,13 +4756,13 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
           ' Need to allocate new cluster or follow chain
           new_cluster := allocateCluster(h_cluster[handle])
           if new_cluster < 0
-            debug("  [do_write_h] Failed to allocate cluster")
+            debug[CH_FILE]("  [do_write_h] Failed to allocate cluster")
             quit  ' Return what we've written so far
-          debug("  [do_write_h] Allocated new cluster ", udec_(new_cluster))
+          debug[CH_FILE]("  [do_write_h] Allocated new cluster ", udec_(new_cluster))
           h_cluster[handle] := new_cluster
           h_sector[handle] := clus2sec(new_cluster)
 
-    debug("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
+    debug[CH_FILE]("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
 
 PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat_addr, sector_in_cluster
 ' Handle-based seek (V3) - seeks to absolute position in file.
@@ -4764,23 +4779,23 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
 
   ' Validate handle
   if not validateHandle(handle)
-    debug("  [do_seek_h] Invalid handle: ", sdec_(handle))
+    debug[CH_FILE]("  [do_seek_h] Invalid handle: ", sdec_(handle))
     status := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     status := E_NOT_A_DIR_HANDLE
 
   ' Validate position is within file
   elseif position > h_size[handle]
-    debug("  [do_seek_h] Position ", udec_(position), " > size ", udec_(h_size[handle]))
+    debug[CH_FILE]("  [do_seek_h] Position ", udec_(position), " > size ", udec_(h_size[handle]))
     status := E_END_OF_FILE
 
   else
-    debug("  [do_seek_h] handle=", udec_(handle), " pos ", udec_(h_position[handle]), " -> ", udec_(position))
+    debug[CH_FILE]("  [do_seek_h] handle=", udec_(handle), " pos ", udec_(h_position[handle]), " -> ", udec_(position))
 
     ' Fast path: if position is in the same sector, just update position
     if (position >> SECTOR_BITS) == (h_position[handle] >> SECTOR_BITS)
       h_position[handle] := position
-      debug("  [do_seek_h] Same sector, fast path")
+      debug[CH_FILE]("  [do_seek_h] Same sector, fast path")
       status := SUCCESS
 
     ' Calculate which cluster the target position is in
@@ -4799,14 +4814,14 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
         repeat idx from 0 to target_cluster_idx - 1
           ' Read FAT entry for current cluster
           if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
-            debug("  [do_seek_h] FAT read FAILED for cluster ", udec_(cluster))
+            debug[CH_FILE]("  [do_seek_h] FAT read FAILED for cluster ", udec_(cluster))
             status := E_IO_ERROR
           else
             fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
             cluster := long[fat_addr]
             if cluster +>= $0FFF_FFF8
               ' End of chain reached before target - shouldn't happen
-              debug("  [do_seek_h] Unexpected end of FAT chain at index ", udec_(idx))
+              debug[CH_FILE]("  [do_seek_h] Unexpected end of FAT chain at index ", udec_(idx))
               status := E_END_OF_FILE
               quit
 
@@ -4820,7 +4835,7 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
         h_position[handle] := position
         h_buf_sector[handle] := -1                                                      ' Invalidate buffer cache
 
-        debug("  [do_seek_h] Seek complete: cluster=", udec_(cluster), " sector=", udec_(h_sector[handle]))
+        debug[CH_FILE]("  [do_seek_h] Seek complete: cluster=", udec_(cluster), " sector=", udec_(h_sector[handle]))
         status := SUCCESS
 
 PRI do_sync_h(handle) : status | p_buf
@@ -4833,17 +4848,17 @@ PRI do_sync_h(handle) : status | p_buf
 
   ' Validate handle
   if not validateHandle(handle)
-    debug("  [do_sync_h] Invalid handle: ", sdec_(handle))
+    debug[CH_FILE]("  [do_sync_h] Invalid handle: ", sdec_(handle))
     status := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     status := E_NOT_A_DIR_HANDLE
 
   else
-    debug("  [do_sync_h] Syncing handle=", udec_(handle), " flags=$", uhex_byte_(h_flags[handle]))
+    debug[CH_FILE]("  [do_sync_h] Syncing handle=", udec_(handle), " flags=$", uhex_byte_(h_flags[handle]))
 
     ' If buffer is dirty, flush it to disk
     if h_flags[handle] & HF_DIRTY
-      debug("  [do_sync_h] Flushing dirty buffer for sector ", udec_(h_buf_sector[handle]))
+      debug[CH_FILE]("  [do_sync_h] Flushing dirty buffer for sector ", udec_(h_buf_sector[handle]))
       p_buf := getHandleBuffer(handle)
       bytemove(@buf, p_buf, SECTOR_SIZE)
       writeSector(h_buf_sector[handle], BUF_DATA)
@@ -4851,15 +4866,15 @@ PRI do_sync_h(handle) : status | p_buf
 
     ' If opened for write, update directory entry with current size
     if h_flags[handle] & HF_WRITE
-      debug("  [do_sync_h] Updating directory: size=", udec_(h_size[handle]))
+      debug[CH_FILE]("  [do_sync_h] Updating directory: size=", udec_(h_size[handle]))
       if readSector(h_dir_sector[handle], BUF_DIR) < 0
-        debug("  [do_sync_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
+        debug[CH_FILE]("  [do_sync_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
         status := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + 28] := h_size[handle]
         writeSector(h_dir_sector[handle], BUF_DIR)
 
-    debug("  [do_sync_h] Sync complete")
+    debug[CH_FILE]("  [do_sync_h] Sync complete")
     status := SUCCESS
 
 PRI do_sync_all() : status | idx
@@ -4869,13 +4884,13 @@ PRI do_sync_all() : status | idx
 ' @returns status - SUCCESS or error code
 ' @local idx - Loop variable
 
-  debug("  [do_sync_all] Syncing all handles")
+  debug[CH_FILE]("  [do_sync_all] Syncing all handles")
   repeat idx from 0 to MAX_OPEN_FILES - 1
     if h_flags[idx] & HF_WRITE
-      debug("  [do_sync_all] Syncing write handle ", udec_(idx))
+      debug[CH_FILE]("  [do_sync_all] Syncing write handle ", udec_(idx))
       do_sync_h(idx)
 
-  debug("  [do_sync_all] All handles synced")
+  debug[CH_FILE]("  [do_sync_all] All handles synced")
   status := SUCCESS
 
 ' ===========================================================================
@@ -4900,7 +4915,7 @@ PRI do_open_dir(p_path) : handle | start_cluster, p_leaf, saved_sec
   ' Allocate a handle slot
   handle := allocateHandle()
   if handle < 0
-    debug("  [do_open_dir] No free handles")
+    debug[CH_DIR]("  [do_open_dir] No free handles")
   elseif p_leaf == 0
     freeHandle(handle)
     handle := E_FILE_NOT_FOUND
@@ -4917,12 +4932,12 @@ PRI do_open_dir(p_path) : handle | start_cluster, p_leaf, saved_sec
     else
       ' Search for the named directory
       if not searchDirectory(p_leaf)
-        debug("  [do_open_dir] Directory not found: ", zstr_(p_leaf))
+        debug[CH_DIR]("  [do_open_dir] Directory not found: ", zstr_(p_leaf))
         freeHandle(handle)
         handle := E_FILE_NOT_FOUND
       ' Verify it's a directory
       elseif not (attributes() & DIR_ATTR_DIRECTORY)
-        debug("  [do_open_dir] Not a directory: ", zstr_(p_leaf))
+        debug[CH_DIR]("  [do_open_dir] Not a directory: ", zstr_(p_leaf))
         freeHandle(handle)
         handle := E_NOT_A_DIR
       else
@@ -4940,7 +4955,7 @@ PRI do_open_dir(p_path) : handle | start_cluster, p_leaf, saved_sec
       h_size[handle] := 0                                                        ' Not used for directories
       h_buf_sector[handle] := -1                                                 ' No sector cached yet
 
-      debug("  [do_open_dir] Success: handle=", udec_(handle), " cluster=", udec_(start_cluster))
+      debug[CH_DIR]("  [do_open_dir] Success: handle=", udec_(handle), " cluster=", udec_(start_cluster))
 
   sd_restore_path(saved_sec)
 
@@ -4976,7 +4991,7 @@ PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_
           ' Follow FAT chain to next cluster
           cluster := h_cluster[handle]
           if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
-            debug("  [do_read_dir_h] FAT read FAILED for cluster ", udec_(cluster))
+            debug[CH_DIR]("  [do_read_dir_h] FAT read FAILED for cluster ", udec_(cluster))
             status := E_IO_ERROR
             quit
           else
@@ -4993,7 +5008,7 @@ PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_
       ' Load current sector into handle's buffer if not cached
       if h_buf_sector[handle] <> h_sector[handle]
         if readSector(h_sector[handle], BUF_DATA) < 0
-          debug("  [do_read_dir_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
+          debug[CH_DIR]("  [do_read_dir_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
           status := E_IO_ERROR
           quit
         else
@@ -5042,7 +5057,7 @@ PRI do_close_dir_h(handle) : status
     status := E_INVALID_HANDLE
 
   else
-    debug("  [do_close_dir_h] Closing handle=", udec_(handle))
+    debug[CH_DIR]("  [do_close_dir_h] Closing handle=", udec_(handle))
     freeHandle(handle)
     status := SUCCESS
 
@@ -5061,7 +5076,7 @@ PRI do_newfile(name_ptr) : status | temp
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
   elseif entry_address == 0
-    debug("  [do_newfile] entry_address=0 -- path not valid, aborting")
+    debug[CH_FILE]("  [do_newfile] entry_address=0 -- path not valid, aborting")
     status := E_FILE_NOT_FOUND
 
   else
@@ -5100,7 +5115,7 @@ PRI do_newdir(name_ptr) : status | temp, p_leaf, saved_sec
     ' Guard: entry_address 0 means searchDirectory never found a valid directory
     ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
     elseif entry_address == 0
-      debug("  [do_newdir] entry_address=0 -- path not valid, aborting")
+      debug[CH_DIR]("  [do_newdir] entry_address=0 -- path not valid, aborting")
       status := E_FILE_NOT_FOUND
 
     else
@@ -5118,20 +5133,20 @@ PRI do_newdir(name_ptr) : status | temp, p_leaf, saved_sec
       dirEntSetFileSize(@entry_buffer, 0)
 
       if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-        debug("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+        debug[CH_DIR]("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
         status := E_IO_ERROR
       else
-        debug("  [do_newdir] Before write: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+        debug[CH_DIR]("  [do_newdir] Before write: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
         bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-        debug("  [do_newdir] After copy: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
-        debug("  [do_newdir] entry_buffer=[", lstr_(@entry_buffer, 11), "]")
+        debug[CH_DIR]("  [do_newdir] After copy: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+        debug[CH_DIR]("  [do_newdir] entry_buffer=[", lstr_(@entry_buffer, 11), "]")
         writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
         ' Verify write by reading back
         dir_sec_in_buf := -1                                                        ' Force re-read
         if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-          debug("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+          debug[CH_DIR]("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
         else
-          debug("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
+          debug[CH_DIR]("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & SECTOR_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_MASK), 11), "]")
 
         bytefill(@dir_buf, 0, SECTOR_SIZE)
         bytemove(@dir_buf[0], string(".          "), FILENAME_83_LEN)
@@ -5152,15 +5167,15 @@ PRI do_newdir(name_ptr) : status | temp, p_leaf, saved_sec
         word[@dir_buf + DIR_ENTRY_SIZE + DIR_CLUS_LO_OFFSET] := temp & $FFFF
 
         n_sec := clus2sec(firstCluster())
-        debug("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
+        debug[CH_DIR]("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
         writeSector(n_sec, BUF_DIR)
         dir_sec_in_buf := n_sec
         ' Verify the ./.. write
         dir_sec_in_buf := -1
         if readSector(n_sec, BUF_DIR) < 0
-          debug("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
+          debug[CH_DIR]("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
         else
-          debug("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
+          debug[CH_DIR]("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
         status := SUCCESS
   sd_restore_path(saved_sec)
 
@@ -5277,10 +5292,10 @@ PRI do_chdir(name_ptr) : status
       cog_dir_sec[pb_caller] := n_sec
       status := SUCCESS
     else
-      debug("  [do_chdir] NOT a directory: attr=", uhex_byte_(attributes()))
+      debug[CH_DIR]("  [do_chdir] NOT a directory: attr=", uhex_byte_(attributes()))
       status := E_NOT_A_DIR
   else
-    debug("  [do_chdir] searchDirectory FAILED for: ", zstr(name_ptr), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
+    debug[CH_DIR]("  [do_chdir] searchDirectory FAILED for: ", zstr(name_ptr), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
     status := E_FILE_NOT_FOUND
 
 PRI sd_resolve_path(p_path) : p_leaf, saved_sec | i, last_slash, status, seg_start
@@ -5368,7 +5383,7 @@ PRI do_freespace() : free_sectors | cluster
     n_sec := fat_sec
     repeat sec_per_fat
       if readSector(n_sec++, BUF_FAT) < 0
-        debug("  [do_freespace] FAT read FAILED, returning partial count")
+        debug[CH_FILE]("  [do_freespace] FAT read FAILED, returning partial count")
       else
         repeat cluster from 0 to CLUSTERS_PER_FAT_SEC - 1
           if long[@fat_buf + cluster << FAT_ENTRY_SHIFT] == 0
@@ -5380,7 +5395,7 @@ PRI do_sync()
 
   if flags & F_NEWDIR
     if readSector(entry_address >> SECTOR_BITS, BUF_DIR) < 0
-      debug("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
+      debug[CH_FILE]("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_BITS))
     else
       bytemove(@dir_buf + (entry_address & SECTOR_MASK), @entry_buffer, DIR_ENTRY_SIZE)
       writeSector(entry_address >> SECTOR_BITS, BUF_DIR)
@@ -5406,9 +5421,9 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
   if p_leaf == 0
     status := E_FILE_NOT_FOUND
   else
-    debug("  [do_rename] old=", zstr_(p_leaf), " new=", zstr_(new_name), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
+    debug[CH_DIR]("  [do_rename] old=", zstr_(p_leaf), " new=", zstr_(new_name), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
     if searchDirectory(p_leaf)
-      debug("  [do_rename] Found old file, entry_address=", uhex_(entry_address))
+      debug[CH_DIR]("  [do_rename] Found old file, entry_address=", uhex_(entry_address))
       bookmark := entry_address
       temp_sec := cog_dir_sec[pb_caller]
       bytemove(@saved_entry, @entry_buffer, DIR_ENTRY_SIZE)                                ' Save complete entry (32 bytes)
@@ -5419,12 +5434,12 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
           new_name += idx+1
           idx := 0
         idx++
-      debug("  [do_rename] Checking if new name exists...")
+      debug[CH_DIR]("  [do_rename] Checking if new name exists...")
       if searchDirectory(new_name) == 0                                         ' Verify new name doesn't exist
-        debug("  [do_rename] New name doesn't exist, proceeding")
+        debug[CH_DIR]("  [do_rename] New name doesn't exist, proceeding")
         bytemove(@entry_buffer, @saved_entry, DIR_ENTRY_SIZE)                              ' Restore complete entry
         if readSector(bookmark >> SECTOR_BITS, BUF_DIR) < 0
-          debug("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
+          debug[CH_DIR]("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
           status := E_IO_ERROR
         ' Parse new_name directly into buffer in 8.3 format
         else
@@ -5446,13 +5461,13 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
               quit
           writeSector(bookmark >> SECTOR_BITS, BUF_DIR)
           cog_dir_sec[pb_caller] := temp_sec
-          debug("  [do_rename] SUCCESS")
+          debug[CH_DIR]("  [do_rename] SUCCESS")
           status := SUCCESS
       else
-        debug("  [do_rename] New name already exists!")
+        debug[CH_DIR]("  [do_rename] New name already exists!")
         status := E_FILE_EXISTS
     else
-      debug("  [do_rename] Old file NOT FOUND")
+      debug[CH_DIR]("  [do_rename] Old file NOT FOUND")
       status := E_FILE_NOT_FOUND
   sd_restore_path(saved_sec)
 
@@ -5477,24 +5492,24 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
     BYTE[@label_83][idx] := ch
     idx++
 
-  debug("  [do_set_vol_label] new label=[", lstr_(@label_83, 11), "]")
+  debug[CH_DIR]("  [do_set_vol_label] new label=[", lstr_(@label_83, 11), "]")
 
   ' Step 1: Update BPB volume label (VBR sector)
   if readSector(vbr_sec, BUF_DATA) < 0
-    debug("  [do_set_vol_label] FAIL: read VBR")
+    debug[CH_DIR]("  [do_set_vol_label] FAIL: read VBR")
     status := E_IO_ERROR
   else
     pVBR := @buf
     bytemove(vbrVolLabelAddr(pVBR), @label_83, 11)
     if writeSector(vbr_sec, BUF_DATA) == 0
-      debug("  [do_set_vol_label] FAIL: write VBR")
+      debug[CH_DIR]("  [do_set_vol_label] FAIL: write VBR")
       status := E_IO_ERROR
 
     ' Step 2: Find and update volume label entry in root directory
     else
       n_sec := root_sec
       if readSector(n_sec, BUF_DIR) < 0
-        debug("  [do_set_vol_label] FAIL: read root dir")
+        debug[CH_DIR]("  [do_set_vol_label] FAIL: read root dir")
         status := E_IO_ERROR
       else
         idx := 0
@@ -5505,7 +5520,7 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
           if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                              ' Volume label entry found
             bytemove(p_entry, @label_83, 11)
             writeSector(n_sec, BUF_DIR)
-            debug("  [do_set_vol_label] Updated root dir entry")
+            debug[CH_DIR]("  [do_set_vol_label] Updated root dir entry")
             quit
           idx += 32
           if idx & SECTOR_MASK == 0
@@ -5515,7 +5530,7 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
         bytemove(@vol_label, @label_83, 11)
         vol_label[11] := 0
 
-        debug("  [do_set_vol_label] SUCCESS")
+        debug[CH_DIR]("  [do_set_vol_label] SUCCESS")
         status := SUCCESS
 
 PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
@@ -5538,27 +5553,27 @@ PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
         status := E_FILE_EXISTS  ' Same directory
       else
         if do_newfile(p_temp) == SUCCESS
-          debug("  [do_movefile] newfile OK, new entry_address=", uhex_(entry_address))
-          debug("  [do_movefile] Reading sector ", udec_(bookmark >> SECTOR_BITS), " (dir_sec_in_buf=", sdec_(dir_sec_in_buf), ")")
+          debug[CH_DIR]("  [do_movefile] newfile OK, new entry_address=", uhex_(entry_address))
+          debug[CH_DIR]("  [do_movefile] Reading sector ", udec_(bookmark >> SECTOR_BITS), " (dir_sec_in_buf=", sdec_(dir_sec_in_buf), ")")
           if readSector(bookmark >> SECTOR_BITS, BUF_DIR) < 0
-            debug("  [do_movefile] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
+            debug[CH_DIR]("  [do_movefile] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_BITS))
             status := E_IO_ERROR
           else
-            debug("  [do_movefile] After read: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "] dir_buf[", udec_(bookmark & SECTOR_MASK), "]=[", lstr_(@dir_buf + (bookmark & SECTOR_MASK), 11), "]")
+            debug[CH_DIR]("  [do_movefile] After read: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "] dir_buf[", udec_(bookmark & SECTOR_MASK), "]=[", lstr_(@dir_buf + (bookmark & SECTOR_MASK), 11), "]")
             bytemove(@entry_buffer, @dir_buf + (bookmark & SECTOR_MASK), 32)
-            debug("  [do_movefile] Copied entry: [", lstr_(@entry_buffer, 11), "]")
+            debug[CH_DIR]("  [do_movefile] Copied entry: [", lstr_(@entry_buffer, 11), "]")
             byte[@dir_buf + (bookmark & SECTOR_MASK)] := $E5
-            debug("  [do_movefile] After $E5: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "]")
+            debug[CH_DIR]("  [do_movefile] After $E5: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "]")
             writeSector(bookmark >> SECTOR_BITS, BUF_DIR)
-            debug("  [do_movefile] Calling do_close, flags=", uhex_(flags))
+            debug[CH_DIR]("  [do_movefile] Calling do_close, flags=", uhex_(flags))
             do_close()
             cog_dir_sec[pb_caller] := temp_sec
             status := SUCCESS
         else
-          debug("  [do_movefile] do_newfile FAILED")
+          debug[CH_DIR]("  [do_movefile] do_newfile FAILED")
           status := E_FILE_NOT_FOUND
     else
-      debug("  [do_movefile] do_chdir FAILED for: ", zstr(dest_folder))
+      debug[CH_DIR]("  [do_movefile] do_chdir FAILED for: ", zstr(dest_folder))
       status := E_FILE_NOT_FOUND
     cog_dir_sec[pb_caller] := temp_sec
   else
@@ -5576,7 +5591,7 @@ PRI do_readdir(entry_num) : p_entry | idx, char, attrib
   idx := 0
   n_sec := cog_dir_sec[pb_caller]
   if readSector(n_sec, BUF_DIR) < 0
-    debug("  [do_readdir] Directory read FAILED for sector ", udec_(n_sec))
+    debug[CH_DIR]("  [do_readdir] Directory read FAILED for sector ", udec_(n_sec))
     p_entry := E_IO_ERROR
 
   else
@@ -5616,16 +5631,16 @@ PRI do_init_card_only() : status
   dir_sec_in_buf := -1
   fat_sec_in_buf := -1
   sec_in_buf := -1
-  debug("  [do_init_card_only] Calling initCard()...")
+  debug[CH_API]("  [do_init_card_only] Calling initCard()...")
   if initCard()
-    debug("  [do_init_card_only] Card initialized successfully")
+    debug[CH_API]("  [do_init_card_only] Card initialized successfully")
     driver_mode := MODE_RAW
-    debug("  [do_init_card_only] SUCCESS, mode=RAW")
+    debug[CH_API]("  [do_init_card_only] SUCCESS, mode=RAW")
     if card_warning_flags & CW_CMD13_UNRELIABLE
-      debug("  [do_init_card_only] WARNING: CMD13 unreliable on this card - status checks disabled")
+      debug[CH_API]("  [do_init_card_only] WARNING: CMD13 unreliable on this card - status checks disabled")
     status := SUCCESS
   else
-    debug("  [do_init_card_only] FAIL: initCard() returned false")
+    debug[CH_API]("  [do_init_card_only] FAIL: initCard() returned false")
     driver_mode := MODE_NONE
     status := last_init_error
 
@@ -5641,7 +5656,7 @@ PRI do_get_card_size() : sector_count | csd[4], c_size, read_bl_len, c_size_mult
 
   ' Read CSD using CMD9
   if not readCSD(@csd)
-    debug("  [do_get_card_size] Failed to read CSD")
+    debug[CH_API]("  [do_get_card_size] Failed to read CSD")
     sector_count := 0
 
   ' CSD structure version is in bits [127:126] (byte 0, bits 7:6)
@@ -5655,14 +5670,14 @@ PRI do_get_card_size() : sector_count | csd[4], c_size, read_bl_len, c_size_mult
       c_size_mult := (csd.byte[9] & $03) << 1
       c_size_mult |= csd.byte[10] >> 7
       sector_count := (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9)
-      debug("  [do_get_card_size] CSD v1.0: ", udec(sector_count), " sectors")
+      debug[CH_API]("  [do_get_card_size] CSD v1.0: ", udec(sector_count), " sectors")
     else
       ' CSD Version 2.0 (SDHC/SDXC)
       c_size := (csd.byte[7] & $3F) << 16
       c_size |= csd.byte[8] << 8
       c_size |= csd.byte[9]
       sector_count := (c_size + 1) << 10                                                ' * 1024 sectors (512KB units)
-      debug("  [do_get_card_size] CSD v2.0: ", udec(sector_count), " sectors")
+      debug[CH_API]("  [do_get_card_size] CSD v2.0: ", udec(sector_count), " sectors")
 
 PRI do_test_cmd13() : r2_response | r1, status
 ' Internal CMD13 test -- runs on worker cog where SPI pins are configured.
@@ -5691,7 +5706,7 @@ PRI do_test_cmd13() : r2_response | r1, status
   ' Get R1 response (first byte of R2)
   r1 := waitR1Response()
   if r1 < 0
-    debug("  [do_test_cmd13] TIMEOUT waiting for R1")
+    debug[CH_STATUS]("  [do_test_cmd13] TIMEOUT waiting for R1")
     pinh(PIN_SD_CS)
     r2_response := $FFFF
 
@@ -5704,7 +5719,7 @@ PRI do_test_cmd13() : r2_response | r1, status
     ' Combine into R2 response word
     r2_response := (r1 << 8) | status
 
-    debug("  [do_test_cmd13] R2=$", uhex_word_(r2_response))
+    debug[CH_STATUS]("  [do_test_cmd13] R2=$", uhex_word_(r2_response))
 
 #endif
 
@@ -5717,10 +5732,10 @@ PRI do_read_scr(p_buf) : status
 ' @returns status - SUCCESS or error code
 
   if readSCR(p_buf)
-    debug("  [do_read_scr] SCR read successfully")
+    debug[CH_IDENT]("  [do_read_scr] SCR read successfully")
     status := SUCCESS
   else
-    debug("  [do_read_scr] SCR read failed")
+    debug[CH_IDENT]("  [do_read_scr] SCR read failed")
     status := E_IO_ERROR
 
 PRI do_read_cid(p_buf) : status
@@ -5731,10 +5746,10 @@ PRI do_read_cid(p_buf) : status
 ' @returns status - SUCCESS or error code
 
   if readCID(p_buf)
-    debug("  [do_read_cid] CID read successfully")
+    debug[CH_IDENT]("  [do_read_cid] CID read successfully")
     status := SUCCESS
   else
-    debug("  [do_read_cid] CID read failed")
+    debug[CH_IDENT]("  [do_read_cid] CID read failed")
     status := E_IO_ERROR
 
 PRI do_read_csd(p_buf) : status
@@ -5745,10 +5760,10 @@ PRI do_read_csd(p_buf) : status
 ' @returns status - SUCCESS or error code
 
   if readCSD(p_buf)
-    debug("  [do_read_csd] CSD read successfully")
+    debug[CH_IDENT]("  [do_read_csd] CSD read successfully")
     status := SUCCESS
   else
-    debug("  [do_read_csd] CSD read failed")
+    debug[CH_IDENT]("  [do_read_csd] CSD read failed")
     status := E_IO_ERROR
 
 PRI do_read_sd_status(p_buf) : status
@@ -5758,10 +5773,10 @@ PRI do_read_sd_status(p_buf) : status
 ' @returns status - SUCCESS or error code
 
   if readSDStatus(p_buf)
-    debug("  [do_read_sd_status] SD Status read successfully")
+    debug[CH_IDENT]("  [do_read_sd_status] SD Status read successfully")
     status := SUCCESS
   else
-    debug("  [do_read_sd_status] SD Status read failed")
+    debug[CH_IDENT]("  [do_read_sd_status] SD Status read failed")
     status := E_IO_ERROR
 
 #endif
@@ -5777,27 +5792,27 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
 ' @local idx - Loop counter
 ' @local mismatch - Count of mismatched longs
 
-  debug("  [do_attempt_high_speed] Attempting high-speed mode...")
+  debug[CH_HSPEED]("  [do_attempt_high_speed] Attempting high-speed mode...")
 
   ' Skip if card is known to be slow (e.g., PNY)
   if card_is_slow
-    debug("  [do_attempt_high_speed] Skipped - card flagged as slow")
+    debug[CH_HSPEED]("  [do_attempt_high_speed] Skipped - card flagged as slow")
     hs_ok := false
 
   ' Check if card supports high-speed
   elseif not queryHighSpeedSupport()
-    debug("  [do_attempt_high_speed] Card does not support high-speed")
+    debug[CH_HSPEED]("  [do_attempt_high_speed] Card does not support high-speed")
     hs_ok := false
 
   ' Switch to high-speed mode
   elseif not switchToHighSpeed()
-    debug("  [do_attempt_high_speed] Failed to switch to high-speed")
+    debug[CH_HSPEED]("  [do_attempt_high_speed] Failed to switch to high-speed")
     hs_ok := false
 
   ' Set 50 MHz SPI clock
   else
     do_set_spi_speed(50_000_000)
-    debug("  [do_attempt_high_speed] SPI set to 50 MHz, verifying...")
+    debug[CH_HSPEED]("  [do_attempt_high_speed] SPI set to 50 MHz, verifying...")
 
     ' Verify by reading a sector, writing it back, reading again
     ' Use root directory sector as test (always valid after mount)
@@ -5805,7 +5820,7 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
     '   @buf (BUF_DATA) -- primary read/write buffer
     '   @dir_buf -- save original data for comparison
     if readSector(root_sec, BUF_DATA) < 0
-      debug("  [do_attempt_high_speed] Read FAILED at 50 MHz")
+      debug[CH_HSPEED]("  [do_attempt_high_speed] Read FAILED at 50 MHz")
       hs_ok := false
     else
       bytemove(@dir_buf, @buf, SECTOR_SIZE)                                                ' Save original to dir_buf
@@ -5814,7 +5829,7 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
       bytefill(@buf, $AA, SECTOR_SIZE)                                                     ' Poison buf
 
       if readSector(root_sec, BUF_DATA) < 0                                        ' Re-read into buf
-        debug("  [do_attempt_high_speed] Verify read FAILED at 50 MHz")
+        debug[CH_HSPEED]("  [do_attempt_high_speed] Verify read FAILED at 50 MHz")
         hs_ok := false
 
       ' Compare dir_buf (original) vs buf (re-read) long-by-long
@@ -5825,14 +5840,14 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
             mismatch++
 
         if mismatch > 0
-          debug("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
-          debug("  [do_attempt_high_speed] Falling back to 25 MHz")
+          debug[CH_HSPEED]("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
+          debug[CH_HSPEED]("  [do_attempt_high_speed] Falling back to 25 MHz")
           do_set_spi_speed(SD_FALLBACK_SPEED_HZ)
           dir_sec_in_buf := -1                                                       ' Invalidate dir cache (we borrowed dir_buf)
           hs_ok := false
 
         else
-          debug("  [do_attempt_high_speed] VERIFIED - 50 MHz high-speed mode ACTIVE")
+          debug[CH_HSPEED]("  [do_attempt_high_speed] VERIFIED - 50 MHz high-speed mode ACTIVE")
           dir_sec_in_buf := -1                                                         ' Invalidate dir cache (we borrowed dir_buf)
           hs_ok := true
 
@@ -5871,7 +5886,7 @@ PRI switch_to_flash()
     pinclear(PIN_MISO)
 
     current_spi_device := DEV_FLASH
-    debug("  [switch_to_flash] SPI bus switched to Flash mode")
+    debug[CH_RECOVER]("  [switch_to_flash] SPI bus switched to Flash mode")
 
 PRI switch_to_sd() : ok
 ' Reconfigure SPI bus for SD device after Flash operations.
@@ -5885,7 +5900,7 @@ PRI switch_to_sd() : ok
     ok := TRUE
 
   else
-    debug("  [switch_to_sd] Starting SD recovery sequence...")
+    debug[CH_RECOVER]("  [switch_to_sd] Starting SD recovery sequence...")
 
     ' Float Flash pins to release any smart pin state
     pinfloat(PIN_FL_CS)
@@ -5895,9 +5910,9 @@ PRI switch_to_sd() : ok
     ok := reinitCard()
     if ok
       current_spi_device := DEV_SD
-      debug("  [switch_to_sd] SD card recovered successfully")
+      debug[CH_RECOVER]("  [switch_to_sd] SD card recovered successfully")
     else
-      debug("  [switch_to_sd] ERROR: SD card recovery failed!")
+      debug[CH_RECOVER]("  [switch_to_sd] ERROR: SD card recovery failed!")
 
 PRI reinitCard() : ok | resp, timeout, saved_freq
 ' Minimal SD card re-initialization after Flash operations.
@@ -5915,7 +5930,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
 ' @local timeout - Timeout counter
 ' @local saved_freq - Saved SPI frequency to restore after init
 
-  debug("    [reinitCard] Starting minimal SD re-init...")
+  debug[CH_RECOVER]("    [reinitCard] Starting minimal SD re-init...")
   saved_freq := spi_freq
   sec_in_buf := -1                                                                 ' Invalidate sector cache
   dir_sec_in_buf := -1                                                             ' Invalidate dir sector cache
@@ -5948,7 +5963,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     waitus(10)
     pinl(PIN_SD_SCK)
     waitus(10)
-  debug("    [reinitCard] GPIO recovery flush complete (4096 clocks)")
+  debug[CH_RECOVER]("    [reinitCard] GPIO recovery flush complete (4096 clocks)")
 
   ' ----------------------------------------------------------
   ' STEP 2: Initialize smart pins at slow clock (400 kHz)
@@ -5960,7 +5975,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
   ' Send dummy clocks via smart pins
   repeat 10
     sp_transfer_8($FF)
-  debug("    [reinitCard] Smart pins ready at 400 kHz")
+  debug[CH_RECOVER]("    [reinitCard] Smart pins ready at 400 kHz")
 
   ' ----------------------------------------------------------
   ' STEP 3: CMD0 - GO_IDLE_STATE
@@ -5973,11 +5988,11 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     waitms(10)
 
   if resp <> $01
-    debug("    [reinitCard] FAIL: CMD0 expected $01, got $", uhex_(resp))
+    debug[CH_RECOVER]("    [reinitCard] FAIL: CMD0 expected $01, got $", uhex_(resp))
     ok := false
 
   else
-    debug("    [reinitCard] CMD0 OK")
+    debug[CH_RECOVER]("    [reinitCard] CMD0 OK")
 
     ' ----------------------------------------------------------
     ' STEP 4: CMD8 - SEND_IF_COND
@@ -5989,7 +6004,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
       saved_acmd41_arg := $00000000
     elseif (resp & $FFF) == $1AA
       saved_acmd41_arg := $40000000
-    debug("    [reinitCard] CMD8 done, acmd41_arg=$", uhex_long_(saved_acmd41_arg))
+    debug[CH_RECOVER]("    [reinitCard] CMD8 done, acmd41_arg=$", uhex_long_(saved_acmd41_arg))
 
     ' ----------------------------------------------------------
     ' STEP 5: ACMD41 - SD_SEND_OP_COND (loop until ready)
@@ -6006,13 +6021,13 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
           quit
 
       if getct() - timeout > 0
-        debug("    [reinitCard] FAIL: ACMD41 timeout")
+        debug[CH_RECOVER]("    [reinitCard] FAIL: ACMD41 timeout")
         ok := false
         quit
       else
         waitms(10)
 
-    debug("    [reinitCard] ACMD41 complete - card ready")
+    debug[CH_RECOVER]("    [reinitCard] ACMD41 complete - card ready")
 
     ' ----------------------------------------------------------
     ' STEP 6: CMD58 - READ_OCR (restore HCS addressing)
@@ -6025,7 +6040,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     else
       hcs := 9                                                                       ' SDSC: byte addressing
 
-    debug("    [reinitCard] CMD58 done, hcs=", udec_(hcs))
+    debug[CH_RECOVER]("    [reinitCard] CMD58 done, hcs=", udec_(hcs))
 
     ' ----------------------------------------------------------
     ' STEP 7: Restore original SPI speed
@@ -6040,7 +6055,7 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     repeat 8
       sp_transfer_8($FF)
 
-    debug("    [reinitCard] Re-init complete, speed restored to ", udec_(spi_freq / 1000), " kHz")
+    debug[CH_RECOVER]("    [reinitCard] Re-init complete, speed restored to ", udec_(spi_freq / 1000), " kHz")
     ok := true
 
 
@@ -6208,14 +6223,14 @@ PRI fl_format() : status | block_address, cycleBits
 ' @local block_address - Physical Flash block address
 ' @local cycleBits - Block cycle bits for wear-leveling generation
 
-  debug("  [fl_format] Formatting ", udec_(FL_BLOCKS), " blocks...")
+  debug[CH_MOUNT]("  [fl_format] Formatting ", udec_(FL_BLOCKS), " blocks...")
 
   repeat FL_BLOCKS with block_address
     fl_read_block_addr(block_address, @cycleBits, $000, $000)
     if lookdown(cycleBits.[7..5] : %011, %101, %110)
       fl_cancel_block(block_address)
 
-  debug("  [fl_format] Format complete, remounting...")
+  debug[CH_MOUNT]("  [fl_format] Format complete, remounting...")
   flash_mounted := FALSE
   status := do_flash_mount()
 
@@ -6350,7 +6365,7 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
 ' @local blockTypeBits - Block type field from header
 ' @local signature - Block header signature (type + CRC + filename CRC)
 
-  debug("  [do_flash_mount] Starting Flash mount scan...")
+  debug[CH_MOUNT]("  [do_flash_mount] Starting Flash mount scan...")
 
   ' Clear Flash handle state
   bytefill(@fl_hStatus, 0, MAX_OPEN_FILES)
@@ -6372,12 +6387,12 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
   status := SUCCESS
 
   ' M1 pass: Check each block and fix duplicate IDs
-  debug("  [do_flash_mount] M1: Scanning ", udec_(FL_BLOCKS), " blocks for duplicates...")
+  debug[CH_MOUNT]("  [do_flash_mount] M1: Scanning ", udec_(FL_BLOCKS), " blocks for duplicates...")
   repeat FL_BLOCKS with block_address
     fl_check_block_fix_dupe_id(block_address)
 
   ' M2 pass: Trace head blocks, set B_HEAD/B_BODY flags
-  debug("  [do_flash_mount] M2: Locating files...")
+  debug[CH_MOUNT]("  [do_flash_mount] M2: Locating files...")
   repeat FL_BLOCKS with block_address
     if field[fl_BlockState][block_address] == B_TEMP                              ' Valid block?
       fl_read_block_addr(block_address, @blockTypeBits, $000, $000)               ' Read first byte
@@ -6386,7 +6401,7 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
           fl_trace_file_set_flags(block_address, false)                           ' Error: retrace to B_TEMP
 
   ' M3 pass: Cancel remaining B_TEMP blocks (dead/orphaned)
-  debug("  [do_flash_mount] M3: Cleaning dead blocks...")
+  debug[CH_MOUNT]("  [do_flash_mount] M3: Cleaning dead blocks...")
   repeat FL_BLOCKS with block_address
     if field[fl_BlockState][block_address] == B_TEMP
       fl_read_block_addr(block_address, @signature, $000, $003)                   ' Read first LONG
@@ -6397,10 +6412,10 @@ PRI do_flash_mount() : status | block_address, blockTypeBits, signature
 
   ' Bad blocks found but cleaned is informational, not fatal
   if status == E_FLASH_BAD_BLOCKS
-    debug("  [do_flash_mount] WARNING: Dead blocks were cleaned during mount")
+    debug[CH_MOUNT]("  [do_flash_mount] WARNING: Dead blocks were cleaned during mount")
     status := SUCCESS
 
-  debug("  [do_flash_mount] Flash mount complete")
+  debug[CH_MOUNT]("  [do_flash_mount] Flash mount complete")
 
 PRI fl_can_mount() : ok | block_address, blockTypeBits, signature, bad_count, dupe_count, badBlockCount
 ' Non-destructive check if Flash would mount cleanly.
@@ -6415,7 +6430,7 @@ PRI fl_can_mount() : ok | block_address, blockTypeBits, signature, bad_count, du
 ' @local dupe_count - Count of duplicate block IDs found
 ' @local badBlockCount - Total bad block count
 
-  debug("  [fl_can_mount] Checking Flash mount readiness...")
+  debug[CH_MOUNT]("  [fl_can_mount] Checking Flash mount readiness...")
 
   if flash_mounted
     ok := true  ' Already mounted is OK
@@ -6454,7 +6469,7 @@ PRI fl_can_mount() : ok | block_address, blockTypeBits, signature, bad_count, du
         badBlockCount++
 
     ok := badBlockCount == 0
-    debug("  [fl_can_mount] Result: ", udec_(badBlockCount), " bad blocks, ok=", udec_(ok))
+    debug[CH_MOUNT]("  [fl_can_mount] Result: ", udec_(badBlockCount), " bad blocks, ok=", udec_(ok))
 
 PRI fl_check_block_read_only(thisBlockAddress) : bad_count, dupe_count | otherBlockAddress, thisCycleBits, otherCycleBits, thisBlockID
 ' Read-only block check: like fl_check_block_fix_dupe_id but never cancels blocks.
@@ -6517,7 +6532,7 @@ PRI do_flash_serial_number() : sn_hi, sn_lo
     movbyts   sn_lo, #%%0123
   end
 
-  debug("  [do_flash_serial_number] ID: $", uhex_long_(sn_hi), "_", uhex_long_(sn_lo))
+  debug[CH_IDENT]("  [do_flash_serial_number] ID: $", uhex_long_(sn_hi), "_", uhex_long_(sn_lo))
 
 CON ' ---- Flash Directory Emulation ----
     ' FLASH DIRECTORY EMULATION (caller-cog helpers)
@@ -7446,7 +7461,7 @@ PRI fl_write_block(handle, NextID_EndPtr) | pBuff, block_id, block_address
   block_address := fl_next_block_address()
 
   if fl_showRTdebug
-    debug("* fl_wr_block() ", uhex_word_(block_address), " id=", udec_(block_id), " nxt=", uhex_word_(NextID_EndPtr))
+    debug[CH_FL_BLOCK]("* fl_wr_block() ", uhex_word_(block_address), " id=", udec_(block_id), " nxt=", uhex_word_(NextID_EndPtr))
 
   if block_id == fl_hChainBlockID[handle]
     fl_program_block(block_address, pBuff, fl_hChainLifeCycle[handle])
@@ -7491,7 +7506,7 @@ PRI fl_delete_chain_from_id(block_id, EndID, delete_mode, KeepFirstIDValid) | bl
 
   block_address := field[fl_IDToBlock][block_id]
   if fl_showRTdebug
-    debug("* fl_delChnFmID() [", uhex_word_(block_address), "] ", udec_(block_id), " end=", udec_(EndID), " mode=", udec_(delete_mode))
+    debug[CH_FL_BLOCK]("* fl_delChnFmID() [", uhex_word_(block_address), "] ", udec_(block_id), " end=", udec_(EndID), " mode=", udec_(delete_mode))
 
   repeat
     ifnot KeepFirstIDValid~
@@ -7528,7 +7543,7 @@ PRI fl_froncate_file(head_block_id, limit_in_bytes) | size_in_bytes, block_addre
 
     new_head_block_id, block_offset, _ := fl_locate_file_byte(head_block_id, size_in_bytes - limit_in_bytes)
     if fl_showRTdebug
-      debug("* fl_froncate(id=", udec_(head_block_id), ", ", udec_(limit_in_bytes), ") ", udec_(size_in_bytes), " new=", udec_(new_head_block_id), " ofs=", uhex_word_(block_offset))
+      debug[CH_FL_CIRC]("* fl_froncate(id=", udec_(head_block_id), ", ", udec_(limit_in_bytes), ") ", udec_(size_in_bytes), " new=", udec_(new_head_block_id), " ofs=", uhex_word_(block_offset))
 
     if block_offset > $88
       fl_read_block_id(new_head_block_id, @body_signature, $000, $003)
@@ -7546,7 +7561,7 @@ PRI fl_froncate_file(head_block_id, limit_in_bytes) | size_in_bytes, block_addre
         else
           quit
       if fl_showRTdebug
-        debug("* fl_froncate AWAKEN PRIOR HEAD ", udec_(prior_block_id))
+        debug[CH_FL_CIRC]("* fl_froncate AWAKEN PRIOR HEAD ", udec_(prior_block_id))
       fl_read_block_id(prior_block_id, @body_signature, $000, $003)
       fl_read_block_id(prior_block_id, @fl_tmpBlockBuff + $88, $088, $FFF)
       data_offset := block_offset + 3956 - 4
@@ -7787,7 +7802,7 @@ PRI fl_finish_open_read(p_filename, max_file_length) : handle | signature, block
       if max_file_length > 0 and signature.[2] == 0
         lenInBytes := fl_count_file_bytes_id(block_id)
         if fl_showRTdebug
-          debug("*** OLD format circular read! ", udec_(lenInBytes), " max=", udec_(max_file_length))
+          debug[CH_FL_CIRC]("*** OLD format circular read! ", udec_(lenInBytes), " max=", udec_(max_file_length))
         if lenInBytes > max_file_length
           bNeedSeek := false
           offsetInBytes := lenInBytes - max_file_length
@@ -8375,13 +8390,13 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
 
     found := true                                                                '  assume found until proven otherwise
     idx := 0
-    debug("  [searchDir] Starting search at n_sec=", udec_(n_sec), " for [", lstr_(@entry_buffer, 11), "]")
+    debug[CH_DIR]("  [searchDir] Starting search at n_sec=", udec_(n_sec), " for [", lstr_(@entry_buffer, 11), "]")
     if readSector(n_sec, BUF_DIR) < 0                                           '  read 1st sector of directory
-      debug("  [searchDir] Directory read FAILED for sector ", udec_(n_sec))
+      debug[CH_DIR]("  [searchDir] Directory read FAILED for sector ", udec_(n_sec))
       found := false
       quit                                                                        '  exit outer loop on read failure
     else
-      debug("  [searchDir] After read: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
+      debug[CH_DIR]("  [searchDir] After read: dir_buf[0]=[", lstr_(@dir_buf, FILENAME_83_LEN), "] dir_buf[32]=[", lstr_(@dir_buf + DIR_ENTRY_SIZE, FILENAME_83_LEN), "]")
       entry_address := 0
       repeat
         p_entry := @dir_buf + (idx & SECTOR_MASK)                                           '  locate entry in directory (FIXED precedence)
@@ -8393,7 +8408,7 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
         if strcomp(@entry_buffer,p_temp)                                          '  if matching entry located
           entry_address := (n_sec << SECTOR_BITS) | (idx & SECTOR_MASK)                               '   store the byte-level address of the entry
           bytemove(@entry_buffer,p_entry,32)                                      '   copy entire entry into entry_buffer
-          debug("  [searchDir] FOUND at idx=", udec_(idx), " firstCluster=", udec_(firstCluster()), " n_sec will be ", udec_(clus2sec(firstCluster())))
+          debug[CH_DIR]("  [searchDir] FOUND at idx=", udec_(idx), " firstCluster=", udec_(firstCluster()), " n_sec will be ", udec_(clus2sec(firstCluster())))
           if firstCluster() == 0                                                  '  exception if ".." points to root directory
             n_sec := clus2sec(2)                                                  '   root directory located in cluster 2
           else
@@ -8402,7 +8417,7 @@ PRI searchDirectory(name_ptr) : found | p_temp, p_entry, idx, search_sec, jdx
         elseif byte[name_ptr] == $00                                              '  if end of path reached
           if (entry_address == 0) and (byte[p_temp] == $E5 or byte[p_temp] == $00) '  if entry_address not set, and 1st byte is $E5 or $00
             entry_address := (n_sec << SECTOR_BITS) | (idx & SECTOR_MASK)                             '    set entry_address to 1st unused entry (for newFile / newDirectory)
-            debug("  [searchDir] Free slot at n_sec=", udec_(n_sec), " idx=", udec_(idx), " entry_address=$", uhex_(entry_address))
+            debug[CH_DIR]("  [searchDir] Free slot at n_sec=", udec_(n_sec), " idx=", udec_(idx), " entry_address=$", uhex_(entry_address))
 
         if byte[p_temp] == $00                                                    '  entry not found in directory
           found := false
@@ -8430,7 +8445,7 @@ PRI readFat(cluster) : p_fat_entry | contents, p_contents
 ' @local p_contents - (unused)
 
   if readSector((cluster >> 7 + fat_sec), BUF_FAT) < 0                          '  128 entries in each FAT sector
-    debug("  [readFat] FAT read FAILED for cluster ", udec_(cluster))
+    debug[CH_SECTOR]("  [readFat] FAT read FAILED for cluster ", udec_(cluster))
     p_fat_entry := @fat_buf  '  Return valid pointer but caller gets stale data
   else
     p_fat_entry := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
@@ -8447,14 +8462,14 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits
 
   fat_idx := 8                                                                  ' Start at cluster 2 (skip reserved 0,1)
   if readSector(fat_sec, BUF_FAT) < 0                                           ' Pre-load first FAT sector
-    debug("  [allocateCluster] FAT pre-load FAILED")
+    debug[CH_SECTOR]("  [allocateCluster] FAT pre-load FAILED")
     cluster_num := -1
   '   if cluster parameter <> 0, writes newly allocated cluster number in parameter cell
   else
     repeat
       if fat_idx & SECTOR_MASK == 0 and fat_idx > 0                                       '  if at sector boundary (but not first iteration)
         if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0                        '   load next sector of FAT
-          debug("  [allocateCluster] FAT scan read FAILED")
+          debug[CH_SECTOR]("  [allocateCluster] FAT scan read FAILED")
           cluster_num := -1
           quit
       buf_idx := fat_idx & SECTOR_MASK
@@ -8467,7 +8482,7 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits
         writeSector(fat2_sec + cluster_num >> 7, BUF_FAT)                              '  write FAT2 sector (MIRROR)
         if cluster <> 0                                                           '  if allocateCluster was called with a non-zero cluster parameter
           if readSector(fat_sec + cluster >> 7, BUF_FAT) < 0                     '   read FAT sector containing cluster cell
-            debug("  [allocateCluster] FAT chain-link read FAILED - cluster orphaned")
+            debug[CH_SECTOR]("  [allocateCluster] FAT chain-link read FAILED - cluster orphaned")
             cluster_num := -1
             quit
           else
@@ -8506,7 +8521,7 @@ PRI readNextSector(buf_type) | cluster, address, contents, p_buf
   if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0                       '  if next sector is in a different cluster
     cluster := sec2clus(n_sec-1)                                                '   find current cluster number
     if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0                          '   read sector of FAT containing cluster number (128 cluster entries in each FAT sector)
-      debug("  [readNextSector] FAT read FAILED for cluster ", udec_(cluster))
+      debug[CH_SECTOR]("  [readNextSector] FAT read FAILED for cluster ", udec_(cluster))
     else
       address := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)                              '   find long within FAT buffer for current cluster
       contents := long[address]                                                 '   read contents to determine next cluster number
@@ -8522,10 +8537,10 @@ PRI readNextSector(buf_type) | cluster, address, contents, p_buf
       else
         n_sec := clus2sec(contents)                                             '   convert next cluster number into sector number
         if readSector(n_sec, buf_type) < 0
-          debug("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
+          debug[CH_SECTOR]("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
   else
     if readSector(n_sec, buf_type) < 0
-      debug("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
+      debug[CH_SECTOR]("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
 
 PRI followFatChain() | cluster, address, contents
 ' Follow FAT chain to next cluster - for multi-sector reads.
@@ -8539,7 +8554,7 @@ PRI followFatChain() | cluster, address, contents
 
   cluster := sec2clus(n_sec - 1)                                                '  find cluster number of the sector we just finished reading
   if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0                            '  read sector of FAT containing cluster number
-    debug("  [followFatChain] FAT read FAILED for cluster ", udec_(cluster))
+    debug[CH_SECTOR]("  [followFatChain] FAT read FAILED for cluster ", udec_(cluster))
   else
     address := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)                                '  find long within FAT buffer for current cluster
     contents := long[address]                                                   '  read contents to determine next cluster number
@@ -8556,21 +8571,21 @@ PRI updateFSInfo() : ok | pFSI
 ' @local pFSI - Pointer overlaid on buf for fsinfo_t struct access
 
   if fsinfo_sec == 0 or fsi_free_count == $FFFF_FFFF
-    debug("  [updateFSInfo] No valid FSInfo to update")
+    debug[CH_MOUNT]("  [updateFSInfo] No valid FSInfo to update")
     ok := false  '  no FSInfo sector to update
 
   ' Use cached free count (tracked incrementally, no FAT scan needed)
 
   ' Read FSInfo sector
   elseif readSector(vbr_sec + fsinfo_sec, BUF_DATA) < 0
-    debug("  [updateFSInfo] FSInfo read FAILED")
+    debug[CH_MOUNT]("  [updateFSInfo] FSInfo read FAILED")
     ok := false
   else
     pFSI := @buf                                                                  '  overlay FSInfo
 
     ' Verify signatures before writing
     if fsiLeadSig(pFSI) <> $4161_5252 or fsiStructSig(pFSI) <> $6141_7272
-      debug("  [updateFSInfo] Invalid FSInfo signatures")
+      debug[CH_MOUNT]("  [updateFSInfo] Invalid FSInfo signatures")
       ok := false
 
     ' Update free count and next-free hint
@@ -8581,7 +8596,7 @@ PRI updateFSInfo() : ok | pFSI
       ' Write updated FSInfo sector (primary at sector 1, backup at sector 7)
       writeSector(vbr_sec + fsinfo_sec, BUF_DATA)
       writeSector(vbr_sec + 7, BUF_DATA)                                            '  backup FSInfo at sector 7
-      debug("  [updateFSInfo] Updated primary+backup: free_count=", udec(fsi_free_count))
+      debug[CH_MOUNT]("  [updateFSInfo] Updated primary+backup: free_count=", udec(fsi_free_count))
       ok := true
 
 PRI countFreeClusters() : count | fat_idx, entry
@@ -8599,7 +8614,7 @@ PRI countFreeClusters() : count | fat_idx, entry
       if fat_idx >> SECTOR_BITS >= sec_per_fat                                            '  if past end of FAT
         quit
       if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0                         '  read next FAT sector
-        debug("  [countFreeClusters] FAT read FAILED, returning partial count")
+        debug[CH_MOUNT]("  [countFreeClusters] FAT read FAILED, returning partial count")
         quit
     entry := long[@fat_buf + (fat_idx & SECTOR_MASK)]
     if (entry & FAT_EOC_MASK) == 0                                               '  check only low 28 bits
@@ -8671,12 +8686,12 @@ PRI initSPIPins()
   spi_tx_mode := P_SYNC_TX | P_OE | P_PLUS2_B                                   ' Sync TX, clock from pin+2 (SCK)
   spi_rx_mode := P_SYNC_RX | P_PLUS3_B                                          ' Sync RX, clock from pin+3 (SCK)
 
-  debug("    [initSPIPins] Setting up smart pins (ManAtWork pattern)...")
-  debug("    [initSPIPins] Mode values:")
-  debug("    [initSPIPins]   spi_clk_mode=$", uhex_long(spi_clk_mode), " (P_TRANSITION | P_OE, idle LOW)")
-  debug("    [initSPIPins]   spi_tx_mode=$", uhex_long(spi_tx_mode), " (P_SYNC_TX | P_OE | P_PLUS2_B)")
-  debug("    [initSPIPins]   spi_rx_mode=$", uhex_long(spi_rx_mode), " (P_SYNC_RX | P_PLUS3_B)")
-  debug("    [initSPIPins]   SCK=P", udec_(PIN_SD_SCK), " MOSI=P", udec_(PIN_MOSI), " MISO=P", udec_(PIN_MISO))
+  debug[CH_INIT]("    [initSPIPins] Setting up smart pins (ManAtWork pattern)...")
+  debug[CH_INIT]("    [initSPIPins] Mode values:")
+  debug[CH_INIT]("    [initSPIPins]   spi_clk_mode=$", uhex_long(spi_clk_mode), " (P_TRANSITION | P_OE, idle LOW)")
+  debug[CH_INIT]("    [initSPIPins]   spi_tx_mode=$", uhex_long(spi_tx_mode), " (P_SYNC_TX | P_OE | P_PLUS2_B)")
+  debug[CH_INIT]("    [initSPIPins]   spi_rx_mode=$", uhex_long(spi_rx_mode), " (P_SYNC_RX | P_PLUS3_B)")
+  debug[CH_INIT]("    [initSPIPins]   SCK=P", udec_(PIN_SD_SCK), " MOSI=P", udec_(PIN_MOSI), " MISO=P", udec_(PIN_MISO))
 
   ' ====================================================================
   ' CS PIN: Standard GPIO (unchanged from bit-bang)
@@ -8693,7 +8708,7 @@ PRI initSPIPins()
   pinfloat(PIN_SD_SCK)                                                                 ' FLTL - reset smart pin
   wrpin(PIN_SD_SCK, spi_clk_mode)                                                      ' P_TRANSITION | P_OE
   ' X register (half-period) will be set by do_set_spi_speed()
-  debug("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting setSPISpeed)")
+  debug[CH_INIT]("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting setSPISpeed)")
 
   ' ====================================================================
   ' MOSI PIN: P_SYNC_TX mode for synchronized transmit
@@ -8706,7 +8721,7 @@ PRI initSPIPins()
   wrpin(PIN_MOSI, spi_tx_mode)                                                      ' P_SYNC_TX | P_OE | P_PLUS2_B
   wxpin(PIN_MOSI, %1_00111)                                                         ' Start-stop mode, 8 bits default
   pinh(PIN_MOSI)                                                                    ' DIRH - enable smart pin
-  debug("    [initSPIPins]   MOSI configured: P_SYNC_TX | P_PLUS2_B (enabled)")
+  debug[CH_INIT]("    [initSPIPins]   MOSI configured: P_SYNC_TX | P_PLUS2_B (enabled)")
 
   ' ====================================================================
   ' MISO PIN: P_SYNC_RX mode for synchronized receive
@@ -8719,18 +8734,18 @@ PRI initSPIPins()
   wrpin(PIN_MISO, spi_rx_mode)                                                      ' P_SYNC_RX | P_PLUS3_B
   wxpin(PIN_MISO, %1_00111)                                                         ' On-edge sample (SPI mode 0), 8 bits
   pinh(PIN_MISO)                                                                    ' DIRH - enable smart pin
-  debug("    [initSPIPins]   MISO configured: P_SYNC_RX | P_PLUS3_B (enabled)")
+  debug[CH_INIT]("    [initSPIPins]   MISO configured: P_SYNC_RX | P_PLUS3_B (enabled)")
 
   ' Configure event SE1 for efficient waiting on SCK completion
   ' Event format: D[5:0]=pin, D[7:6]=%01 for positive edge on IN
   ' This allows waitse1 instead of polling testp loop
   spi_event := %01_000000 | PIN_SD_SCK
   configureEvent(spi_event)
-  debug("    [initSPIPins]   Event SE1 configured for SCK pin ", udec_(PIN_SD_SCK))
+  debug[CH_INIT]("    [initSPIPins]   Event SE1 configured for SCK pin ", udec_(PIN_SD_SCK))
 
   ' Mark smart pin mode as active
   use_smartpin := 1
-  debug("    [initSPIPins] Smart pins configured and enabled")
+  debug[CH_INIT]("    [initSPIPins] Smart pins configured and enabled")
 
 PRI configureEvent(event_config) | ev
 ' Configure SE1 event for waitse1 - helper to configure SE1 event from a computed value.
@@ -8765,7 +8780,7 @@ PRI do_set_spi_speed(freq) | half_period, actual_freq
   ' Guard against too-small period (ManAtWork uses minimum of 4)
   if half_period < 4
     half_period := 4
-    debug("    [setSPISpeed] WARNING: Half-period clamped to minimum (4)")
+    debug[CH_INIT]("    [setSPISpeed] WARNING: Half-period clamped to minimum (4)")
 
   ' Calculate actual achieved frequency for debugging
   actual_freq := clkfreq / (half_period * 2)
@@ -8778,8 +8793,8 @@ PRI do_set_spi_speed(freq) | half_period, actual_freq
   wxpin(PIN_SD_SCK, half_period)                                                       ' Set transition period
   pinl(PIN_SD_SCK)                                                                     ' DRVL enables smart pin (ManAtWork pattern)
 
-  debug("    [setSPISpeed] Target=", udec_(freq/1000), " kHz, Actual=", udec_(actual_freq/1000), " kHz")
-  debug("    [setSPISpeed] Half-period=", udec_(half_period), " clocks")
+  debug[CH_INIT]("    [setSPISpeed] Target=", udec_(freq/1000), " kHz, Actual=", udec_(actual_freq/1000), " kHz")
+  debug[CH_INIT]("    [setSPISpeed] Half-period=", udec_(half_period), " clocks")
 
 PRI calcDataCRC(pData, len) : crc | raw
 ' Calculate CRC-16-CCITT for SD card data - hardware-accelerated using P2's GETCRC instruction.
@@ -8861,7 +8876,7 @@ PRI sp_transfer_8(data) : rx_byte | tx_data, raw_result
   end
   ' Debug: show raw rdpin value and pin info occasionally
   if sp_debug_ctr < 5
-    debug("    [sp_transfer_8] pins: miso=", udec_(PIN_MISO), " sck=", udec_(PIN_SD_SCK), " raw=", uhex_long_(raw_result), " final=", uhex_byte_(rx_byte))
+    debug[CH_INIT]("    [sp_transfer_8] pins: miso=", udec_(PIN_MISO), " sck=", udec_(PIN_SD_SCK), " raw=", uhex_long_(raw_result), " final=", uhex_byte_(rx_byte))
     sp_debug_ctr++
 
 PRI sp_transfer_32(data) : rx_data | tx_data
@@ -8911,8 +8926,8 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
 ' @local acmd41_arg - Argument for ACMD41 (HCS flag)
 ' @local got_response - TRUE if any CMD0 attempt returned non-zero
 
-  debug("    [initCard] Starting card init...")
-  debug("    [initCard] Reference: SPI_SD_Implementation_Reference.md")
+  debug[CH_INIT]("    [initCard] Starting card init...")
+  debug[CH_INIT]("    [initCard] Reference: SPI_SD_Implementation_Reference.md")
   sec_in_buf := -1
   last_init_error := E_INIT_FAILED                                              '  Default: overwritten with specific error
 
@@ -8920,7 +8935,7 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
   ' STEP 1: Power-on delay
   ' Spec: VDD must be stable, then wait 1ms minimum
   ' ============================================
-  debug("    [initCard] Step 1: Power-on delay (100ms)...")
+  debug[CH_INIT]("    [initCard] Step 1: Power-on delay (100ms)...")
   waitms(100)
 
   ' ============================================
@@ -8928,7 +8943,7 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
   ' Spec: Use 100-400 kHz during initialization
   ' ============================================
   bit_delay := clkfreq / 100_000                                                '  ~50kHz for init (conservative)
-  debug("    [initCard] Step 2: SPI config, bit_delay=", udec(bit_delay), " (~50kHz)")
+  debug[CH_INIT]("    [initCard] Step 2: SPI config, bit_delay=", udec(bit_delay), " (~50kHz)")
 
   ' SD card SPI mode 0: CPOL=0, CPHA=0
   ' Data sampled on rising edge, changed on falling edge
@@ -8939,26 +8954,26 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
   pinf(PIN_MISO)                                                                    '  MISO as input with pull-up active
   waitus(10)                                                                    '  Let pull-up settle
 
-  debug("    [initCard] Pins: CS=", udec_(pinr(PIN_SD_CS)), " MOSI=", udec_(pinr(PIN_MOSI)), " MISO=", udec_(pinr(PIN_MISO)), " SCK=", udec_(pinr(PIN_SD_SCK)))
+  debug[CH_INIT]("    [initCard] Pins: CS=", udec_(pinr(PIN_SD_CS)), " MOSI=", udec_(pinr(PIN_MOSI)), " MISO=", udec_(pinr(PIN_MISO)), " SCK=", udec_(pinr(PIN_SD_SCK)))
 
   ' ============================================
   ' STEP 3: Card recovery + init clocks
   ' If card is stuck mid-transfer, flush with extra clocks
   ' Then send 74+ clocks per spec for power-on init
   ' ============================================
-  debug("    [initCard] Step 3: Recovery flush (4096 clocks to clear stuck transfer)...")
+  debug[CH_INIT]("    [initCard] Step 3: Recovery flush (4096 clocks to clear stuck transfer)...")
   repeat GPIO_FLUSH_CYCLES                                                                     '  Enough to flush a full 512-byte sector
     pinh(PIN_SD_SCK)
     waitus(10)
     pinl(PIN_SD_SCK)
     waitus(10)
 
-  debug("    [initCard] MISO after recovery flush: ", udec_(pinr(PIN_MISO)), " (should be 1)")
+  debug[CH_INIT]("    [initCard] MISO after recovery flush: ", udec_(pinr(PIN_MISO)), " (should be 1)")
 
   ' ============================================
   ' STEP 3.5: Initialize smart pins for SPI
   ' ============================================
-  debug("    [initCard] Step 3.5: Initializing smart pins (ManAtWork pattern)...")
+  debug[CH_INIT]("    [initCard] Step 3.5: Initializing smart pins (ManAtWork pattern)...")
   initSPIPins()
   do_set_spi_speed(SD_INIT_SPEED_HZ)                                                          ' 400 kHz for init
   waitus(100)                                                                   ' Let smart pins settle
@@ -8966,19 +8981,19 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
   ' Send dummy clocks using smart pins
   repeat 10
     sp_transfer_8($FF)
-  debug("    [initCard] Dummy clocks sent via smart pins")
+  debug[CH_INIT]("    [initCard] Dummy clocks sent via smart pins")
 
   ' ============================================
   ' STEP 4: CMD0 - GO_IDLE_STATE
   ' Sends: 0x40 0x00 0x00 0x00 0x00 0x95
   ' Expected R1: 0x01 (in idle state)
   ' ============================================
-  debug("    [initCard] Step 4: CMD0 (GO_IDLE_STATE)...")
+  debug[CH_INIT]("    [initCard] Step 4: CMD0 (GO_IDLE_STATE)...")
   got_response := false
   resp := 0
   repeat CMD0_MAX_RETRIES
     resp := cmd(CMD0, 0)
-    debug("    [initCard] CMD0 response: $", uhex_(resp))
+    debug[CH_INIT]("    [initCard] CMD0 response: $", uhex_(resp))
     if resp <> 0
       got_response := true
     if resp == R1_IN_IDLE
@@ -8987,15 +9002,15 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
 
   if resp <> R1_IN_IDLE
     if got_response
-      debug("    [initCard] FAIL: CMD0 got response $", uhex_(resp), " but not $01 (idle)")
+      debug[CH_INIT]("    [initCard] FAIL: CMD0 got response $", uhex_(resp), " but not $01 (idle)")
       last_init_error := E_BAD_RESPONSE
     else
-      debug("    [initCard] FAIL: CMD0 no response (no card or wiring fault)")
+      debug[CH_INIT]("    [initCard] FAIL: CMD0 no response (no card or wiring fault)")
       last_init_error := E_NO_CARD
     ok := false
 
   else
-    debug("    [initCard] CMD0 OK - card in idle state")
+    debug[CH_INIT]("    [initCard] CMD0 OK - card in idle state")
 
     ' ============================================
     ' STEP 5: CMD8 - SEND_IF_COND
@@ -9003,24 +9018,24 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
     ' Argument: VHS=0x01 (2.7-3.6V), check_pattern=0xAA
     ' Expected R7: R1 + 4 bytes echoing VHS and pattern
     ' ============================================
-    debug("    [initCard] Step 5: CMD8 (SEND_IF_COND, VHS=1, pattern=$AA)...")
+    debug[CH_INIT]("    [initCard] Step 5: CMD8 (SEND_IF_COND, VHS=1, pattern=$AA)...")
     resp := cmd(8, $000001AA)                                                     '  send CMD8, get 32-bit echo
-    debug("    [initCard] CMD8 response (32-bit): $", uhex_long(resp))
+    debug[CH_INIT]("    [initCard] CMD8 response (32-bit): $", uhex_long(resp))
 
     card_version := 1                                                             '  assume v1.x until proven otherwise
     acmd41_arg := $00000000                                                       '  HCS=0 for v1.x cards
 
     if resp == 0                                                                  '  timeout or no response
-      debug("    [initCard] CMD8 no response -> Ver 1.x SD card (SDSC only)")
+      debug[CH_INIT]("    [initCard] CMD8 no response -> Ver 1.x SD card (SDSC only)")
       card_version := 1
       acmd41_arg := $00000000                                                     '  no HCS for v1.x
     elseif (resp & $FFF) == $1AA                                                  '  check VHS and pattern echo
-      debug("    [initCard] CMD8 echo valid ($1AA) -> Ver 2.0+ SD card")
+      debug[CH_INIT]("    [initCard] CMD8 echo valid ($1AA) -> Ver 2.0+ SD card")
       card_version := 2
       acmd41_arg := $40000000                                                     '  HCS=1 for v2.0+ (support SDHC/SDXC)
     else
-      debug("    [initCard] CMD8 echo unexpected: $", uhex_long(resp & $FFF), " expected $1AA")
-      debug("    [initCard] Treating as Ver 1.x card")
+      debug[CH_INIT]("    [initCard] CMD8 echo unexpected: $", uhex_long(resp & $FFF), " expected $1AA")
+      debug[CH_INIT]("    [initCard] Treating as Ver 1.x card")
       card_version := 1
       acmd41_arg := $00000000
 
@@ -9034,27 +9049,27 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
     ' ACMD41: 0x69 [arg] CRC
     ' Expected R1: 0x00 when ready, 0x01 while initializing
     ' ============================================
-    debug("    [initCard] Step 6: ACMD41 init loop (arg=$", uhex_long(acmd41_arg), ")...")
+    debug[CH_INIT]("    [initCard] Step 6: ACMD41 init loop (arg=$", uhex_long(acmd41_arg), ")...")
     timeout := getct() + clkfreq * INIT_TIMEOUT_SEC                                                    '  2 second timeout
 
     repeat
       resp := cmd(55, 0)                                                          '  APP_CMD prefix
       if resp > $01                                                               '  error other than "in idle"
-        debug("    [initCard] CMD55 error: $", uhex_(resp))
+        debug[CH_INIT]("    [initCard] CMD55 error: $", uhex_(resp))
         waitms(10)
       else
         resp := cmd(41, acmd41_arg)                                               '  SD_SEND_OP_COND
         if resp == $00                                                            '  card ready (not in idle anymore)
-          debug("    [initCard] ACMD41 complete - card ready!")
+          debug[CH_INIT]("    [initCard] ACMD41 complete - card ready!")
           quit
         elseif resp == $01                                                        '  still initializing
           ' continue looping
         else
-          debug("    [initCard] ACMD41 unexpected response: $", uhex_(resp))
+          debug[CH_INIT]("    [initCard] ACMD41 unexpected response: $", uhex_(resp))
 
       if getct() - timeout > 0
-        debug("    [initCard] FAIL: ACMD41 timeout after 2 seconds")
-        debug("    [initCard] Last response: $", uhex_(resp))
+        debug[CH_INIT]("    [initCard] FAIL: ACMD41 timeout after 2 seconds")
+        debug[CH_INIT]("    [initCard] Last response: $", uhex_(resp))
         last_init_error := E_TIMEOUT
         ok := false
         quit
@@ -9072,19 +9087,19 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
       ' Expected R3: R1 + 32-bit OCR register
       ' Check bit 31 (busy), bit 30 (CCS)
       ' ============================================
-      debug("    [initCard] Step 7: CMD58 (READ_OCR)...")
+      debug[CH_INIT]("    [initCard] Step 7: CMD58 (READ_OCR)...")
       resp := cmd(58, 0)
       ocr_value := resp                                                             '  Cache OCR for later retrieval
-      debug("    [initCard] OCR: $", uhex_long(resp))
-      debug("    [initCard]   Bit 31 (ready): ", udec((resp >> 31) & 1))
-      debug("    [initCard]   Bit 30 (CCS):   ", udec((resp >> 30) & 1))
+      debug[CH_INIT]("    [initCard] OCR: $", uhex_long(resp))
+      debug[CH_INIT]("    [initCard]   Bit 31 (ready): ", udec((resp >> 31) & 1))
+      debug[CH_INIT]("    [initCard]   Bit 30 (CCS):   ", udec((resp >> 30) & 1))
 
       if (resp >> 30) & 1
         hcs := 0                                                                    '  SDHC/SDXC: block addressing (no shift)
-        debug("    [initCard] Card type: SDHC/SDXC (block addressing)")
+        debug[CH_INIT]("    [initCard] Card type: SDHC/SDXC (block addressing)")
       else
         hcs := 9                                                                    '  SDSC: byte addressing (shift by 9 = multiply by 512)
-        debug("    [initCard] Card type: SDSC (byte addressing)")
+        debug[CH_INIT]("    [initCard] Card type: SDSC (byte addressing)")
 
       ' ============================================
       ' STEP 8: Identify card and set optimal SPI speed
@@ -9092,13 +9107,13 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
       ' PNY cards ($1D) limited to 20 MHz due to timing sensitivity
       ' ============================================
       pinh(PIN_SD_CS)                                                                      '  ensure CS HIGH before CID/CSD read
-      debug("    [initCard] Step 8: Card identification and speed selection...")
+      debug[CH_INIT]("    [initCard] Step 8: Card identification and speed selection...")
       identifyCard()                                                                '  read CID/CSD, identify manufacturer
       setOptimalSpeed()                                                             '  set speed based on card type
       ' Send dummy clocks with CS HIGH to stabilize new clock rate
       repeat 8
         sp_transfer(-1, 8)                                                          '  8 dummy bytes = 64 clocks (using smart pins)
-      debug("    [initCard] Dummy clocks sent, CS HIGH")
+      debug[CH_INIT]("    [initCard] Dummy clocks sent, CS HIGH")
 
       ' ============================================
       ' STEP 9: Probe CMD13 reliability
@@ -9112,7 +9127,7 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
       ' ============================================
       probeCmd23()
 
-      debug("    [initCard] === INIT SUCCESS ===")
+      debug[CH_INIT]("    [initCard] === INIT SUCCESS ===")
       ok := true
 
 
@@ -9126,17 +9141,17 @@ PRI cmd(op,parm) : response | timeout
 ' @local timeout - Timeout counter
 
   if op == 0
-    debug("      [cmd] CS before assert: ", udec_(pinr(PIN_SD_CS)))
+    debug[CH_INIT]("      [cmd] CS before assert: ", udec_(pinr(PIN_SD_CS)))
   sp_transfer(-1,8)                                                             '  required for certain cards (my 512MB card fails if not present)
   pinl(PIN_SD_CS)                                                                      '  CS LOW = selected (standard active-LOW)
   if op == 0
-    debug("      [cmd] CS after pinl: ", udec_(pinr(PIN_SD_CS)), " MISO=", udec_(pinr(PIN_MISO)))
+    debug[CH_INIT]("      [cmd] CS after pinl: ", udec_(pinr(PIN_SD_CS)), " MISO=", udec_(pinr(PIN_MISO)))
   sp_transfer(-1,8)                                                             '  required for certain cards (my 512MB and 32GB cards fail if not present)
   sp_transfer($40 | op,8)
   sp_transfer(parm,32)
   if op == 0
     sp_transfer($95,8)                                                          '  send CRC for cmd(0,0)
-    debug("      [cmd] After CMD0 sent, MISO=", udec_(pinr(PIN_MISO)))
+    debug[CH_INIT]("      [cmd] After CMD0 sent, MISO=", udec_(pinr(PIN_MISO)))
   else
     sp_transfer($87,8)                                                          '  send CRC for cmd(8,$1AA)
   timeout := getct() + clkfreq
@@ -9223,13 +9238,13 @@ PRI readSector(sector, buf_type) : status | data, loop_ctr, timeout, stream_mode
         if data == $FE
           quit                                                                    ' Got start token
         if data <> $FF
-          debug("  [readSector] ERROR: got $", uhex_byte_(data), " instead of $FF or $FE")
+          debug[CH_SECTOR]("  [readSector] ERROR: got $", uhex_byte_(data), " instead of $FF or $FE")
           pinh(PIN_SD_CS)
           long[p_cache] := -1
           status := E_BAD_RESPONSE
           quit
         elseif getct() - timeout > 0
-          debug("  [readSector] TIMEOUT waiting for start token")
+          debug[CH_SECTOR]("  [readSector] TIMEOUT waiting for start token")
           pinh(PIN_SD_CS)
           long[p_cache] := -1
           status := E_TIMEOUT
@@ -9308,10 +9323,10 @@ PRI readSector(sector, buf_type) : status | data, loop_ctr, timeout, stream_mode
         sp_transfer_8($FF)                                                        ' 8 NCS recovery clocks (CS HIGH, SD spec)
         if attempt < MAX_READ_CRC_RETRIES
           diag_crc_retries++
-          debug("  [readSector] CRC MISMATCH attempt ", udec_(attempt), "/", udec_(MAX_READ_CRC_RETRIES), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc), " - retrying")
+          debug[CH_SECTOR]("  [readSector] CRC MISMATCH attempt ", udec_(attempt), "/", udec_(MAX_READ_CRC_RETRIES), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc), " - retrying")
           long[p_cache] := -1                                                     ' Invalidate cache before retry
         else
-          debug("  [readSector] CRC FAILED after ", udec_(MAX_READ_CRC_RETRIES), " attempts recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
+          debug[CH_SECTOR]("  [readSector] CRC FAILED after ", udec_(MAX_READ_CRC_RETRIES), " attempts recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
           long[p_cache] := -1                                                     ' Invalidate cache on failure
           status := E_CRC_ERROR
           quit
@@ -9394,7 +9409,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
       resp := cmd(CMD23, count)
       last_cmd23_r1 := resp
       last_cmd23_used := TRUE
-      debug("  [readSectors] CMD23 set block count=", udec_(count))
+      debug[CH_SECTOR]("  [readSectors] CMD23 set block count=", udec_(count))
 
     ' Send CMD18 (READ_MULTIPLE_BLOCK) with starting sector
     ' Note: cmd() handles CS assertion and returns R1 response
@@ -9402,7 +9417,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
     last_cmd18_r1 := resp
     if resp <> $00
       last_cmd18_fail := 1                                                      ' Path 1: R1 reject
-      debug("  [readSectors] CMD18 failed, R1=$", uhex_byte_(resp))
+      debug[CH_SECTOR]("  [readSectors] CMD18 failed, R1=$", uhex_byte_(resp))
       pinh(PIN_SD_CS)
       sectors_read := 0
 
@@ -9415,7 +9430,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
         ' Wait for data token ($FE) for this sector
         if waitDataToken() < 0
           last_cmd18_fail := 2                                                  ' Path 2: data token fail
-          debug("  [readSectors] No data token for sector ", udec_(start_sector + sectors_read))
+          debug[CH_SECTOR]("  [readSectors] No data token for sector ", udec_(start_sector + sectors_read))
           quit                                                                      ' Exit loop on error
 
         ' Disable MISO smart pin before streamer capture
@@ -9449,7 +9464,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
             diag_crc_matches++
           else
             diag_crc_mismatches++
-            debug("  [readSectors] CRC MISMATCH sec ", udec_(start_sector + sectors_read), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
+            debug[CH_SECTOR]("  [readSectors] CRC MISMATCH sec ", udec_(start_sector + sectors_read), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
 
         sectors_read++
 
@@ -9462,18 +9477,18 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
         resp := sp_transfer_8($FF)
         last_cmd23_verify := resp
         if resp <> $FF
-          debug("  [readSectors] CMD23 WARNING: card still outputting after count reached ($", uhex_byte_(resp), ")")
+          debug[CH_SECTOR]("  [readSectors] CMD23 WARNING: card still outputting after count reached ($", uhex_byte_(resp), ")")
           ' Card didn't honor CMD23 auto-stop - fall back to CMD12 for this and future reads
           cmd23_supported := FALSE
           last_cmd23_used := FALSE
           sendStopTransmission()
         pinh(PIN_SD_CS)                                                                ' Deselect card
-        debug("  [readSectors] CMD23 path: ", udec_(sectors_read), " sectors, no CMD12 needed")
+        debug[CH_SECTOR]("  [readSectors] CMD23 path: ", udec_(sectors_read), " sectors, no CMD12 needed")
 
         ' CMD13: Verify card internal state after multi-block read
         if checkCardStatus(@"readSectors") < 0
           last_cmd18_fail := 4                                                  ' Path 4: CMD13 fail
-          debug("  [readSectors] CMD13 status check FAILED")
+          debug[CH_SECTOR]("  [readSectors] CMD13 status check FAILED")
           sectors_read := 0                                                     ' Card reports error - data can't be trusted
       else
         ' CMD12 path: send CMD12 to stop transmission
@@ -9484,10 +9499,10 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
           recoverToIdle()                                                       ' Force card back to idle
           if sectors_read == count
             last_cmd18_fail := 5                                                ' Path 5: CMD12 fail, tolerated
-            debug("  [readSectors] CMD12 R1 error (tolerated, all ", udec_(count), " sectors received)")
+            debug[CH_SECTOR]("  [readSectors] CMD12 R1 error (tolerated, all ", udec_(count), " sectors received)")
           else
             last_cmd18_fail := 3                                                ' Path 3: CMD12 fail, data incomplete
-            debug("  [readSectors] CMD12 failed - incomplete read, recovering")
+            debug[CH_SECTOR]("  [readSectors] CMD12 failed - incomplete read, recovering")
             sectors_read := 0                                                   ' Incomplete data can't be trusted
         else
           pinh(PIN_SD_CS)                                                              ' Deselect card
@@ -9495,7 +9510,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | p_buf, stream_mo
           ' CMD13: Verify card internal state after multi-block read
           if checkCardStatus(@"readSectors") < 0
             last_cmd18_fail := 4                                                ' Path 4: CMD13 fail
-            debug("  [readSectors] CMD13 status check FAILED")
+            debug[CH_SECTOR]("  [readSectors] CMD13 status check FAILED")
             sectors_read := 0                                                   ' Card reports error - data can't be trusted
 
 PRI writeSector(sector, buf_type) : ok | p_buf, stream_mode, clk_count, xfrq, timeout, resp, p_cache, align_delay
@@ -9555,13 +9570,13 @@ PRI writeSector(sector, buf_type) : ok | p_buf, stream_mode, clk_count, xfrq, ti
   resp := cmd(24, sector << hcs)
   diag_write_r1 := resp                                                          ' Capture CMD24 R1 response
   if resp & $64                                                                  ' Fatal R1 bits: illegal cmd ($04), address err ($20), parameter err ($40)
-    debug("  [writeSector] CMD24 FATAL, R1=$", uhex_byte_(resp))
+    debug[CH_SECTOR]("  [writeSector] CMD24 FATAL, R1=$", uhex_byte_(resp))
     diag_write_result := 1                                                       ' 1 = CMD24 fatal
     pinh(PIN_SD_CS)
     ok := false
   else
     if resp & $1B                                                                  ' Stale R1 bits: idle ($01), erase reset ($02), CRC ($08), erase seq ($10)
-      debug("  [writeSector] CMD24 warning: R1=$", uhex_byte_(resp), " (stale bits, proceeding)")
+      debug[CH_SECTOR]("  [writeSector] CMD24 warning: R1=$", uhex_byte_(resp), " (stale bits, proceeding)")
     sp_transfer_8($FE)                                                            ' Data start token
 
     ' ============================================================================
@@ -9630,7 +9645,7 @@ PRI writeSector(sector, buf_type) : ok | p_buf, stream_mode, clk_count, xfrq, ti
       if resp <> $FF
         quit
       if getct() - timeout > 0
-        debug("  [writeSector] TIMEOUT waiting for data-response")
+        debug[CH_SECTOR]("  [writeSector] TIMEOUT waiting for data-response")
         diag_write_result := 2                                                     ' 2 = data-response timeout
         diag_write_dresp := $FF
         pinh(PIN_SD_CS)
@@ -9642,13 +9657,13 @@ PRI writeSector(sector, buf_type) : ok | p_buf, stream_mode, clk_count, xfrq, ti
       ' Verify data-response token: bits [3:1] decode as: 010=accepted, 101=CRC error, 110=write error
       if (resp & $1F) <> $05
         if (resp & $1F) == $0B
-          debug("  [writeSector] Data REJECTED: CRC error (response=$", uhex_byte_(resp), ")")
+          debug[CH_SECTOR]("  [writeSector] Data REJECTED: CRC error (response=$", uhex_byte_(resp), ")")
           diag_write_result := 3                                                   ' 3 = CRC reject
         elseif (resp & $1F) == $0D
-          debug("  [writeSector] Data REJECTED: Write error (response=$", uhex_byte_(resp), ")")
+          debug[CH_SECTOR]("  [writeSector] Data REJECTED: Write error (response=$", uhex_byte_(resp), ")")
           diag_write_result := 4                                                   ' 4 = write error reject
         else
-          debug("  [writeSector] Data REJECTED: Unknown status (response=$", uhex_byte_(resp), ")")
+          debug[CH_SECTOR]("  [writeSector] Data REJECTED: Unknown status (response=$", uhex_byte_(resp), ")")
           diag_write_result := 5                                                   ' 5 = unknown reject
         pinh(PIN_SD_CS)
         ok := false
@@ -9663,7 +9678,7 @@ PRI writeSector(sector, buf_type) : ok | p_buf, stream_mode, clk_count, xfrq, ti
           if resp == $FF                                                            ' Card released MISO = programming complete
             quit
           if getct() - timeout > 0
-            debug("  [writeSector] TIMEOUT waiting for programming complete")
+            debug[CH_SECTOR]("  [writeSector] TIMEOUT waiting for programming complete")
             diag_write_result := 6                                                   ' 6 = busy timeout
             pinh(PIN_SD_CS)
             ok := false
@@ -9726,7 +9741,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | p_buf, strea
     ' Note: cmd() handles CS assertion and returns R1 response
     resp := cmd(CMD25, start_sector << hcs)
     if resp <> $00
-      debug("  [writeSectors] CMD25 failed, R1=$", uhex_byte_(resp))
+      debug[CH_SECTOR]("  [writeSectors] CMD25 failed, R1=$", uhex_byte_(resp))
       pinh(PIN_SD_CS)
       sectors_written := 0
 
@@ -9768,15 +9783,15 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | p_buf, strea
         ' Wait for data response token
         resp := waitDataResponse()
         if resp < 0
-          debug("  [writeSectors] No data response for sector ", udec_(start_sector + sectors_written))
+          debug[CH_SECTOR]("  [writeSectors] No data response for sector ", udec_(start_sector + sectors_written))
           quit
         if (resp & $0F) <> DATA_ACCEPTED
-          debug("  [writeSectors] Data rejected for sector ", udec_(start_sector + sectors_written), " resp=$", uhex_byte_(resp))
+          debug[CH_SECTOR]("  [writeSectors] Data rejected for sector ", udec_(start_sector + sectors_written), " resp=$", uhex_byte_(resp))
           quit
 
         ' Wait for card to finish programming this block
         if waitBusyComplete() < 0
-          debug("  [writeSectors] Busy timeout for sector ", udec_(start_sector + sectors_written))
+          debug[CH_SECTOR]("  [writeSectors] Busy timeout for sector ", udec_(start_sector + sectors_written))
           quit
 
         sectors_written++
@@ -9787,7 +9802,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | p_buf, strea
 
       ' Wait for card to finish any final programming - card is in PROGRAMMING state
       if waitBusyComplete() < 0
-        debug("  [writeSectors] Final busy timeout - card still programming, recovering")
+        debug[CH_SECTOR]("  [writeSectors] Final busy timeout - card still programming, recovering")
         recoverToIdle()                                                               ' Force card back to idle
         sectors_written := 0                                                          ' Write integrity unknown
 
@@ -9796,7 +9811,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | p_buf, strea
 
         ' CMD13: Verify card internal state after multi-block write
         if checkCardStatus(@"writeSectors") < 0
-          debug("  [writeSectors] CMD13 status check FAILED after writing ", udec_(sectors_written), " sectors")
+          debug[CH_SECTOR]("  [writeSectors] CMD13 status check FAILED after writing ", udec_(sectors_written), " sectors")
           sectors_written := 0                                                          ' Card reports error - writes can't be trusted
 
 ' ================================================================================
@@ -9820,7 +9835,7 @@ PRI waitR1Response() : response | timeout, resp
       quit
     else
       if getct() - timeout > 0
-        debug("  [waitR1Response] TIMEOUT")
+        debug[CH_STATUS]("  [waitR1Response] TIMEOUT")
         response := E_TIMEOUT
         quit
 
@@ -9846,12 +9861,12 @@ PRI waitDataToken() : status | timeout, resp
     elseif resp <> $FF                                                              ' Error token (not $FF, not $FE)
       last_cmd18_token := resp
       last_cmd18_result := 2                                                          ' Error token
-      debug("  [waitDataToken] ERROR token: $", uhex_byte_(resp))
+      debug[CH_STATUS]("  [waitDataToken] ERROR token: $", uhex_byte_(resp))
       status := E_BAD_RESPONSE
       quit
     else
       if getct() - timeout > 0
-        debug("  [waitDataToken] TIMEOUT")
+        debug[CH_STATUS]("  [waitDataToken] TIMEOUT")
         status := E_TIMEOUT
         quit
 
@@ -9874,7 +9889,7 @@ PRI waitDataResponse() : response | timeout, resp
         quit
       ' Not a valid response format, keep polling (might be noise)
     if getct() - timeout > 0
-      debug("  [waitDataResponse] TIMEOUT")
+      debug[CH_STATUS]("  [waitDataResponse] TIMEOUT")
       response := E_TIMEOUT
       quit
 
@@ -9895,7 +9910,7 @@ PRI waitBusyComplete() : status | timeout, resp
       quit
     else
       if getct() - timeout > 0
-        debug("  [waitBusyComplete] TIMEOUT - card still busy")
+        debug[CH_STATUS]("  [waitBusyComplete] TIMEOUT - card still busy")
         status := E_CARD_BUSY
         quit
 
@@ -9937,7 +9952,7 @@ PRI sendStopTransmission() : result | resp, idx, timeout
       quit
     if getct() - timeout > 0
       cmd12_capture_len := idx
-      debug("  [sendStopTransmission] TIMEOUT waiting for R1")
+      debug[CH_RECOVER]("  [sendStopTransmission] TIMEOUT waiting for R1")
       result := E_TIMEOUT
       return
 
@@ -9949,7 +9964,7 @@ PRI sendStopTransmission() : result | resp, idx, timeout
   ' Evaluate R1 response
   if last_cmd12_r1 <> $00
     last_cmd12_busy := 2                                                       ' R1 error
-    debug("  [sendStopTransmission] R1 error: $", uhex_byte_(last_cmd12_r1))
+    debug[CH_RECOVER]("  [sendStopTransmission] R1 error: $", uhex_byte_(last_cmd12_r1))
     result := E_IO_ERROR
   else
     ' Wait for busy to complete (card may still be finishing last block)
@@ -9975,11 +9990,11 @@ PRI recoverToIdle() : status
   ' Verify card released MISO (should be high via pull-up when CS is deasserted)
   if pinr(PIN_MISO) == 0
     ' Card still holding MISO low - try extended clocking
-    debug("  [recoverToIdle] MISO still low after 80 clocks, extending...")
+    debug[CH_RECOVER]("  [recoverToIdle] MISO still low after 80 clocks, extending...")
     repeat 20
       sp_transfer_8($FF)                                                          ' 160 more clocks - extended recovery
     if pinr(PIN_MISO) == 0
-      debug("  [recoverToIdle] FAILED: card holding MISO low after 240 clocks")
+      debug[CH_RECOVER]("  [recoverToIdle] FAILED: card holding MISO low after 240 clocks")
       status := -1  ' Card stuck - caller must handle
 
 PRI sendCmd13Transaction() : r1, status | idx, resp, timeout
@@ -10064,24 +10079,24 @@ PRI probeCmd13() | r1, status
   r1, status := sendCmd13Transaction()
 
   if r1 < 0
-    debug("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
+    debug[CH_STATUS]("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
     cmd13_reliable := FALSE
     card_warning_flags |= CW_CMD13_UNRELIABLE
 
   ' Check 1: R1 bit 7 must be 0 per SD spec
   elseif r1 & $80
-    debug("    [probeCmd13] R1 bit 7 set ($", uhex_byte_(r1), ") - marking CMD13 unreliable")
+    debug[CH_STATUS]("    [probeCmd13] R1 bit 7 set ($", uhex_byte_(r1), ") - marking CMD13 unreliable")
     cmd13_reliable := FALSE
     card_warning_flags |= CW_CMD13_UNRELIABLE
 
   ' Check 2: 3+ error bits in STATUS on an idle card = garbage data
   elseif ones status >= 3
-    debug("    [probeCmd13] STATUS has ", udec_(ones status), " error bits ($", uhex_byte_(status), ") - marking CMD13 unreliable")
+    debug[CH_STATUS]("    [probeCmd13] STATUS has ", udec_(ones status), " error bits ($", uhex_byte_(status), ") - marking CMD13 unreliable")
     cmd13_reliable := FALSE
     card_warning_flags |= CW_CMD13_UNRELIABLE
 
   else
-    debug("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
+    debug[CH_STATUS]("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
 
 PRI probeCmd23() | scr[2], cmd_support, resp
 ' Probe CMD23 support at init time.
@@ -10100,20 +10115,20 @@ PRI probeCmd23() | scr[2], cmd_support, resp
   if readSCR(@scr)
     cmd_support := scr.byte[3] & $03
     if cmd_support & $02
-      debug("    [probeCmd23] SCR advertises CMD23 (CMD_SUPPORT=$", uhex_byte_(cmd_support), ") - verifying...")
+      debug[CH_STATUS]("    [probeCmd23] SCR advertises CMD23 (CMD_SUPPORT=$", uhex_byte_(cmd_support), ") - verifying...")
 
       ' Step 2: Send real CMD23 with count=1 to verify SPI mode support
       resp := cmd(CMD23, 1)
       if resp == $00
         cmd23_supported := TRUE
         card_warning_flags |= CW_CMD23_SUPPORTED
-        debug("    [probeCmd23] CMD23 CONFIRMED - card accepts SET_BLOCK_COUNT in SPI mode")
+        debug[CH_STATUS]("    [probeCmd23] CMD23 CONFIRMED - card accepts SET_BLOCK_COUNT in SPI mode")
       else
-        debug("    [probeCmd23] CMD23 REJECTED R1=$", uhex_byte_(resp), " - not supported in SPI mode")
+        debug[CH_STATUS]("    [probeCmd23] CMD23 REJECTED R1=$", uhex_byte_(resp), " - not supported in SPI mode")
     else
-      debug("    [probeCmd23] CMD23 not advertised (CMD_SUPPORT=$", uhex_byte_(cmd_support), ")")
+      debug[CH_STATUS]("    [probeCmd23] CMD23 not advertised (CMD_SUPPORT=$", uhex_byte_(cmd_support), ")")
   else
-    debug("    [probeCmd23] SCR read failed - assuming CMD23 not supported")
+    debug[CH_STATUS]("    [probeCmd23] SCR read failed - assuming CMD23 not supported")
 
 PRI checkCardStatus(caller) : status | r1, r2_status
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.
@@ -10132,32 +10147,32 @@ PRI checkCardStatus(caller) : status | r1, r2_status
   r1, r2_status := sendCmd13Transaction()
 
   if r1 < 0
-    debug("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
+    debug[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
     status := E_TIMEOUT
 
   ' Check for errors
   elseif r1 <> $00
-    debug("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
+    debug[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
     status := -1
 
   elseif r2_status <> $00
-    debug("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(r2_status))
+    debug[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(r2_status))
     if r2_status & CSR_OUT_OF_RANGE
-      debug("    -> OUT_OF_RANGE")
+      debug[CH_STATUS]("    -> OUT_OF_RANGE")
     if r2_status & CSR_ERASE_PARAM
-      debug("    -> ERASE_PARAM")
+      debug[CH_STATUS]("    -> ERASE_PARAM")
     if r2_status & CSR_WP_VIOLATION
-      debug("    -> WP_VIOLATION")
+      debug[CH_STATUS]("    -> WP_VIOLATION")
     if r2_status & CSR_CARD_ECC_FAILED
-      debug("    -> CARD_ECC_FAILED")
+      debug[CH_STATUS]("    -> CARD_ECC_FAILED")
     if r2_status & CSR_CC_ERROR
-      debug("    -> CC_ERROR")
+      debug[CH_STATUS]("    -> CC_ERROR")
     if r2_status & CSR_ERROR
-      debug("    -> ERROR")
+      debug[CH_STATUS]("    -> ERROR")
     if r2_status & CSR_WP_ERASE_SKIP
-      debug("    -> WP_ERASE_SKIP")
+      debug[CH_STATUS]("    -> WP_ERASE_SKIP")
     if r2_status & CSR_CARD_IS_LOCKED
-      debug("    -> CARD_IS_LOCKED")
+      debug[CH_STATUS]("    -> CARD_IS_LOCKED")
     status := -1
 
   else
@@ -10282,7 +10297,7 @@ PRI parseTransSpeed(p_csd) : speed_hz | tran_speed, time_val, mult_val
     other: mult_val := 0               ' Reserved
 
   speed_hz := time_val * mult_val
-  debug("  [parseTransSpeed] TRAN_SPEED=$", uhex_byte_(tran_speed), " -> ", udec(speed_hz / 1_000_000), " MHz")
+  debug[CH_INIT]("  [parseTransSpeed] TRAN_SPEED=$", uhex_byte_(tran_speed), " -> ", udec(speed_hz / 1_000_000), " MHz")
 
 PRI parseMfrId(p_cid) : mfr_id
 ' Extract manufacturer ID from CID register byte 0.
@@ -10292,7 +10307,7 @@ PRI parseMfrId(p_cid) : mfr_id
 ' @returns mfr_id - Manufacturer ID byte
 
   mfr_id := byte[p_cid]
-  debug("  [parseMfrId] Manufacturer ID=$", uhex_byte_(mfr_id))
+  debug[CH_IDENT]("  [parseMfrId] Manufacturer ID=$", uhex_byte_(mfr_id))
 
 PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, time_val, time_unit
 ' Extract timeout values from CSD register - sets card_read_timeout_ms and card_write_timeout_ms.
@@ -10316,7 +10331,7 @@ PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, tim
     ' can exceed this on cold writes or sector 0. Use 500ms for reliability.
     card_read_timeout_ms := 100                                                 ' 100ms read timeout
     card_write_timeout_ms := 500                                                ' 500ms write timeout (2x spec for margin)
-    debug("  [parseTimeouts] SDHC/SDXC: read=", udec_(card_read_timeout_ms), "ms, write=", udec_(card_write_timeout_ms), "ms")
+    debug[CH_IDENT]("  [parseTimeouts] SDHC/SDXC: read=", udec_(card_read_timeout_ms), "ms, write=", udec_(card_write_timeout_ms), "ms")
   else
     ' CSD Version 1.0 (SDSC): Calculate from TAAC, NSAC, R2W_FACTOR
     taac := byte[p_csd + 1]                                                     ' Data read access time-1 (TAAC)
@@ -10360,8 +10375,8 @@ PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, tim
     ' Write timeout = read timeout * 2^R2W_FACTOR
     card_write_timeout_ms := (card_read_timeout_ms << r2w_factor) #> 250 <# 1000  ' Min 250ms, max 1000ms
 
-    debug("  [parseTimeouts] SDSC: TAAC=$", uhex_byte_(taac), " NSAC=", udec_(nsac), " R2W=", udec_(r2w_factor))
-    debug("  [parseTimeouts] SDSC: read=", udec_(card_read_timeout_ms), "ms, write=", udec_(card_write_timeout_ms), "ms")
+    debug[CH_IDENT]("  [parseTimeouts] SDSC: TAAC=$", uhex_byte_(taac), " NSAC=", udec_(nsac), " R2W=", udec_(r2w_factor))
+    debug[CH_IDENT]("  [parseTimeouts] SDSC: read=", udec_(card_read_timeout_ms), "ms, write=", udec_(card_write_timeout_ms), "ms")
 
 PRI identifyCard() | cid[4], csd[4]
 ' Read card identity and configure adaptive timing.
@@ -10371,29 +10386,29 @@ PRI identifyCard() | cid[4], csd[4]
 ' @local cid - CID register data (4 longs = 16 bytes)
 ' @local csd - CSD register data (4 longs = 16 bytes)
 
-  debug("  [identifyCard] Reading card registers...")
+  debug[CH_IDENT]("  [identifyCard] Reading card registers...")
 
   ' Read CID to identify manufacturer and serial number
   if readCID(@cid)
     card_mfr_id := parseMfrId(@cid)
     ' Extract PSN (Product Serial Number) from CID bytes 9-12 (big-endian)
     card_serial_number := BYTE[@cid][9] << 24 | BYTE[@cid][10] << 16 | BYTE[@cid][11] << 8 | BYTE[@cid][12]
-    debug("  [identifyCard] PSN=$", uhex_(card_serial_number))
+    debug[CH_IDENT]("  [identifyCard] PSN=$", uhex_(card_serial_number))
     case card_mfr_id
       $1D:                                                                      ' AData/PNY
         card_is_slow := true
-        debug("  [identifyCard] Detected PNY/AData card - using conservative timing")
+        debug[CH_IDENT]("  [identifyCard] Detected PNY/AData card - using conservative timing")
       $03:                                                                      ' SanDisk
         card_is_slow := false
-        debug("  [identifyCard] Detected SanDisk card - using standard timing")
+        debug[CH_IDENT]("  [identifyCard] Detected SanDisk card - using standard timing")
       $27:                                                                      ' Samsung
         card_is_slow := false
-        debug("  [identifyCard] Detected Samsung card - using standard timing")
+        debug[CH_IDENT]("  [identifyCard] Detected Samsung card - using standard timing")
       other:
         card_is_slow := false
-        debug("  [identifyCard] Unknown manufacturer - using standard timing")
+        debug[CH_IDENT]("  [identifyCard] Unknown manufacturer - using standard timing")
   else
-    debug("  [identifyCard] WARNING: Could not read CID")
+    debug[CH_IDENT]("  [identifyCard] WARNING: Could not read CID")
     card_mfr_id := 0
     card_serial_number := 0
     card_is_slow := false
@@ -10403,7 +10418,7 @@ PRI identifyCard() | cid[4], csd[4]
     card_max_speed_hz := parseTransSpeed(@csd)
     parseTimeouts(@csd)
   else
-    debug("  [identifyCard] WARNING: Could not read CSD")
+    debug[CH_IDENT]("  [identifyCard] WARNING: Could not read CSD")
     card_max_speed_hz := SD_FALLBACK_SPEED_HZ                                    ' Default to 25 MHz
     card_read_timeout_ms := 100                                                 ' Safe defaults
     card_write_timeout_ms := 500
@@ -10415,14 +10430,14 @@ PRI setOptimalSpeed()
 
   if card_is_slow
     do_set_spi_speed(20_000_000)                                                     ' 20 MHz for PNY cards
-    debug("  [setOptimalSpeed] Limited to 20 MHz for slow card")
+    debug[CH_INIT]("  [setOptimalSpeed] Limited to 20 MHz for slow card")
   else
     ' Use card's reported max speed, capped at 25 MHz for SPI mode
     if card_max_speed_hz > SD_FALLBACK_SPEED_HZ
       do_set_spi_speed(SD_FALLBACK_SPEED_HZ)
     else
       do_set_spi_speed(card_max_speed_hz)
-    debug("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
+    debug[CH_INIT]("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 
 PRI sendAppCmdPrefix() : resp
@@ -10443,9 +10458,9 @@ PRI readSCR(p_scr) : ok
 ' @returns ok - TRUE on success, FALSE on failure
 
   ok := sendAppCmdPrefix()
-  debug("  [readSCR] CMD55 response: $", uhex_byte_(ok))
+  debug[CH_IDENT]("  [readSCR] CMD55 response: $", uhex_byte_(ok))
   if ok > $01                                                                    ' Accept $00 or $01 (idle)
-    debug("  [readSCR] CMD55 error response")
+    debug[CH_IDENT]("  [readSCR] CMD55 error response")
     ok := false
   else
     ok := readDataRegister(ACMD51, 0, CRC_ACMD51, p_scr, 8)
@@ -10458,9 +10473,9 @@ PRI readSDStatus(p_buf) : ok
 ' @returns ok - TRUE on success, FALSE on failure
 
   ok := sendAppCmdPrefix()
-  debug("  [readSDStatus] CMD55 response: $", uhex_byte_(ok))
+  debug[CH_IDENT]("  [readSDStatus] CMD55 response: $", uhex_byte_(ok))
   if ok > $01                                                                    ' Accept $00 or $01 (idle)
-    debug("  [readSDStatus] CMD55 error response")
+    debug[CH_IDENT]("  [readSDStatus] CMD55 error response")
     ok := false
   else
     ok := readDataRegister(CMD13, 0, CRC_NONE, p_buf, SD_STATUS_BYTES)
@@ -10485,36 +10500,36 @@ PRI queryHighSpeedSupport() : supported | scr[2], status[16], sd_spec
 ' @local status - CMD6 status structure (16 longs = 64 bytes)
 ' @local sd_spec - SD spec version from SCR
 
-  debug("  [queryHighSpeedSupport] Checking card capabilities...")
+  debug[CH_HSPEED]("  [queryHighSpeedSupport] Checking card capabilities...")
 
   ' First check SCR for CMD6 support (SD 2.0+ cards support CMD6)
   if not readSCR(@scr)
-    debug("  [queryHighSpeedSupport] Failed to read SCR")
+    debug[CH_HSPEED]("  [queryHighSpeedSupport] Failed to read SCR")
     supported := false
 
   else
     sd_spec := scr.byte[0] & $0F                                                  '  SD_SPEC in bits [3:0]
-    debug("  [queryHighSpeedSupport] SD_SPEC=", udec_(sd_spec))
+    debug[CH_HSPEED]("  [queryHighSpeedSupport] SD_SPEC=", udec_(sd_spec))
     if sd_spec < 2
-      debug("  [queryHighSpeedSupport] Card is SD 1.x - CMD6 not supported")
+      debug[CH_HSPEED]("  [queryHighSpeedSupport] Card is SD 1.x - CMD6 not supported")
       supported := false
     else
-      debug("  [queryHighSpeedSupport] Card is SD 2.0+ - CMD6 supported")
+      debug[CH_HSPEED]("  [queryHighSpeedSupport] Card is SD 2.0+ - CMD6 supported")
 
       ' Query function group 1 using CMD6 mode 0 (check)
       ' Argument: 0x00FFFFF1 = check mode, access function group 1, query high-speed
       if not sendCMD6($00FFFFF1, @status)
-        debug("  [queryHighSpeedSupport] CMD6 query failed")
+        debug[CH_HSPEED]("  [queryHighSpeedSupport] CMD6 query failed")
         supported := false
 
       ' Status bytes 12-13 contain function group 1 support bits
       ' Bit 1 of byte 13 indicates high-speed support
       elseif (status.byte[13] & $02) == 0
-        debug("  [queryHighSpeedSupport] High-speed function not supported")
+        debug[CH_HSPEED]("  [queryHighSpeedSupport] High-speed function not supported")
         supported := false
 
       else
-        debug("  [queryHighSpeedSupport] High-speed (50 MHz) IS SUPPORTED")
+        debug[CH_HSPEED]("  [queryHighSpeedSupport] High-speed (50 MHz) IS SUPPORTED")
         supported := true
 
 PRI switchToHighSpeed() : ok | status[16]
@@ -10523,22 +10538,22 @@ PRI switchToHighSpeed() : ok | status[16]
 ' @returns ok - TRUE if switch succeeded
 ' @local status - CMD6 status structure (16 longs = 64 bytes)
 
-  debug("  [switchToHighSpeed] Sending CMD6 switch command...")
+  debug[CH_HSPEED]("  [switchToHighSpeed] Sending CMD6 switch command...")
 
   ' Switch to high-speed using CMD6 mode 1 (switch)
   ' Argument: 0x80FFFFF1 = switch mode, access function group 1, select high-speed
   if not sendCMD6($80FFFFF1, @status)
-    debug("  [switchToHighSpeed] CMD6 switch failed")
+    debug[CH_HSPEED]("  [switchToHighSpeed] CMD6 switch failed")
     ok := false
 
   ' Verify switch succeeded - check function group 1 selection in status
   ' Byte 16, bits 3:0 should be 1 (high-speed selected)
   elseif (status.byte[16] & $0F) <> 1
-    debug("  [switchToHighSpeed] Switch not accepted, status=$", uhex_byte_(status.byte[16]))
+    debug[CH_HSPEED]("  [switchToHighSpeed] Switch not accepted, status=$", uhex_byte_(status.byte[16]))
     ok := false
 
   else
-    debug("  [switchToHighSpeed] Successfully switched to high-speed mode")
+    debug[CH_HSPEED]("  [switchToHighSpeed] Successfully switched to high-speed mode")
     ok := true
 
 #endif
@@ -10589,7 +10604,7 @@ PRI readSectorSlow(sector, p_buffer) : status | data, idx, timeout
         diag_crc_matches++
       else
         diag_crc_mismatches++
-        debug("  [readSectorSlow] CRC MISMATCH! recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
+        debug[CH_INIT]("  [readSectorSlow] CRC MISMATCH! recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
 
     pinh(PIN_SD_CS)                                                                      ' Deselect card
     status := 0  ' Success
