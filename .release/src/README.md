@@ -28,16 +28,16 @@ See the [Tutorial](../DOCs/DUAL-DRIVER-TUTORIAL.md) for complete examples coveri
 
 ### Conditional Compilation
 
-The SD subsystem builds in **minimal mode** by default (core file operations only). Enable optional modules with `#PRAGMA EXPORTDEF` in your top-level file before the OBJ declaration:
+The SD subsystem builds in **minimal mode** by default (core file operations only). Enable optional modules with `#pragma exportdef` in your top-level file before the OBJ declaration:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW        ' Raw sector access
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
-#PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
+#pragma exportdef SD_INCLUDE_RAW        ' Raw sector access
+#pragma exportdef SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
+#pragma exportdef SD_INCLUDE_SPEED      ' High-speed mode control
+#pragma exportdef SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
 
 ' Or include everything:
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 ```
 
 ## EXAMPLES/

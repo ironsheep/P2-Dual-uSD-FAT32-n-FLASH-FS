@@ -1160,11 +1160,11 @@ Five feature flags control optional SD features. Flash features are always compi
 | `SD_INCLUDE_DEBUG` | CRC diagnostics, test hooks, hex dump utilities |
 | `SD_INCLUDE_ALL` | All four flags above |
 
-Enable flags with `#PRAGMA EXPORTDEF` **before** the OBJ declaration:
+Enable flags with `#pragma exportdef` **before** the OBJ declaration:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"
@@ -1173,7 +1173,7 @@ OBJ
 Or enable everything:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"

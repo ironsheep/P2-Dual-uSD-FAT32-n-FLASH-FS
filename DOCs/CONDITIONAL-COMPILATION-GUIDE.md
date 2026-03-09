@@ -8,7 +8,7 @@
 
 The Dual FS driver (`dual_sd_fat32_flash_fs.spin2`) uses a conditional compilation system to let you include only the SD card features your application needs. The core driver compiles to ~59 KB with all standard filesystem operations for both SD and Flash. Enabling all optional SD features brings it to ~62 KB. Since the Propeller 2 has 512 KB of hub RAM this isn't usually a constraint, but the mechanism keeps the driver well-organized and gives you control over what ships in your binary.
 
-Feature flags are declared in your **top-level application file** (the file that contains `_CLKFREQ` and the `OBJ` declaration for the driver). The flags propagate down to the driver at compile time using `#PRAGMA EXPORTDEF` directives.
+Feature flags are declared in your **top-level application file** (the file that contains `_CLKFREQ` and the `OBJ` declaration for the driver). The flags propagate down to the driver at compile time using `#pragma exportdef` directives.
 
 All feature flags control **SD card** capabilities only. The Flash filesystem is always compiled into the unified driver and has no conditional flags.
 
@@ -58,15 +58,15 @@ This is sufficient for the vast majority of applications. The example programs (
 
 ### Simple Case (pnut-ts only)
 
-If you only need to compile with pnut-ts (the primary compiler for this project), enabling features is straightforward. Place the `#PRAGMA EXPORTDEF` directives **before** your `OBJ` declaration:
+If you only need to compile with pnut-ts (the primary compiler for this project), enabling features is straightforward. Place the `#pragma exportdef` directives **before** your `OBJ` declaration:
 
 ```spin2
 CON
     _CLKFREQ = 350_000_000
 
 ' Enable raw sector access and debug diagnostics
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_DEBUG
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -75,7 +75,7 @@ OBJ
 Or to enable everything:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -83,12 +83,12 @@ OBJ
 
 ### When Your File Also Needs the Flag Locally
 
-`#PRAGMA EXPORTDEF` propagates a flag to child objects (the driver). It does **not** define the flag in your own file. If your top-level code also has `#IFDEF` blocks that check a flag, you need **both** directives:
+`#pragma exportdef` propagates a flag to child objects (the driver). It does **not** define the flag in your own file. If your top-level code also has `#ifdef` blocks that check a flag, you need **both** directives:
 
 ```spin2
 ' Make it available locally AND propagate to the driver
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -97,21 +97,21 @@ PUB go() | workerCog, depth
     workerCog := dfs.init()
     dfs.mount(dfs.DEV_BOTH)
 
-    ' This #IFDEF needs the local #DEFINE to work:
-#IFDEF SD_INCLUDE_STACK_CHECK
+    ' This #ifdef needs the local #define to work:
+#ifdef SD_INCLUDE_STACK_CHECK
     depth := dfs.reportStackDepth()
     debug("Stack depth: ", udec_(depth))
-#ENDIF
+#endif
 ```
 
 The rule is simple:
 
 | Directive | Scope | Purpose |
 |-----------|-------|---------|
-| `#DEFINE` | Current file only | Controls `#IFDEF` guards in your file |
-| `#PRAGMA EXPORTDEF` | Child objects (OBJ) | Makes the flag visible to the driver |
+| `#define` | Current file only | Controls `#ifdef` guards in your file |
+| `#pragma exportdef` | Child objects (OBJ) | Makes the flag visible to the driver |
 
-If your application code doesn't use `#IFDEF` blocks for the flag (the common case), you only need `#PRAGMA EXPORTDEF`.
+If your application code doesn't use `#ifdef` blocks for the flag (the common case), you only need `#pragma exportdef`.
 
 ---
 
@@ -123,92 +123,92 @@ The project supports three Spin2 compilers. Each handles flag propagation differ
 
 | Compiler | Built-in Define | Flag Propagation |
 |----------|----------------|------------------|
-| **Spin Tools IDE** | `__SPINTOOLS__` | `#DEFINE` automatically propagates to child objects |
+| **Spin Tools IDE** | `__SPINTOOLS__` | `#define` automatically propagates to child objects |
 | **flexspin** | `__FLEXSPIN__` | Requires both `#define` and `#pragma exportdef` (lowercase) |
-| **pnut-ts** | *(neither defined)* | Requires `#PRAGMA EXPORTDEF` (case insensitive) |
+| **pnut-ts** | *(neither defined)* | Requires `#pragma exportdef` (case insensitive) |
 
 ### Why Three Branches?
 
 The compilers differ in flag propagation semantics:
 
-- **Spin Tools** `#DEFINE` automatically exports to child objects. flexspin and pnut-ts require an explicit `#pragma exportdef` to propagate flags.
+- **Spin Tools** `#define` automatically exports to child objects. flexspin and pnut-ts require an explicit `#pragma exportdef` to propagate flags.
 - **flexspin** requires lowercase directives (`#define`, `#pragma exportdef`).
-- **pnut-ts** preprocessor directives are case insensitive. The project uses uppercase (`#DEFINE`, `#PRAGMA EXPORTDEF`) by convention.
+- **pnut-ts** preprocessor directives are case insensitive. The project uses uppercase (`#define`, `#pragma exportdef`) by convention.
 
 ### The Standard Pattern
 
 Here is the three-branch pattern used throughout the project. This example enables `SD_INCLUDE_RAW` and `SD_INCLUDE_DEBUG`:
 
 ```spin2
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_DEBUG
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
 ```
 
 What each branch does:
 
-- **Spin Tools branch** (`__SPINTOOLS__`): Uses `#DEFINE` only. The IDE automatically propagates defines to child objects, so no explicit export is needed.
+- **Spin Tools branch** (`__SPINTOOLS__`): Uses `#define` only. The IDE automatically propagates defines to child objects, so no explicit export is needed.
 
 - **flexspin branch** (`__FLEXSPIN__`): Uses lowercase `#define` for the local definition plus lowercase `#pragma exportdef` to propagate to child objects. Both are required.
 
-- **pnut-ts branch** (`#ELSE`): The fallback. Uses `#PRAGMA EXPORTDEF` to propagate to the driver (uppercase by convention; pnut-ts is case insensitive). Adds `#DEFINE` only if the current file itself needs to test the flag with `#IFDEF`.
+- **pnut-ts branch** (`#else`): The fallback. Uses `#pragma exportdef` to propagate to the driver (uppercase by convention; pnut-ts is case insensitive). Adds `#define` only if the current file itself needs to test the flag with `#ifdef`.
 
 ### Pattern Variations in the Codebase
 
 **Selective features** (e.g., speed tests need SPEED + REGISTERS):
 
 ```spin2
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_SPEED
-#DEFINE SD_INCLUDE_REGISTERS
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_SPEED
+#define SD_INCLUDE_REGISTERS
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_SPEED
 #pragma exportdef SD_INCLUDE_SPEED
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_REGISTERS
+#endif
 ```
 
 **All features** (e.g., demo shell, format utility):
 
 ```spin2
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 ```
 
 **Stack check only** (e.g., diagnostic tests):
 
 ```spin2
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 ```
 
-Note the pnut-ts branch includes `#DEFINE` here because the test file's own code uses `#IFDEF SD_INCLUDE_STACK_CHECK` blocks.
+Note the pnut-ts branch includes `#define` here because the test file's own code uses `#ifdef SD_INCLUDE_STACK_CHECK` blocks.
 
 **No flags at all** (e.g., seek tests, directory tests): Most test files and all example programs omit the three-branch block entirely. They compile with the core driver, which is all they need.
 
@@ -218,8 +218,8 @@ If your project only targets one compiler, you can simplify:
 
 **pnut-ts only:**
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_DEBUG
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -238,8 +238,8 @@ OBJ
 
 **Spin Tools only:**
 ```spin2
-#DEFINE SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_DEBUG
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -251,41 +251,41 @@ The three-branch pattern is only needed when the same source must compile under 
 
 ## How the Driver Uses Feature Flags
 
-Inside the driver (`dual_sd_fat32_flash_fs.spin2`), each optional feature is completely enclosed in `#IFDEF` / `#ENDIF` blocks. When a flag is not defined, the compiler removes all related code: public methods, private methods, worker cog command handlers, and command code constants.
+Inside the driver (`dual_sd_fat32_flash_fs.spin2`), each optional feature is completely enclosed in `#ifdef` / `#endif` blocks. When a flag is not defined, the compiler removes all related code: public methods, private methods, worker cog command handlers, and command code constants.
 
 ### SD_INCLUDE_ALL Expansion
 
 The driver expands `SD_INCLUDE_ALL` into the four individual flags:
 
 ```spin2
-#IFDEF SD_INCLUDE_ALL
-#IFNDEF SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_RAW
-#ENDIF
-#IFNDEF SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_REGISTERS
-#ENDIF
-#IFNDEF SD_INCLUDE_SPEED
-#DEFINE SD_INCLUDE_SPEED
-#ENDIF
-#IFNDEF SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_DEBUG
-#ENDIF
-#ENDIF
+#ifdef SD_INCLUDE_ALL
+#ifndef SD_INCLUDE_RAW
+#define SD_INCLUDE_RAW
+#endif
+#ifndef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_REGISTERS
+#endif
+#ifndef SD_INCLUDE_SPEED
+#define SD_INCLUDE_SPEED
+#endif
+#ifndef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_DEBUG
+#endif
+#endif
 ```
 
-The `#IFNDEF` guards prevent double-definition if you happen to enable both `SD_INCLUDE_ALL` and an individual flag.
+The `#ifndef` guards prevent double-definition if you happen to enable both `SD_INCLUDE_ALL` and an individual flag.
 
 ### SD_INCLUDE_SPEED Auto-Includes Registers
 
 The driver automatically defines `SD_INCLUDE_REGISTERS` when `SD_INCLUDE_SPEED` is enabled:
 
 ```spin2
-#IFDEF SD_INCLUDE_SPEED
-#IFNDEF SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_REGISTERS
-#ENDIF
-#ENDIF
+#ifdef SD_INCLUDE_SPEED
+#ifndef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_REGISTERS
+#endif
+#endif
 ```
 
 This means you never need to explicitly enable REGISTERS when using SPEED.
@@ -308,7 +308,7 @@ If a flag is not defined, calling any of its gated methods causes a **linker err
 
 ### Worker Cog Command Dispatch
 
-The worker cog's command handler also uses `#IFDEF` blocks around each feature's command cases. Only the command codes for enabled features exist in the dispatch table. Disabled command codes are not compiled, so they cannot be accidentally invoked.
+The worker cog's command handler also uses `#ifdef` blocks around each feature's command cases. Only the command codes for enabled features exist in the dispatch table. Disabled command codes are not compiled, so they cannot be accidentally invoked.
 
 ---
 
@@ -467,7 +467,7 @@ PUB go() | workerCog, sdHandle, flHandle
 ### Application with raw sector access
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -476,14 +476,14 @@ OBJ
 ### Application with all features (multi-compiler)
 
 ```spin2
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"
@@ -492,7 +492,7 @@ OBJ
 ### Application with debug diagnostics
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
 
 OBJ
     dfs : "dual_sd_fat32_flash_fs"

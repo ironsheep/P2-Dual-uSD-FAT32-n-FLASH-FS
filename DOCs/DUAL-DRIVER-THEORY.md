@@ -583,11 +583,11 @@ Five feature flags control optional SD features. Flash features are always compi
 
 ### Enabling Flags
 
-Flags are exported from the top-level file using `#PRAGMA EXPORTDEF` before the `OBJ` declaration:
+Flags are exported from the top-level file using `#pragma exportdef` before the `OBJ` declaration:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"
@@ -596,7 +596,7 @@ OBJ
 Or enable everything:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 
 OBJ
   fs : "dual_sd_fat32_flash_fs"
