@@ -2,27 +2,27 @@
 
 All notable changes to the P2 Dual SD FAT32 + Flash Filesystem driver will be documented in this file.
 
-Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/). See [changelog-style-guide.md](DOCs/procedures/changelog-style-guide.md) for conventions.
+Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- NCO write alignment for power-of-2 SPI half-periods (`writeSector()` and `writeSectors()`)
-- Removed controller-specific speed limiting (`card_is_slow`) -- the NCO fix is universal
-
 ## [1.1.0] - 2026-03-09
 
-### Added
+### Fixed
+- **BUGFIX**: SPI write data integrity at power-of-2 half-period clock speeds (`writeSector()` and `writeSectors()`)
 
+### Added
 - **Selective debug**: 12-channel `DEBUG_MASK` system for `debug[CH_xxx]()` output -- developers enable 2-3 channels at a time to stay under the P2 255-record limit
 - **FlexSpin compatibility**: All 43 compilable files build with both pnut-ts and FlexSpin 7.6.1
 
 ### Changed
 - Version directive upgraded from `{Spin2_v45}` to `{Spin2_v46}` (required for `debug[N]()` syntax)
 - `DEBUG_DISABLE = 1` replaced by `DEBUG_MASK = 0` for production builds (finer control, same zero overhead)
-- 10 inline PASM methods use CON pin constants instead of local variables (FlexSpin requirement)
-- Unused variables removed across all 43 compiled files (FlexSpin `-Wall` clean)
-- Documentation uses lowercase preprocessor directives (`#ifdef`, `#pragma exportdef`) matching source convention
+- Unused variables removed across all 43 compiled files 
+- Converted to lowercase preprocessor directives (`#ifdef`, `#pragma exportdef`) 
+
+### Removed
+- Manufacturer-specific SPI speed limiting -- all cards now use full reported speed
 
 ## [1.0.0] - 2026-03-07
 
@@ -48,5 +48,6 @@ Initial release of the unified dual-FS driver for the Parallax Propeller 2.
 ### Hardware Verified
 - Tested on P2 Edge Module with 32 GB GigaStone and Elite SD cards -- 29 suites, 1,308 tests, 0 failures on both
 
-[Unreleased]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/releases/tag/v1.0.0
