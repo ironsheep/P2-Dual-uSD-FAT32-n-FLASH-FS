@@ -6,6 +6,24 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
+### Fixed
+- NCO write alignment for power-of-2 SPI half-periods (`writeSector()` and `writeSectors()`)
+- Removed controller-specific speed limiting (`card_is_slow`) -- the NCO fix is universal
+
+## [1.1.0] - 2026-03-09
+
+### Added
+
+- **Selective debug**: 12-channel `DEBUG_MASK` system for `debug[CH_xxx]()` output -- developers enable 2-3 channels at a time to stay under the P2 255-record limit
+- **FlexSpin compatibility**: All 43 compilable files build with both pnut-ts and FlexSpin 7.6.1
+
+### Changed
+- Version directive upgraded from `{Spin2_v45}` to `{Spin2_v46}` (required for `debug[N]()` syntax)
+- `DEBUG_DISABLE = 1` replaced by `DEBUG_MASK = 0` for production builds (finer control, same zero overhead)
+- 10 inline PASM methods use CON pin constants instead of local variables (FlexSpin requirement)
+- Unused variables removed across all 43 compiled files (FlexSpin `-Wall` clean)
+- Documentation uses lowercase preprocessor directives (`#ifdef`, `#pragma exportdef`) matching source convention
+
 ## [1.0.0] - 2026-03-07
 
 Initial release of the unified dual-FS driver for the Parallax Propeller 2.

@@ -1,0 +1,336 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_freq_sweep_tests.spin2
+''   Purpose.... Characterize max reliable SPI speed with NCO write alignment fix
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 09 MAR 2026
+''
+'' =================================================================================================
+''
+'' Characterizes the maximum reliable SPI speed by sweeping 15-25 MHz in 1 MHz steps.
+'' At each speed, performs:
+''   Phase 1: 50 single-sector reads (CMD17) with CRC check
+''   Phase 2: 10 multi-sector reads (CMD18, 8 sectors each)
+''   Phase 3: 5 write-read-verify round-trips (8 sectors each)
+''
+'' Adapted from the standalone SD driver's SD_freq_sweep_tests.spin2 for the
+'' unified dual-FS driver (dual_sd_fat32_flash_fs.spin2).
+''
+'' Usage: Change _CLKFREQ to test different sysclk values, then compile and run.
+''   350 MHz: hp=7 at 25 MHz (default)
+''   270 MHz: hp=8 at 17-19 MHz targets
+''   250 MHz: hp=8 at 16-17 MHz targets
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' Test parameters
+     SECTOR_SIZE      = 512
+     READ_SECTOR_BASE = 1_000                    ' Read from early data area
+     WRITE_SECTOR_BASE = 200_100                 ' Write to safe area (above multiblock tests)
+     READS_PER_SPEED  = 50                       ' Single-sector reads per speed level
+     MULTI_READS      = 10                       ' Multi-sector read iterations per speed
+     MULTI_COUNT      = 8                        ' Sectors per multi-sector read
+     WRITE_VERIFY_ITERS = 5                      ' Write-read-verify iterations per speed
+
+     ' Speed levels: 15 MHz to 25 MHz in 1 MHz steps
+     NUM_SPEEDS       = 11
+
+' Feature flags needed for raw sector access and speed control
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_SPEED
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+
+DAT
+
+' SPI speeds to test (Hz) - fine sweep from 15 to 25 MHz
+speed_table     long    15_000_000               ' 15 MHz
+                long    16_000_000               ' 16 MHz
+                long    17_000_000               ' 17 MHz
+                long    18_000_000               ' 18 MHz
+                long    19_000_000               ' 19 MHz
+                long    20_000_000               ' 20 MHz
+                long    21_000_000               ' 21 MHz
+                long    22_000_000               ' 22 MHz
+                long    23_000_000               ' 23 MHz
+                long    24_000_000               ' 24 MHz
+                long    25_000_000               ' 25 MHz
+
+' Results per speed: bits [2:0] = phase pass/fail
+'   bit 0 = Phase 1 (single reads): 1=pass
+'   bit 1 = Phase 2 (multi reads): 1=pass
+'   bit 2 = Phase 3 (write-verify): 1=pass
+'   $07 = all pass, $00 = untested
+results         byte    0[NUM_SPEEDS]
+
+' Sector buffer for single reads
+sectorBuffer    byte    0[SECTOR_SIZE]
+
+' Multi-sector buffer (8 sectors = 4KB)
+multiBuffer     byte    0[MULTI_COUNT * SECTOR_SIZE]
+
+' Write-verify buffers
+writeBuffer     byte    0[MULTI_COUNT * SECTOR_SIZE]
+readBackBuffer  byte    0[MULTI_COUNT * SECTOR_SIZE]
+
+PUB go() | status, speedIdx, testFreq, spiFreq, passCount, failCount, actualHz, hp, p1, p2, p3
+'' Main entry point - characterize max reliable SPI speed.
+
+    debug(" ")
+    debug("============================================================")
+    debug("  SPI Frequency Sweep - Dual FS Driver")
+    debug("============================================================")
+    debug("  Range: 15-25 MHz in 1 MHz steps")
+    debug("  Per speed: ", udec_(READS_PER_SPEED), " single + ", udec_(MULTI_READS), "x", udec_(MULTI_COUNT), " multi + ", udec_(WRITE_VERIFY_ITERS), "x", udec_(MULTI_COUNT), " write-verify")
+    debug("  SYSCLK: ", udec_(clkfreq / 1_000_000), " MHz")
+    debug(" ")
+
+    ' Start driver and mount SD card
+    debug("Starting driver and mounting SD card...")
+    dfs.init()
+    status := dfs.mount(dfs.DEV_SD)
+    if status < 0
+        debug("FATAL: Failed to mount SD card! status=", sdec_(status))
+        debug("END_SESSION")
+        return
+
+    debug("Card mounted successfully")
+    debug("  Volume: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+    debug("  Initial SPI: ", udec_(dfs.getSPIFrequency() / 1000), " kHz")
+    debug(" ")
+
+    passCount := 0
+    failCount := 0
+
+    ' Sweep through all speed levels
+    debug("============================================================")
+    debug("  FREQUENCY SWEEP: 15 MHz -> 25 MHz")
+    debug("============================================================")
+
+    repeat speedIdx from 0 to NUM_SPEEDS - 1
+        testFreq := long[@speed_table][speedIdx]
+
+        ' Calculate expected half-period and actual frequency
+        hp := (clkfreq + (testFreq * 2) - 1) / (testFreq * 2)
+        if hp < 4
+            hp := 4
+        actualHz := clkfreq / (hp * 2)
+
+        debug(" ")
+        debug("--- ", udec_(testFreq / 1_000_000), " MHz target (hp=", udec_(hp), ", actual=", udec_(actualHz / 1_000), " kHz) ---")
+
+        ' Set SPI speed
+        dfs.setSPISpeed(testFreq)
+
+        ' Run all three test phases
+        p1 := runSingleReads(speedIdx)
+        p2 := runMultiReads(speedIdx)
+        p3 := runWriteVerify(speedIdx)
+
+        results[speedIdx] := p1 | (p2 << 1) | (p3 << 2)
+
+        if p1 == 1 and p2 == 1 and p3 == 1
+            debug("  => ALL PASS")
+            passCount++
+        else
+            debug("  => FAIL (single=", udec_(p1), " multi=", udec_(p2), " write-verify=", udec_(p3), ")")
+            failCount++
+
+    ' Restore to 25 MHz
+    dfs.setSPISpeed(25_000_000)
+
+    ' Print summary table
+    debug(" ")
+    debug("============================================================")
+    debug("  FREQUENCY SWEEP RESULTS")
+    debug("============================================================")
+    debug(" ")
+    debug("  Target  hp  Actual_kHz  Single  Multi  WrVerify  Overall")
+    debug("  ------  --  ----------  ------  -----  --------  -------")
+
+    repeat speedIdx from 0 to NUM_SPEEDS - 1
+        testFreq := long[@speed_table][speedIdx]
+        hp := (clkfreq + (testFreq * 2) - 1) / (testFreq * 2)
+        if hp < 4
+            hp := 4
+        actualHz := clkfreq / (hp * 2)
+
+        p1 := results[speedIdx] & 1
+        p2 := (results[speedIdx] >> 1) & 1
+        p3 := (results[speedIdx] >> 2) & 1
+
+        if results[speedIdx] == 7
+            debug("  ", udec_(testFreq / 1_000_000), " MHz ", udec_(hp), "   ", udec_(actualHz / 1_000), "      PASS    PASS   PASS      PASS")
+        else
+            debug("  ", udec_(testFreq / 1_000_000), " MHz ", udec_(hp), "   ", udec_(actualHz / 1_000), "      ", udec_(p1), "       ", udec_(p2), "      ", udec_(p3), "         FAIL")
+
+    debug(" ")
+    debug("  ALL PASS: ", udec_(passCount), " speeds, FAIL: ", udec_(failCount), " speeds")
+    debug(" ")
+
+    dfs.unmount(dfs.DEV_SD)
+    dfs.stop()
+
+    debug("END_SESSION")
+
+
+PRI runSingleReads(speedIdx) : passed | idx, sector, readResult, recvCrc, calcCrc, crcErrors, readErrors
+' Phase 1: Single-sector reads (CMD17) with CRC verification.
+'
+' @param speedIdx - Speed index (for logging)
+' @returns 1 if all reads OK, 0 if errors
+
+    crcErrors := 0
+    readErrors := 0
+
+    repeat idx from 0 to READS_PER_SPEED - 1
+        sector := READ_SECTOR_BASE + (idx // 50)
+
+        readResult := dfs.readSectorRaw(sector, @sectorBuffer)
+
+        if readResult == dfs.SUCCESS
+            recvCrc := dfs.getLastReceivedCRC()
+            calcCrc := dfs.getLastCalculatedCRC()
+            if recvCrc <> calcCrc
+                crcErrors++
+                if crcErrors <= 2
+                    debug("    CRC err at sector ", udec_(sector))
+        else
+            readErrors++
+            if readErrors <= 2
+                debug("    Read fail at sector ", udec_(sector))
+
+    debug("  P1-Single: OK=", udec_(READS_PER_SPEED - crcErrors - readErrors), " crc_err=", udec_(crcErrors), " rd_err=", udec_(readErrors))
+
+    if crcErrors > 0 or readErrors > 0
+        return 0
+    return 1
+
+
+PRI runMultiReads(speedIdx) : passed | idx, sector, multiResult, readErrors
+' Phase 2: Multi-sector reads (CMD18) - the known failure mode.
+'
+' @param speedIdx - Speed index (for logging)
+' @returns 1 if all reads OK, 0 if errors
+
+    readErrors := 0
+
+    repeat idx from 0 to MULTI_READS - 1
+        sector := READ_SECTOR_BASE + (idx * MULTI_COUNT)
+
+        multiResult := dfs.readSectorsRaw(sector, MULTI_COUNT, @multiBuffer)
+
+        if multiResult <> MULTI_COUNT
+            readErrors++
+            if readErrors <= 2
+                debug("    Multi read returned ", udec_(multiResult), " at sector ", udec_(sector))
+
+    debug("  P2-Multi: OK=", udec_(MULTI_READS - readErrors), " errors=", udec_(readErrors))
+
+    if readErrors > 0
+        return 0
+    return 1
+
+
+PRI runWriteVerify(speedIdx) : passed | iter, idx, sector, written, readCt, errors
+' Phase 3: Write-read-verify round-trips (CMD25 write + CMD18 read + compare).
+' This is the most demanding test - writes known patterns, reads back, verifies.
+'
+' @param speedIdx - Speed index (for logging)
+' @returns 1 if all verify OK, 0 if errors
+
+    errors := 0
+
+    repeat iter from 0 to WRITE_VERIFY_ITERS - 1
+        sector := WRITE_SECTOR_BASE + (iter * MULTI_COUNT)
+
+        ' Fill write buffer with unique pattern per iteration
+        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            writeBuffer[idx] := ((idx / SECTOR_SIZE) * 37 + (idx // SECTOR_SIZE) + iter * 53) & $FF
+
+        ' Write 8 sectors
+        written := dfs.writeSectorsRaw(sector, MULTI_COUNT, @writeBuffer)
+        if written <> MULTI_COUNT
+            debug("    Write failed iter ", udec_(iter), ": returned ", udec_(written))
+            errors++
+            next
+
+        ' Clear read buffer
+        bytefill(@readBackBuffer, $00, MULTI_COUNT * SECTOR_SIZE)
+
+        ' Read back 8 sectors
+        readCt := dfs.readSectorsRaw(sector, MULTI_COUNT, @readBackBuffer)
+
+        if readCt <> MULTI_COUNT
+            debug("    Read failed iter ", udec_(iter), ": returned ", udec_(readCt))
+            errors++
+            next
+
+        ' Compare every byte
+        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            if readBackBuffer[idx] <> writeBuffer[idx]
+                errors++
+                if errors <= 3
+                    debug("    Verify err iter ", udec_(iter), " byte ", udec_(idx), ": exp=$", uhex_byte_(writeBuffer[idx]), " got=$", uhex_byte_(readBackBuffer[idx]))
+                quit  ' Stop comparing this iteration on first error
+
+    debug("  P3-WrVerify: ", udec_(WRITE_VERIFY_ITERS), " iters, ", udec_(errors), " errors")
+
+    if errors > 0
+        return 0
+    return 1
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

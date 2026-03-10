@@ -710,7 +710,7 @@ This works for SD→Flash, Flash→SD, or same-device copies. The worker cog han
 
 ## Exported STRUCT Types (SD)
 
-The driver defines and exports packed struct types (requires `{Spin2_v45}`) for named access to SD card registers and FAT32 on-disk structures.
+The driver defines and exports packed struct types (requires `{Spin2_v45}` or later; the driver uses `{Spin2_v46}`) for named access to SD card registers and FAT32 on-disk structures.
 
 ### SD Card Register Structs
 

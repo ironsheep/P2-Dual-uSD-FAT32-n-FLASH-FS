@@ -314,87 +314,93 @@ The worker cog's command handler also uses `#ifdef` blocks around each feature's
 
 ## Enabling Debug Output
 
-The driver and its associated files use the Spin2 `DEBUG_DISABLE` constant to control whether `debug()` statements produce output. This is a standard Spin2 mechanism -- when `DEBUG_DISABLE = 1`, the compiler removes all `debug()` calls from the binary.
+The driver uses selective debug channels controlled by `DEBUG_MASK`. Each `debug()` statement is assigned to a numbered channel via `debug[CH_xxx]()` syntax. Only channels whose bit is set in `DEBUG_MASK` are compiled -- all others are removed from the binary with zero overhead.
 
-### Driver Debug Is Disabled by Default
-
-The driver sets `DEBUG_DISABLE = 1`:
+### How DEBUG_MASK Works
 
 ```spin2
-CON  ' flags
-  ' NOTE: V3 driver exceeds 255 debug record limit when debug is fully enabled
-  ' pnut-ts error: "DEBUG data is too long: too many records: max 255"
-  ' Set to 1 to disable debug in driver and avoid compilation errors
-  DEBUG_DISABLE = 1
+CON ' debug channel assignments for selective debug output
+  CH_INIT    = 0              ' Card/device initialization, pin setup, speed config
+  CH_MOUNT   = 1              ' Mount/unmount, filesystem geometry, FSInfo
+  CH_FILE    = 2              ' File handle operations: open, close, read, write, seek, sync
+  CH_DIR     = 3              ' Directory operations: search, create, rename, move, CWD
+  CH_SECTOR  = 4              ' Sector I/O, FAT chain walking, cluster allocation
+  CH_STATUS  = 5              ' CMD13/CMD23 probe and runtime status checks
+  CH_IDENT   = 6              ' Card/device identity: CID/CSD/SCR, Flash serial number
+  CH_HSPEED  = 7              ' High-speed mode: CMD6 query, switch, verification
+  CH_API     = 8              ' Public API entry points, worker cog dispatch, stack guard
+  CH_RECOVER = 9              ' Error recovery: CMD12, bus recovery, SPI bus switching
+  CH_FL_BLOCK = 10            ' Flash block-level I/O: read/write/erase 4KB blocks
+  CH_FL_CIRC  = 11            ' Flash circular files: froncate, wrap, old-format detection
+
+  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT)   ' Default: init + mount channels
 ```
 
-This is **intentional and necessary**. The driver has hundreds of `debug()` statements spread across ~9400 lines of code. The pnut-ts compiler enforces a limit of 255 debug records per compilation unit. With debug enabled, the driver exceeds this limit and fails to compile.
+The driver has ~448 debug statements across 12 channels. The P2 compiler limits debug records to 255 per compilation unit. Enable 2-3 channels at a time to stay under the limit. Any 3 channels combined stay under 255 records.
+
+### Production Builds
+
+Set `DEBUG_MASK = 0` for production builds. This suppresses all driver debug output with zero binary overhead -- equivalent to the old `DEBUG_DISABLE = 1` approach.
 
 ### Debug in Your Application Code
 
-Your top-level application file has its **own** `DEBUG_DISABLE` setting, independent of the driver's. Most application and test files either set `DEBUG_DISABLE = 0` or leave it unset (defaults to enabled):
+Your top-level application file has its own debug settings, independent of the driver's `DEBUG_MASK`. Application and test files use standard `debug()` statements (without channel numbers) and their own `DEBUG_DISABLE` constant:
 
 ```spin2
 CON
     _CLKFREQ = 350_000_000
 
 OBJ
-    dfs : "dual_sd_fat32_flash_fs"   ' Driver still has DEBUG_DISABLE = 1
+    dfs : "dual_sd_fat32_flash_fs"   ' Driver debug controlled by its own DEBUG_MASK
 
 PUB go() | workerCog
     debug("Starting application")     ' This WILL appear in debug output
     workerCog := dfs.init()
     dfs.mount(dfs.DEV_BOTH)
-    ' Internal driver debug() calls are still suppressed
+    ' Driver debug() calls only appear if their channel is enabled in DEBUG_MASK
 ```
 
-Each `.spin2` file controls its own debug output independently. Setting `DEBUG_DISABLE = 0` (or omitting it) in your file enables debug for **your code only**. The driver's internal debug statements remain suppressed regardless.
+Each `.spin2` file controls its own debug output independently. The driver's `DEBUG_MASK` and your application's `DEBUG_DISABLE` are separate mechanisms with separate record budgets.
 
 ### Debug Settings Across the Project
 
-The project files use these settings:
-
-| File | `DEBUG_DISABLE` | Reason |
-|------|----------------|--------|
-| `dual_sd_fat32_flash_fs.spin2` (driver) | `1` | Exceeds 255 debug record limit |
-| `DFS_example_*.spin2` (examples) | `0` | Show progress/results to user |
-| `DFS_demo_shell.spin2` (demo) | `1` | Uses serial terminal instead of debug |
-| `isp_fsck_utility.spin2` | `1` | Uses FIFO strings instead of debug |
-| `isp_serial_singleton.spin2` | `1` | Owns pin 62 for serial TX (conflicts with debug) |
-| `DFS_SD_RT_*_tests.spin2` (tests) | `0` (default) | Tests use debug for results output |
-| `DFS_FL_RT_*_tests.spin2` (tests) | `0` (default) | Tests use debug for results output |
+| File | Debug Setting | Reason |
+|------|--------------|--------|
+| `dual_sd_fat32_flash_fs.spin2` (driver) | `DEBUG_MASK = 0` (production) | Selective channels via `DEBUG_MASK` |
+| `DFS_example_*.spin2` (examples) | `DEBUG_DISABLE = 0` | Show progress/results to user |
+| `DFS_demo_shell.spin2` (demo) | `DEBUG_DISABLE = 1` | Uses serial terminal instead of debug |
+| `isp_fsck_utility.spin2` | `DEBUG_DISABLE = 1` | Uses FIFO strings instead of debug |
+| `isp_serial_singleton.spin2` | `DEBUG_DISABLE = 1` | Owns pin 62 for serial TX (conflicts with debug) |
+| `DFS_SD_RT_*_tests.spin2` (tests) | `DEBUG_DISABLE = 0` (default) | Tests use debug for results output |
+| `DFS_FL_RT_*_tests.spin2` (tests) | `DEBUG_DISABLE = 0` (default) | Tests use debug for results output |
 
 ### How to See Driver-Internal Debug Output
 
-If you need to see what the driver is doing internally (for deep debugging), you can temporarily change the driver's `DEBUG_DISABLE` to `0`:
+To investigate a specific driver subsystem, enable the relevant channels:
 
 ```spin2
-' In dual_sd_fat32_flash_fs.spin2:
-  DEBUG_DISABLE = 0    ' TEMPORARILY enable for debugging
+' In dual_sd_fat32_flash_fs.spin2 -- temporarily change DEBUG_MASK:
+  DEBUG_MASK = (1 << CH_FILE) | (1 << CH_DIR)   ' Investigate file + directory ops
 ```
 
-**Important caveats:**
+**Guidelines:**
 
-1. The pnut-ts compiler will likely fail with "too many records: max 255." To work around this, you must comment out most of the driver's `debug()` calls and leave only the ones in the area you are investigating.
+1. Enable at most 3 channels simultaneously. The largest 3 channels total ~221 records, safely under the 255 limit.
+2. This is a **temporary diagnostic change** -- set `DEBUG_MASK = 0` before committing.
+3. The `-d` flag is required when compiling: `pnut-ts -d dual_sd_fat32_flash_fs.spin2`
 
-2. This is a **temporary diagnostic change** -- revert it before committing. The driver cannot ship with `DEBUG_DISABLE = 0`.
+**Alternative:** Use the `SD_INCLUDE_DEBUG` feature flag to access the driver's diagnostic getters (`getLastCMD13()`, `getCRCMatchCount()`, `getLastCalculatedCRC()`, etc.) without enabling debug output. This is the recommended approach for production debugging.
 
-3. An alternative approach: use the `SD_INCLUDE_DEBUG` feature flag to access the driver's diagnostic getters (`getLastCMD13()`, `getCRCMatchCount()`, `getLastCalculatedCRC()`, etc.). These methods return internal diagnostic state through the normal API, without needing to enable the driver's debug output. This is the recommended approach for production debugging.
-
-### SD_INCLUDE_DEBUG vs DEBUG_DISABLE
+### SD_INCLUDE_DEBUG vs DEBUG_MASK
 
 These are two different mechanisms that are easily confused:
 
 | Mechanism | What It Controls | Scope |
 |-----------|-----------------|-------|
 | `SD_INCLUDE_DEBUG` | Whether debug **API methods** are compiled into the driver | Feature flag (compile-time) |
-| `DEBUG_DISABLE` | Whether `debug()` **print statements** produce output | Per-file constant |
+| `DEBUG_MASK` | Which `debug[CH_xxx]()` **print statements** compile | Per-channel bitmask |
 
-You can (and typically do) enable `SD_INCLUDE_DEBUG` while leaving `DEBUG_DISABLE = 1` in the driver. This gives you access to the debug API (diagnostic getters, CRC error injection hooks) without enabling the driver's hundreds of internal `debug()` print statements.
-
-### Future Direction: Debug Mask
-
-A planned improvement is to add debug mask support to the driver. Instead of the current all-or-nothing `DEBUG_DISABLE` switch, the driver will assign each `debug()` call to a category (e.g., SPI transactions, FAT operations, directory walks, handle management). A bitmask will control which categories are active, allowing you to enable debug output for just the subsystem you are investigating without exceeding the 255 debug record limit. This will eliminate the need to manually comment out `debug()` calls when troubleshooting specific areas of the driver.
+You can (and typically do) enable `SD_INCLUDE_DEBUG` while leaving `DEBUG_MASK = 0` in the driver. This gives you access to the debug API (diagnostic getters, CRC error injection hooks) without enabling the driver's internal `debug()` print statements.
 
 ---
 
