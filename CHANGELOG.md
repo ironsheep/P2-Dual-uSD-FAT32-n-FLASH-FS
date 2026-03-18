@@ -11,7 +11,7 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 SD sub-driver upgraded to v1.4.0: live clock, auto-flush, non-blocking I/O, modification timestamps.
 
 ### Added
-- **Live clock**: `setDate()` validates parameters and activates a 2-second clock; `getDate()` reads the live clock
+- **Internal date/time**: `setDate()` validates parameters and activates a 2-second clock; `getDate()` reads the Internal date/time
 - **Auto-flush**: Dirty file handles and FSInfo flushed automatically after 200 ms idle
 - **Non-blocking I/O** (`SD_INCLUDE_ASYNC`): `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()`
 - **Modification timestamps**: Files receive correct write timestamps on close and sync
