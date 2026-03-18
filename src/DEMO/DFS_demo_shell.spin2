@@ -771,8 +771,18 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path, wDat
         serial.tx((attrib & ATTR_HIDDEN) ? "H" : "-")
         serial.tx((attrib & ATTR_SYSTEM) ? "S" : "-")
 
-        serial.fstr3(@"  %04d-%02d-%02d  ", yr, mon, dy)
-        serial.fstr3(@"%02d:%02d:%02d", hr, mn, sc)
+        serial.fstr0(@"  ")
+        txDec4(yr)
+        serial.tx("-")
+        txDec2(mon)
+        serial.tx("-")
+        txDec2(dy)
+        serial.fstr0(@"  ")
+        txDec2(hr)
+        serial.tx(":")
+        txDec2(mn)
+        serial.tx(":")
+        txDec2(sc)
 
         if (attrib & ATTR_DIRECTORY)
           serial.fstr1(@"    <DIR>  %s\r\n", p_name)
@@ -1766,11 +1776,33 @@ PUB do_date() | yr, mon, dy, hr, mn, sc, status
       serial.fstr0(@"Date/time set.\r\n")
   elseif (ntokens == 1)
     yr, mon, dy, hr, mn, sc := dfs.getDate()
-    serial.fstr3(@"%04d-%02d-%02d ", yr, mon, dy)
-    serial.fstr3(@"%02d:%02d:%02d\r\n", hr, mn, sc)
+    txDec4(yr)
+    serial.tx("-")
+    txDec2(mon)
+    serial.tx("-")
+    txDec2(dy)
+    serial.tx(" ")
+    txDec2(hr)
+    serial.tx(":")
+    txDec2(mn)
+    serial.tx(":")
+    txDec2(sc)
+    serial.fstr0(@"\r\n")
   else
     bad_syntax()
 
+
+PRI txDec2(value)
+' Output 2-digit zero-padded decimal (00-99)
+  serial.tx("0" + value / DECIMAL_BASE)
+  serial.tx("0" + value // DECIMAL_BASE)
+
+PRI txDec4(value)
+' Output 4-digit zero-padded decimal (0000-9999)
+  serial.tx("0" + value / 1000)
+  serial.tx("0" + (value / 100) // DECIMAL_BASE)
+  serial.tx("0" + (value / DECIMAL_BASE) // DECIMAL_BASE)
+  serial.tx("0" + value // DECIMAL_BASE)
 
 PRI decval(p_str) : value | c
 
