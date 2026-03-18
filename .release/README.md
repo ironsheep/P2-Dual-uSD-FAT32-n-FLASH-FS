@@ -157,7 +157,7 @@ See `src/UTILS/README.md` for all available utilities.
 
 ## Regression Tests
 
-The regression test suite (1,308 tests across 29 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (1,332 tests across 31 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 

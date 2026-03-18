@@ -99,6 +99,7 @@ cd src/UTILS && for f in DFS_SD_*.spin2 DFS_FL_*.spin2; do pnut-ts -d -I .. "$f"
 - [ ] `src/EXAMPLES/README.md` -- file list matches disk
 - [ ] `src/UTILS/README.md` -- file list matches disk
 - [ ] `src/regression-tests/README.md` -- suite count and test totals match
+- [ ] `src/regression-tests/THEORY-OF-OPERATIONS.md` -- test framework description, test patterns, and suite inventory match current state
 - [ ] `DOCs/README.md` -- file list matches disk
 - [ ] `DOCs/Reference/README.md` -- file list matches disk
 - [ ] `DOCs/Utils/README.md` -- file list matches disk

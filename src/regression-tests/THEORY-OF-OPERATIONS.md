@@ -6,14 +6,14 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **29 standard suites** across four device categories producing **1,308 test assertions**, all verified on real P2 hardware.
+The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **31 standard suites** across four device categories producing **1,332 test assertions**, all verified on real P2 hardware.
 
-**Verified on hardware (2026-03-07):** 29 standard suites totaling **1,308 tests** -- all passing on both GigaStone 32GB and Elite SD cards:
+**Verified on hardware (2026-03-18):** 31 standard suites totaling **1,332 tests** -- all passing on both GigaStone 32GB and Elite SD cards:
 
 | Group | Suites | Tests |
 |-------|--------|-------|
 | Dual-device verification | 1 | 36 |
-| SD regression | 17 | 350 |
+| SD regression | 19 | 374 |
 | Flash regression | 10 | 901 |
 | Cross-device tests | 1 | 21 |
 

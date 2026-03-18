@@ -250,6 +250,7 @@ sd:/> bench
 |---------|---------|-------------|
 | `stats` | `info` | Show filesystem statistics |
 | `label` | `vol` | Show or set volume label (SD only) |
+| `date` | | Set or display real-time clock (`date Y M D H M S` or `date`) |
 | `card` | `cid` | Show SD card identification |
 | `version` | | Show driver version and SPI frequency |
 | `alias` | | Show all command aliases |

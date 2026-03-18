@@ -26,7 +26,9 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | `DFS_SD_RT_multicog_tests.spin2` | 14 | Multi-cog concurrent access, lock serialization |
 | `DFS_SD_RT_multiblock_tests.spin2` | 6 | Multi-sector streamer DMA transfers (CMD18/CMD25) |
 | `DFS_SD_RT_raw_sector_tests.spin2` | 14 | Raw sector read/write round-trips |
-| `DFS_SD_RT_volume_tests.spin2` | 25 | Volume label, VBR access, sync, setDate |
+| `DFS_SD_RT_volume_tests.spin2` | 28 | Volume label, VBR access, sync, setDate, auto-flush |
+| `DFS_SD_RT_timestamp_tests.spin2` | 9 | setDate validation, getDate round-trip, live clock, file timestamps |
+| `DFS_SD_RT_async_tests.spin2` | 12 | Non-blocking async I/O (SD_INCLUDE_ASYNC) |
 | `DFS_SD_RT_register_tests.spin2` | 6 | Card register access (CID/CSD/SCR/OCR/SD Status) |
 | `DFS_SD_RT_speed_tests.spin2` | 14 | SPI speed control, CMD6 high-speed mode |
 | `DFS_SD_RT_error_handling_tests.spin2` | 17 | Error conditions, invalid handles, state errors |
@@ -73,9 +75,9 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | Category | Suites | Tests |
 |----------|:------:|------:|
 | Dual/Cross-device | 2 | 57 |
-| SD (standard) | 17 | 350 |
+| SD (standard) | 19 | 374 |
 | Flash (standard) | 10 | 901 |
-| **Total (standard)** | **29** | **1,308** |
+| **Total (standard)** | **31** | **1,332** |
 
 Optional suites add: format (+46), 8-cog stress (+66), CRC validation (+6), recovery (+7).
 
@@ -113,7 +115,7 @@ cd ../../tools/
 ```bash
 cd ../../tools/
 
-# Standard suite (29 suites, 1,308 tests)
+# Standard suite (31 suites, 1,332 tests)
 ./run_regression.sh
 
 # Include 8-cog stress test
