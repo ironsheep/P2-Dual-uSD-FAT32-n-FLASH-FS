@@ -121,7 +121,15 @@ Per the [Changelog Style Guide](changelog-style-guide.md):
 
 - [ ] `CHANGELOG.md` `[Unreleased]` section has entries for all user-facing changes
 - [ ] Move `[Unreleased]` entries to new version heading with today's date
-- [ ] Entries are terse (25 words max), additive framing, no implementation details
+- [ ] **Style guide conformance** (read [changelog-style-guide.md](changelog-style-guide.md) and verify):
+  - [ ] Every entry is 25 words or fewer
+  - [ ] Additive framing (what the driver now does, not what was broken)
+  - [ ] No implementation details (internal method names, data structures, internal refactors)
+  - [ ] No entries that fail the Exclusion Test ("Would a caller have noticed?")
+  - [ ] Only standard sections used (Added, Changed, Fixed, Removed)
+  - [ ] API changes use `` `methodName()` `` format
+  - [ ] Test coverage uses `suite_name` -- N tests format
+  - [ ] Breaking changes prefixed with **BREAKING**
 - [ ] Internal-only changes (refactors, renames, style cleanup) are excluded
 - [ ] `[Unreleased]` link updated to compare new tag to HEAD
 - [ ] New version link added at bottom of file
