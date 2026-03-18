@@ -1,0 +1,287 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_async_tests.spin2
+''   Purpose.... Tests non-blocking async file I/O (startReadHandle, startWriteHandle, etc.)
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 18 MAR 2026
+''
+'' =================================================================================================
+''
+'' Tests the following APIs (gated by SD_INCLUDE_ASYNC):
+''   - startReadHandle() / startWriteHandle() - return PENDING
+''   - isComplete() - non-blocking poll
+''   - getResult() - retrieve result and release lock
+''   - cancelAsync() - discard result and release lock
+''   - E_ASYNC_BUSY on duplicate start
+''   - E_NO_ASYNC_OP on orphan getResult
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 270_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' External SD header (base pin 16)
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
+
+     CONTENT_LEN = 32         ' length of asyncContent string
+     BUF_SIZE = 512
+     GUARD_SIZE = 16
+
+     ' Poll timeout
+     MAX_POLL_COUNT = 1_000_000
+
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ASYNC
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ASYNC
+#pragma exportdef SD_INCLUDE_ASYNC
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#else
+#pragma exportdef SD_INCLUDE_ASYNC
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+    utils : "DFS_RT_utilities"
+
+DAT
+
+asyncTestFile   BYTE    "ASYNCTST.TXT", 0
+asyncContent    BYTE    "Async test data for verification", 0
+readBuf         BYTE    0[512]
+readBuf_guard   BYTE    0[16]
+
+PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
+'' Main entry point for async I/O regression tests
+''
+'' Tests non-blocking async file read/write APIs
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Async I/O Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init()
+
+    ' Mount SD card
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
+      debug("* FATAL: mount() failed, status=", sdec_(status))
+      dfs.stop()
+      utils.ShowTestEndCounts()
+      debug("END_SESSION")
+      return
+
+    ' Clean up any leftover test file from a previous run
+    dfs.deleteFile(dfs.DEV_SD, @asyncTestFile)
+
+    ' ----------------------------------
+    ' TEST GROUP: startWriteHandle + getResult
+    ' ----------------------------------
+    utils.startTestGroup(@"startWriteHandle + getResult")
+
+    utils.startTest(@"startWriteHandle returns PENDING")
+    h1 := dfs.createFileNew(dfs.DEV_SD, @asyncTestFile)
+    if h1 < 0
+      debug("* SKIP: createFileNew() failed, h1=", sdec_(h1))
+    else
+      status := dfs.startWriteHandle(h1, @asyncContent, CONTENT_LEN)
+      utils.evaluateSingleValue(status, @"startWriteHandle()", dfs.PENDING)
+
+      bytes := dfs.getResult()
+      utils.evaluateSubValue(bytes, @"getResult() bytes written", CONTENT_LEN)
+
+      status := dfs.closeFileHandle(h1)
+      utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
+
+    ' ----------------------------------
+    ' TEST GROUP: startReadHandle + getResult
+    ' ----------------------------------
+    utils.startTestGroup(@"startReadHandle + getResult")
+
+    utils.startTest(@"startReadHandle returns PENDING, result matches blocking")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if h1 < 0
+      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1))
+    else
+      bytefill(@readBuf, 0, BUF_SIZE)
+      utils.initGuard(@readBuf_guard)
+
+      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      utils.evaluateSingleValue(status, @"startReadHandle()", dfs.PENDING)
+
+      bytes := dfs.getResult()
+      utils.evaluateSubValue(bytes, @"getResult() bytes read", CONTENT_LEN)
+      utils.checkGuard(@readBuf_guard, @"readBuf guard")
+
+      ' Verify first bytes match asyncContent
+      utils.evaluateSubBool(readBuf[0] == asyncContent[0], @"readBuf[0] matches", true)
+      utils.evaluateSubBool(readBuf[1] == asyncContent[1], @"readBuf[1] matches", true)
+      utils.evaluateSubBool(readBuf[CONTENT_LEN - 1] == asyncContent[CONTENT_LEN - 1], @"readBuf[last] matches", true)
+
+      status := dfs.closeFileHandle(h1)
+      utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
+
+    ' ----------------------------------
+    ' TEST GROUP: isComplete poll
+    ' ----------------------------------
+    utils.startTestGroup(@"isComplete poll")
+
+    utils.startTest(@"isComplete() returns true after operation finishes")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if h1 < 0
+      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1))
+    else
+      bytefill(@readBuf, 0, BUF_SIZE)
+
+      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      utils.evaluateSingleValue(status, @"startReadHandle()", dfs.PENDING)
+
+      ' Poll isComplete() with timeout guard
+      bComplete := false
+      pollCount := 0
+      repeat while pollCount < MAX_POLL_COUNT
+        bComplete := dfs.isComplete()
+        if bComplete
+          quit
+        pollCount++
+
+      utils.evaluateSubBool(bComplete, @"isComplete() returned true", true)
+      utils.evaluateSubBool(pollCount < MAX_POLL_COUNT, @"completed before timeout", true)
+
+      bytes := dfs.getResult()
+      utils.evaluateSubBool(bytes > 0, @"getResult() > 0", true)
+
+      status := dfs.closeFileHandle(h1)
+      utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
+
+    ' ----------------------------------
+    ' TEST GROUP: Error conditions
+    ' ----------------------------------
+    utils.startTestGroup(@"Error conditions")
+
+    utils.startTest(@"E_ASYNC_BUSY on double start")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    h2 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if h1 < 0 or h2 < 0
+      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1), " h2=", sdec_(h2))
+    else
+      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      utils.evaluateSingleValue(status, @"first startReadHandle()", dfs.PENDING)
+
+      status := dfs.startReadHandle(h2, @readBuf, BUF_SIZE)
+      utils.evaluateSubValue(status, @"second startReadHandle()", dfs.E_ASYNC_BUSY)
+
+      ' Clean up the first async operation
+      bytes := dfs.getResult()
+
+      dfs.closeFileHandle(h1)
+      dfs.closeFileHandle(h2)
+
+    utils.startTest(@"E_NO_ASYNC_OP on orphan getResult")
+    status := dfs.getResult()
+    utils.evaluateSingleValue(status, @"getResult() with no op", dfs.E_NO_ASYNC_OP)
+
+    utils.startTest(@"E_NO_ASYNC_OP on orphan cancelAsync")
+    status := dfs.cancelAsync()
+    utils.evaluateSingleValue(status, @"cancelAsync() with no op", dfs.E_NO_ASYNC_OP)
+
+    ' ----------------------------------
+    ' TEST GROUP: cancelAsync
+    ' ----------------------------------
+    utils.startTestGroup(@"cancelAsync")
+
+    utils.startTest(@"cancelAsync works and allows next operation")
+    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if h1 < 0
+      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1))
+    else
+      ' Start an async read, then cancel it
+      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      utils.evaluateSingleValue(status, @"startReadHandle()", dfs.PENDING)
+
+      status := dfs.cancelAsync()
+      utils.evaluateSubBool(status >= 0, @"cancelAsync() succeeded", true)
+
+      ' Verify the lock was released by doing a normal blocking read
+      ' First seek back to beginning of file
+      status := dfs.seekHandle(h1, 0)
+      utils.evaluateSubBool(status >= 0, @"seekHandle(0) succeeded", true)
+
+      bytefill(@readBuf, 0, BUF_SIZE)
+      bytes := dfs.readHandle(h1, @readBuf, BUF_SIZE)
+      utils.evaluateSubValue(bytes, @"blocking readHandle()", CONTENT_LEN)
+
+      status := dfs.closeFileHandle(h1)
+      utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
+
+    ' ----------------------------------
+    ' Cleanup and Summary
+    ' ----------------------------------
+
+    ' Remove test file
+    dfs.deleteFile(dfs.DEV_SD, @asyncTestFile)
+
+    dfs.unmount(dfs.DEV_SD)
+
+#ifdef SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#endif
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Async I/O Tests Complete")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

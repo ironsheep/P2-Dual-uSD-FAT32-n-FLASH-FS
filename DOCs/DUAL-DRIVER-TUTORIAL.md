@@ -22,12 +22,13 @@ This tutorial shows how to perform common filesystem operations using the unifie
 8. [Seeking and Random Access](#seeking-and-random-access)
 9. [File Information](#file-information)
 10. [File Management](#file-management)
-11. [Multi-Cog Access](#multi-cog-access)
-12. [Error Handling](#error-handling)
-13. [Complete Examples](#complete-examples)
-14. [Example Programs](#example-programs)
-15. [Conditional Compilation](#conditional-compilation)
-16. [API Quick Reference](#api-quick-reference)
+11. [Non-Blocking File I/O](#non-blocking-file-io)
+12. [Multi-Cog Access](#multi-cog-access)
+13. [Error Handling](#error-handling)
+14. [Complete Examples](#complete-examples)
+15. [Example Programs](#example-programs)
+16. [Conditional Compilation](#conditional-compilation)
+17. [API Quick Reference](#api-quick-reference)
 
 ---
 
@@ -664,13 +665,41 @@ ver := fs.version(fs.DEV_FLASH) ' 200 (= v2.0.0)
 
 ### Setting Timestamps (SD Only)
 
-Set the date/time applied to newly created files and directories:
+Set the date/time applied to newly created files and directories. `setDate()` also activates a live 2-second clock that ticks automatically in the worker loop, so timestamps stay current without repeated calls.
 
 ```spin2
-fs.setDate(2026, 2, 28, 14, 30, 0)
+PUB setDate(year, month, day, hour, minute, second) : status
+```
+
+Returns `SUCCESS` (0) or `E_INVALID_PARAM` if any field is out of range. Input validation enforces: year 1980-2107, month 1-12, day 1-N (validated against the month), hour 0-23, minute 0-59, second 0-59.
+
+```spin2
+status := fs.setDate(2026, 3, 18, 14, 30, 0)  ' Set clock and activate ticking
 handle := fs.createFileNew(fs.DEV_SD, @"STAMPED.TXT")
 fs.closeFileHandle(handle)
 ```
+
+### Reading the Live Clock
+
+Once `setDate()` has been called, the clock ticks in the background. Read the current date/time with `getDate()`:
+
+```spin2
+PUB getDate() : year, month, day, hour, minute, second
+```
+
+```spin2
+status := fs.setDate(2026, 3, 18, 14, 30, 0)  ' Set clock and activate ticking
+' ... later ...
+yr, mon, dy, hr, mn, sc := fs.getDate()        ' Read live clock
+```
+
+### Auto-Flush (Data Safety)
+
+After 200ms of idle time (no API calls), the driver automatically flushes all dirty file handles and updates the FSInfo sector. This protects against data loss when an SD card is removed without calling `closeFileHandle()` or `unmount()`.
+
+No API call is needed -- auto-flush is always active once the worker cog is running.
+
+The 200ms threshold is fast enough for human card removal (typically 1-2 seconds) yet slow enough to never interrupt burst writes. For explicit flush control, continue to use `syncHandle(handle)` or `syncAllHandles()`.
 
 ### Checking File Existence
 
@@ -716,6 +745,61 @@ fs.moveFile(fs.DEV_SD, @"LOG.TXT", @"ARCHIVE")
 ```
 
 `moveFile()` is currently SD-only (moves a file to another directory on the SD card). Calling it with `DEV_FLASH` returns `E_NOT_SUPPORTED`. On Flash, rename with a different path prefix to achieve the same effect.
+
+---
+
+## Non-Blocking File I/O
+
+Enable with `#pragma exportdef SD_INCLUDE_ASYNC` (or `SD_INCLUDE_ALL`) before the OBJ declaration. The async API lets the caller cog do useful work while the worker cog handles a read or write in the background.
+
+### Async Methods
+
+| Method | Description |
+|--------|-------------|
+| `startReadHandle(handle, pBuf, count) : status` | Begin async read, returns `PENDING` (1) |
+| `startWriteHandle(handle, pBuf, count) : status` | Begin async write, returns `PENDING` (1) |
+| `isComplete() : done` | Non-blocking poll, TRUE when operation finished |
+| `getResult() : status` | Block if needed, returns bytes read/written, releases lock |
+| `cancelAsync() : status` | Discard result, release lock |
+
+### Usage Pattern
+
+```spin2
+#pragma exportdef SD_INCLUDE_ASYNC
+
+OBJ
+  dfs : "dual_sd_fat32_flash_fs"
+
+PUB logAndSample() | handle, bytesWritten
+  handle := dfs.openFileWrite(dfs.DEV_SD, @"SENSOR.DAT")
+  if handle >= 0
+    dfs.startWriteHandle(handle, @sensorData, 512)
+    repeat
+      sample_sensors()              ' Do real work at full 350 MHz
+      if dfs.isComplete()
+        bytesWritten := dfs.getResult()
+        quit
+    dfs.closeFileHandle(handle)
+```
+
+The caller cog fires off the I/O with `startReadHandle()` or `startWriteHandle()`, then polls with `isComplete()` between real-time tasks. When the operation is done, `getResult()` returns the byte count (or a negative error code) and releases the internal lock so the next operation can proceed.
+
+### Error Codes
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| -95 | `E_ASYNC_BUSY` | An async operation is already in progress |
+| -96 | `E_NO_ASYNC_OP` | `getResult()` or `cancelAsync()` called with no pending operation |
+
+### Cancellation
+
+If the caller decides it no longer needs the result (e.g., a timeout or mode change), call `cancelAsync()` to discard the pending result and release the lock:
+
+```spin2
+dfs.startReadHandle(handle, @buf, 512)
+' ... decide to abort ...
+dfs.cancelAsync()
+```
 
 ---
 
@@ -879,7 +963,7 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 | Range | Category |
 |-------|----------|
 | 0 | `SUCCESS` |
-| -1 to -93 | SD/FAT32 errors |
+| -1 to -96 | SD/FAT32 errors |
 | -100 to -114 | Flash errors |
 | -120 to -122 | Unified device errors |
 
@@ -896,6 +980,9 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 | -90 | `E_TOO_MANY_FILES` | All handle slots in use |
 | -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
 | -92 | `E_FILE_ALREADY_OPEN` | File already open for writing |
+| -93 | `E_INVALID_PARAM` | Invalid parameter (e.g., bad date field) |
+| -95 | `E_ASYNC_BUSY` | Async operation already in progress |
+| -96 | `E_NO_ASYNC_OP` | No pending async operation |
 
 ### Common Flash Errors
 
@@ -1074,7 +1161,7 @@ PUB startLogging() | status
   fs.init()
   status := fs.mount(fs.DEV_SD)
   if status == fs.SUCCESS
-    ' Set timestamp
+    ' Set timestamp (activates live clock)
     fs.setDate(2026, 2, 28, 12, 0, 0)
 
     ' Create logs directory if needed
@@ -1150,7 +1237,7 @@ pnut-term-ts -r DFS_example_basic.bin
 
 ## Conditional Compilation
 
-Five feature flags control optional SD features. Flash features are always compiled.
+Six feature flags control optional SD features. Flash features are always compiled.
 
 | Flag | What It Adds |
 |------|-------------|
@@ -1158,7 +1245,8 @@ Five feature flags control optional SD features. Flash features are always compi
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode (50 MHz) |
 | `SD_INCLUDE_DEBUG` | CRC diagnostics, test hooks, hex dump utilities |
-| `SD_INCLUDE_ALL` | All four flags above |
+| `SD_INCLUDE_ASYNC` | Non-blocking file I/O (startReadHandle, startWriteHandle, isComplete, getResult, cancelAsync) |
+| `SD_INCLUDE_ALL` | All five flags above |
 
 Enable flags with `#pragma exportdef` **before** the OBJ declaration:
 
@@ -1310,13 +1398,24 @@ if fs.checkCMD6Support()
 | `canMount(dev)` | Non-destructive mount check |
 | `cardWarnings()` | SD card warning flags after mount |
 | `format(dev)` | Format device (destructive!) |
-| `setDate(y,m,d,h,mi,s)` | Timestamp for new files (SD) |
+| `setDate(y,m,d,h,mi,s) : status` | Set clock and activate live ticking (SD) |
+| `getDate() : y,m,d,h,mi,s` | Read live clock (SD) |
 
 ### Cross-Device
 
 | Method | Description |
 |--------|-------------|
 | `copyFile(srcDev, src, dstDev, dst)` | Copy between devices |
+
+### Non-Blocking I/O (SD_INCLUDE_ASYNC)
+
+| Method | Description |
+|--------|-------------|
+| `startReadHandle(handle, pBuf, count)` | Begin async read, returns PENDING |
+| `startWriteHandle(handle, pBuf, count)` | Begin async write, returns PENDING |
+| `isComplete()` | Poll async completion (non-blocking) |
+| `getResult()` | Get async result (blocks if needed), releases lock |
+| `cancelAsync()` | Cancel async operation, releases lock |
 
 ### Utilities
 

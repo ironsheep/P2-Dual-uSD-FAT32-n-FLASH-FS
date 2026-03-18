@@ -18,9 +18,9 @@ cd tools/
 ./run_regression.sh
 ```
 
-This runs 29 standard suites in dependency order (stop on first failure):
+This runs 31 standard suites in dependency order (stop on first failure):
 
-- [ ] All 29 suites pass, 1,308+ tests, 0 failures
+- [ ] All 31 suites pass, 1,332+ tests, 0 failures
 - [ ] Tested on at least two different SD cards (document card models in release notes)
 
 ### Optional: 8-cog stress test

@@ -8,7 +8,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... 2023
-''   Updated.... 1 MAR 2026
+''   Updated.... 18 MAR 2026
 ''
 '' =================================================================================================
 {{
@@ -48,6 +48,9 @@
 #ifndef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_DEBUG
 #endif
+#ifndef SD_INCLUDE_ASYNC
+#define SD_INCLUDE_ASYNC
+#endif
 #endif
 
 ' SD_INCLUDE_SPEED requires SD_INCLUDE_REGISTERS (checkCMD6Support -> readSCRRaw)
@@ -73,8 +76,8 @@ CON ' ---- Device Constants ----
   DEV_FLASH = 1       ' Onboard 16MB Flash chip
   DEV_BOTH  = 2       ' Both devices (for mount/unmount)
 
-  DFS_VERSION   = 1_00_00  ' Dual FS driver version 1.0.0
-  SD_VERSION    = 1_03_01  ' SD sub-driver version 1.3.1
+  DFS_VERSION   = 1_02_00  ' Dual FS driver version 1.2.0
+  SD_VERSION    = 1_04_00  ' SD sub-driver version 1.4.0
   FLASH_VERSION = 2_00_00  ' Flash sub-driver version 2.0.0
 
 CON ' ---- Flash File Open Mode Constants ----
@@ -251,6 +254,9 @@ CON ' error codes
   E_INVALID_HANDLE    = -91     ' Handle out of range or not open
   E_FILE_ALREADY_OPEN = -92     ' File is already open for writing (single-writer policy)
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
+  E_INVALID_PARAM     = -94     ' Parameter value out of valid range
+  E_ASYNC_BUSY        = -95     ' An async operation is already in flight
+  E_NO_ASYNC_OP       = -96     ' No async operation to get result from
 
   ' ===========================================================================
   ' Unified Flash Error Codes (ADR-7: single unified error code table)
@@ -348,6 +354,10 @@ CON ' ---- FAT32 Date/Time Encoding ----
   FAT_DAY_SHIFT         = 16
   FAT_HOUR_SHIFT        = 11
   FAT_MINUTE_SHIFT      = 5
+
+CON ' ---- Idle Flush and Async Constants ----
+  IDLE_FLUSH_MS     = 200       ' Milliseconds idle before auto-flush
+  PENDING           = 1         ' Returned by start*() to indicate async operation launched
 
 CON ' ---- Timeout and Speed Constants ----
   INIT_TIMEOUT_SEC      = 2           ' Card initialization timeout (ACMD41)
@@ -608,6 +618,24 @@ DAT ' singleton control - SHARED across all object instances
   saved_data2   LONG    0[8]            ' Snapshot of pb_data2, one per cog
 
   ' =======================================================================
+  ' WORKER LOOP STATE (idle flush + clock tick)
+  ' =======================================================================
+  idle_timer        LONG    0           ' getct() at last command completion
+  idle_flush_clocks LONG    0           ' Threshold in clock ticks (set at mount time)
+  flush_done        BYTE    false       ' TRUE after idle flush completes (reset on next command)
+  ct_active         BYTE    0           ' TRUE when live clock is enabled
+  ct_last_tick      LONG    0           ' getct() at last clock tick
+  ct_tick_clocks    LONG    0           ' clkfreq * 2 (set at mount time)
+
+#ifdef SD_INCLUDE_ASYNC
+  ' =======================================================================
+  ' ASYNC STATE (non-blocking I/O)
+  ' =======================================================================
+  async_active      BYTE    0           ' TRUE when an async operation is in flight
+  async_caller      BYTE    0           ' Cog ID of the async caller
+#endif
+
+  ' =======================================================================
   ' WORKER COG STACK
   ' =======================================================================
   cog_stack     LONG    0[STACK_SIZE]   ' Worker cog stack
@@ -644,7 +672,17 @@ DAT ' singleton control - SHARED across all object instances
   cluster_offset LONG   0               ' Cluster offset calculation
   cog_dir_sec   LONG    0[8]            ' Per-cog current directory sector
   entry_address LONG    0               ' Current entry byte address
-  date_stamp    LONG    0               ' Timestamp for new files
+  date_stamp    LONG    0               ' Live packed FAT32 date+time
+
+  ' FIELD pointers into date_stamp (initialized in worker startup)
+  fld_yr        LONG    0               ' ^@date_stamp.[31..25]
+  fld_mon       LONG    0               ' ^@date_stamp.[24..21]
+  fld_day       LONG    0               ' ^@date_stamp.[20..16]
+  fld_hr        LONG    0               ' ^@date_stamp.[15..11]
+  fld_min       LONG    0               ' ^@date_stamp.[10..5]
+  fld_sec       LONG    0               ' ^@date_stamp.[4..0]
+  days_table    BYTE    31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+
   n_sec         LONG    0               ' Current sector number
   flags         LONG    0               ' Open/new file flags
   dir_sec_in_buf LONG   0               ' Directory sector currently in dir_buf
@@ -1394,6 +1432,106 @@ PUB writeHandle(handle, p_buffer, count) : bytes_written
       debug[CH_FILE]("  [writeHandle] Failed: ", sdec_(bytes_written))
       set_error(bytes_written)
 
+#ifdef SD_INCLUDE_ASYNC
+PUB startReadHandle(handle, p_buffer, count) : status
+'' Begin an asynchronous read. Returns immediately with PENDING (1).
+'' The api_lock is held until getResult() or cancelAsync() is called.
+''
+'' @param handle - Valid file handle open for read
+'' @param p_buffer - Pointer to destination buffer
+'' @param count - Bytes to read
+'' @returns status - PENDING, E_ASYNC_BUSY, or E_NOT_MOUNTED
+
+  if async_active
+    return set_error(E_ASYNC_BUSY)
+  if cog_id == -1
+    return set_error(E_NOT_MOUNTED)
+
+  repeat until locktry(api_lock)
+
+  pb_caller := COGID()
+  pb_param0 := handle
+  pb_param1 := p_buffer
+  pb_param2 := count
+  pb_cmd := CMD_READ_H
+
+  async_active := true
+  async_caller := COGID()
+  status := PENDING
+
+PUB startWriteHandle(handle, p_buffer, count) : status
+'' Begin an asynchronous write. Returns immediately with PENDING (1).
+'' The api_lock is held until getResult() or cancelAsync() is called.
+''
+'' @param handle - Valid file handle open for write
+'' @param p_buffer - Pointer to source data
+'' @param count - Bytes to write
+'' @returns status - PENDING, E_ASYNC_BUSY, or E_NOT_MOUNTED
+
+  if async_active
+    return set_error(E_ASYNC_BUSY)
+  if cog_id == -1
+    return set_error(E_NOT_MOUNTED)
+
+  repeat until locktry(api_lock)
+
+  pb_caller := COGID()
+  pb_param0 := handle
+  pb_param1 := p_buffer
+  pb_param2 := count
+  pb_cmd := CMD_WRITE_H
+
+  async_active := true
+  async_caller := COGID()
+  status := PENDING
+
+PUB isComplete() : done
+'' Non-blocking poll for async operation completion. Safe to call repeatedly.
+''
+'' @returns done - TRUE if async operation has completed, FALSE otherwise
+
+  done := async_active and (pb_cmd == CMD_NONE)
+
+PUB getResult() : status
+'' Get the result of an async operation and release the lock. If the operation
+'' hasn't finished yet, blocks until it does.
+'' CRITICAL: Drains stale COGATN before releasing lock to prevent silent
+'' data corruption in subsequent blocking calls.
+''
+'' @returns status - Bytes read/written on success, or negative error code
+
+  if not async_active
+    return set_error(E_NO_ASYNC_OP)
+
+  repeat until pb_cmd == CMD_NONE
+
+  if pb_status < 0
+    status := pb_status
+    set_error(pb_status)
+  else
+    status := pb_data0
+
+  async_active := false
+  if POLLATN()                           ' CRITICAL: drain stale COGATN from worker
+  lockrel(api_lock)
+
+PUB cancelAsync() : status
+'' Wait for async operation to finish, discard result, release lock.
+'' Use when the caller no longer needs the result.
+''
+'' @returns status - SUCCESS, or E_NO_ASYNC_OP
+
+  if not async_active
+    return set_error(E_NO_ASYNC_OP)
+
+  repeat until pb_cmd == CMD_NONE
+
+  async_active := false
+  if POLLATN()                           ' CRITICAL: drain stale COGATN
+  lockrel(api_lock)
+  status := SUCCESS
+#endif
+
 PUB seekHandle(handle, position) : status
 '' Seek to position in file (V3 multi-file) - seeks to absolute byte position.
 '' Position must be <= file size (cannot seek past EOF).
@@ -2070,17 +2208,54 @@ PUB stats(dev) : used, free_ct, file_count | dirHandle, p_entry
       free_ct := 0
       file_count := 0
 
-PUB setDate(year, month, day, hour, minute, second)
-'' Set the current date and time for new files/folders.
+PUB setDate(year, month, day, hour, minute, second) : status
+'' Set the current date and time for new files/folders. Activates the live
+'' 2-second clock so timestamps advance automatically.
 ''
-'' @param year - Year (e.g., 2024)
+'' @param year - Year (1980-2107)
 '' @param month - Month (1-12)
-'' @param day - Day (1-31)
+'' @param day - Day (1-31, validated against month/year)
 '' @param hour - Hour (0-23)
 '' @param minute - Minute (0-59)
 '' @param second - Second (0-59)
+'' @returns status - SUCCESS or E_INVALID_PARAM
 
-  date_stamp := (year - FAT_YEAR_BASE) << FAT_YEAR_SHIFT | month << FAT_MONTH_SHIFT | day << FAT_DAY_SHIFT | hour << FAT_HOUR_SHIFT | minute << FAT_MINUTE_SHIFT | second >> 1
+  if year < 1980 or year > 2107
+    return set_error(E_INVALID_PARAM)
+  if month < 1 or month > 12
+    return set_error(E_INVALID_PARAM)
+  if day < 1 or day > daysInMonth(year, month)
+    return set_error(E_INVALID_PARAM)
+  if hour > 23 or minute > 59 or second > 59
+    return set_error(E_INVALID_PARAM)
+
+  FIELD[fld_yr][0]  := year - FAT_YEAR_BASE
+  FIELD[fld_mon][0] := month
+  FIELD[fld_day][0] := day
+  FIELD[fld_hr][0]  := hour
+  FIELD[fld_min][0] := minute
+  FIELD[fld_sec][0] := second >> 1
+  ct_active := true
+  ct_last_tick := getct()
+  status := SUCCESS
+
+PUB getDate() : year, month, day, hour, minute, second
+'' Get the current date and time from the live clock.
+'' Returns unpacked date/time values read directly from hub RAM.
+''
+'' @returns year - Year (1980-2107)
+'' @returns month - Month (1-12)
+'' @returns day - Day (1-31)
+'' @returns hour - Hour (0-23)
+'' @returns minute - Minute (0-59)
+'' @returns second - Second (0-58, even values only due to FAT32 2-second resolution)
+
+  year   := FIELD[fld_yr][0] + FAT_YEAR_BASE
+  month  := FIELD[fld_mon][0]
+  day    := FIELD[fld_day][0]
+  hour   := FIELD[fld_hr][0]
+  minute := FIELD[fld_min][0]
+  second := FIELD[fld_sec][0] << 1
 
 PUB serial_number(dev) : sn_hi, sn_lo | status
 '' Get device serial number.
@@ -2310,6 +2485,22 @@ PUB attributes() : attr_byte
 '' @returns attr_byte - FAT attribute byte
 
   attr_byte := dirEntAttr(@entry_buffer)
+
+PUB wrtDate() : date_word
+'' Return the modification date of the current directory entry.
+'' FAT16 packed format: bits [15:9]=year-1980, [8:5]=month, [4:0]=day
+''
+'' @returns date_word - FAT16 packed date word
+
+  date_word := WORD[@entry_buffer + DIR_WRT_TIME_OFFSET + 2]
+
+PUB wrtTime() : time_word
+'' Return the modification time of the current directory entry.
+'' FAT16 packed format: bits [15:11]=hour, [10:5]=minute, [4:0]=second/2
+''
+'' @returns time_word - FAT16 packed time word
+
+  time_word := WORD[@entry_buffer + DIR_WRT_TIME_OFFSET]
 
 PUB volumeLabel(dev) : p_label
 '' Return pointer to volume label string (SD only).
@@ -3362,10 +3553,31 @@ PRI fs_worker() | cur_cmd
 
   debug[CH_API]("  [fs_worker] Pins initialized: CS=P", udec_(PIN_SD_CS), " MOSI=P", udec_(PIN_MOSI), " MISO=P", udec_(PIN_MISO), " SCK=P", udec_(PIN_SD_SCK))
 
-  ' Main command loop
+  ' Initialize FIELD pointers into date_stamp (accessible from any cog via hub RAM)
+  fld_yr  := ^@date_stamp.[31..25]
+  fld_mon := ^@date_stamp.[24..21]
+  fld_day := ^@date_stamp.[20..16]
+  fld_hr  := ^@date_stamp.[15..11]
+  fld_min := ^@date_stamp.[10..5]
+  fld_sec := ^@date_stamp.[4..0]
+
+  ' Main command loop (structured: clock tick, command dispatch, idle flush)
+  idle_timer := getct()
+  flush_done := true
+
   repeat
-    ' Wait for command (polling - will optimize to WAITATN later)
+    ' --- Filesystem command (Priority 1) ---
     repeat until (cur_cmd := pb_cmd) <> CMD_NONE
+      ' --- Clock tick (F2) ---
+      if ct_active
+        if (getct() - ct_last_tick) >= ct_tick_clocks
+          tick_clock()
+          ct_last_tick := getct()
+
+      ' --- Auto-flush (F3) ---
+      if not flush_done
+        if (getct() - idle_timer) >= idle_flush_clocks
+          do_idle_flush()
 
 #ifdef SD_INCLUDE_STACK_CHECK
     if stackUtils.isStackOverflow(@cog_stack, STACK_SIZE)
@@ -3732,9 +3944,66 @@ PRI fs_worker() | cur_cmd
         debug[CH_API]("  [fs_worker] Unknown command: ", udec_(cur_cmd))
         pb_status := E_BAD_RESPONSE
 
-    ' Signal completion
+    ' Signal completion and reset idle timer
     pb_cmd := CMD_NONE
     COGATN(1 << pb_caller)                                                      ' Wake the caller
+    idle_timer := getct()
+    flush_done := false
+
+PRI tick_clock()
+' Increment live clock by 2 seconds using FIELD operators on date_stamp.
+' Called from worker loop every 2 seconds when ct_active is true.
+
+  FIELD[fld_sec][0]++
+  if FIELD[fld_sec][0] >= 30
+    FIELD[fld_sec][0]~
+    FIELD[fld_min][0]++
+    if FIELD[fld_min][0] >= 60
+      FIELD[fld_min][0]~
+      FIELD[fld_hr][0]++
+      if FIELD[fld_hr][0] >= 24
+        FIELD[fld_hr][0]~
+        FIELD[fld_day][0]++
+        if FIELD[fld_day][0] > daysInMonth(FIELD[fld_yr][0] + FAT_YEAR_BASE, FIELD[fld_mon][0])
+          FIELD[fld_day][0] := 1
+          FIELD[fld_mon][0]++
+          if FIELD[fld_mon][0] > 12
+            FIELD[fld_mon][0] := 1
+            FIELD[fld_yr][0]++
+
+PRI daysInMonth(year, month) : days
+' Return number of days in given month, accounting for leap years.
+'
+' @param year - Full year (e.g., 2026)
+' @param month - Month (1-12)
+' @returns days - Number of days in the month
+
+  days := BYTE[@days_table][month - 1]
+  if month == 2 and isLeapYear(year)
+    days := 29
+
+PRI isLeapYear(year) : bLeap
+' Check if year is a leap year.
+'
+' @param year - Full year (e.g., 2024)
+' @returns bLeap - TRUE if leap year
+
+  bLeap := (year & 3) == 0
+  if year == 2100
+    bLeap := false
+
+PRI do_idle_flush() | idx
+' Auto-flush dirty handles after idle period. Scans all handles for HF_DIRTY,
+' syncs each, then updates FSInfo if needed. Checks pb_cmd between each handle
+' sync to abort immediately if a command arrives.
+
+  repeat idx from 0 to MAX_OPEN_FILES - 1
+    if pb_cmd <> CMD_NONE
+      return                            ' Command arrived, abort flush
+    if h_flags[idx] & HF_DIRTY
+      do_sync_h(idx)
+  updateFSInfo()
+  flush_done := true
 
 PRI send_command(op_cmd, p0, p1, p2, p3) : status
 ' Send command to worker and wait - acquire lock, send command, wait for completion.
@@ -4143,6 +4412,8 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
     fat2_sec := fat_sec + sec_per_fat
     root_sec := (fat_sec + 2 * sec_per_fat)
     longfill(@cog_dir_sec, root_sec, 8)                                             ' All cogs start at root
+    idle_flush_clocks := clkfreq / 1000 * IDLE_FLUSH_MS
+    ct_tick_clocks := clkfreq * 2
     cluster_offset := root_sec // sec_per_clus
     bytemove(@vol_label, vbrVolLabelAddr(pVBR), 11)
     vol_label[11] := 0
@@ -4534,6 +4805,7 @@ PRI do_close_h(handle) : status | p_buf
         status := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + 28] := h_size[handle]                ' Update size field
+        long[@dir_buf + h_dir_offset[handle] + DIR_WRT_TIME_OFFSET] := date_stamp  ' Update modification timestamp
         if not writeSector(h_dir_sector[handle], BUF_DIR)
           debug[CH_FILE]("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
           status := E_IO_ERROR
@@ -4871,6 +5143,7 @@ PRI do_sync_h(handle) : status | p_buf
         status := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + 28] := h_size[handle]
+        long[@dir_buf + h_dir_offset[handle] + DIR_WRT_TIME_OFFSET] := date_stamp  ' Update modification timestamp
         writeSector(h_dir_sector[handle], BUF_DIR)
 
     debug[CH_FILE]("  [do_sync_h] Sync complete")

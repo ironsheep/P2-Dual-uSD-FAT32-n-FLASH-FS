@@ -361,6 +361,18 @@ Per-cog snapshots (`saved_data0..2[8]`) are captured before releasing the lock, 
 | `CMD_READ_CSD` | 28 | `SD_INCLUDE_REGISTERS` | Read CSD register |
 | `CMD_READ_SD_STATUS` | 29 | `SD_INCLUDE_REGISTERS` | Read SD Status (ACMD13) |
 
+### Worker Loop Architecture
+
+The worker cog runs a structured main loop with three functional slots, executed on every iteration:
+
+1. **Clock tick** -- Every 2 seconds, increments `date_stamp` using FIELD operators on the FAT32-packed date/time fields (seconds, minutes, hours, day, month, year). The clock is activated by the first call to `setDate()` and runs continuously thereafter, providing automatic timestamps for file creation and modification without further caller intervention.
+
+2. **Command dispatch** -- The existing filesystem command processing. When `pb_cmd <> CMD_NONE`, the worker dispatches to the appropriate handler, writes results to `pb_status` and `pb_data0..2`, signals the caller via `COGATN`, and resets `pb_cmd` to `CMD_NONE`.
+
+3. **Auto-flush** -- After 200ms of idle time (no commands received), the worker flushes all dirty file handles and the FSInfo sector to disk. This protects against data loss from unexpected card removal. The auto-flush checks `pb_cmd` between each handle sync, aborting immediately if a new command arrives so there is zero latency impact on normal operations.
+
+The inner polling loop (`repeat until pb_cmd <> CMD_NONE`) is where the idle-time work fires. While waiting for the next command, the worker performs clock ticks and auto-flush checks on each iteration, keeping both subsystems responsive without dedicated timers.
+
 ## Unified Handle System
 
 ### Shared Handle Pool
@@ -571,7 +583,7 @@ The pool is reset to all-free on `mount(DEV_FLASH)` and `unmount(DEV_FLASH)`.
 
 ## Conditional Compilation
 
-Five feature flags control optional SD features. Flash features are always compiled.
+Six feature flags control optional SD features. Flash features are always compiled.
 
 | Flag | Features Included |
 |------|-------------------|
@@ -579,7 +591,8 @@ Five feature flags control optional SD features. Flash features are always compi
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access, OCR, VBR read |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
 | `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, test error injection hooks |
-| `SD_INCLUDE_ALL` | Enables all four flags above |
+| `SD_INCLUDE_ASYNC` | Async (non-blocking) read/write with polling completion |
+| `SD_INCLUDE_ALL` | Enables all five flags above |
 
 ### Enabling Flags
 
@@ -806,6 +819,14 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_NOT_SUPPORTED` | -122 | Operation not supported on this device |
 | `E_STACK_OVERFLOW` | -130 | Worker cog stack overflow detected |
 
+### Validation and Async Errors
+
+| Error | Value | Meaning |
+|-------|-------|---------|
+| `E_INVALID_PARAM` | -94 | Parameter value out of valid range |
+| `E_ASYNC_BUSY` | -95 | An async operation is already in flight |
+| `E_NO_ASYNC_OP` | -96 | No async operation to get result from |
+
 The `string_for_error(code)` method returns a human-readable string for any error code.
 
 ## Public API Summary
@@ -907,7 +928,8 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 
 | Method | Description |
 |--------|-------------|
-| `setDate(year, month, day, hour, minute, second)` | Set date/time for new files and directories |
+| `setDate(year, month, day, hour, minute, second) : status` | Validate and set date/time, activate live 2-second clock |
+| `getDate() : year, month, day, hour, minute, second` | Read live clock values from hub RAM |
 
 ### Utilities
 
@@ -993,6 +1015,16 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `displaySector()` | Hex dump of sector buffer |
 | `displayEntry()` | Hex dump of directory entry |
 | `displayFAT(cluster)` | Hex dump of FAT sector containing cluster |
+
+### SD_INCLUDE_ASYNC
+
+| Method | Description |
+|--------|-------------|
+| `startReadHandle(handle, p_buffer, count) : status` | Begin async read, returns PENDING |
+| `startWriteHandle(handle, p_buffer, count) : status` | Begin async write, returns PENDING |
+| `isComplete() : done` | Non-blocking poll for async completion |
+| `getResult() : status` | Get result and release lock |
+| `cancelAsync() : status` | Cancel in-flight async operation and release lock |
 
 ---
 

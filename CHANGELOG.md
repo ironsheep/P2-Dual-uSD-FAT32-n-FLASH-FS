@@ -6,6 +6,31 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-18
+
+Update SD sub-driver to v1.4.0 feature set: live clock, auto-flush, non-blocking I/O, and modification timestamps.
+
+### Added
+- **Live clock**: `setDate()` now validates parameters and activates a 2-second FIELD-based clock that ticks inside the worker loop. New `getDate()` reads the live clock from any cog.
+- **Auto-flush**: After 200 ms of idle time the worker cog automatically flushes all dirty file handles and FSInfo -- protects against data loss on card removal without `closeFileHandle()` or `unmount()`
+- **Non-blocking I/O** (`SD_INCLUDE_ASYNC`): `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` -- caller cog runs at full 350 MHz while the SD I/O completes
+- **Modification timestamps**: `do_close_h()` and `do_sync_h()` now write `date_stamp` to the directory entry's WrtTime/WrtDate fields on every flush
+- **Directory entry accessors**: `wrtDate()` and `wrtTime()` PUB methods for reading modification timestamps from the current entry
+- **Demo shell**: `date` command (set/display), `dir` now shows date/time columns for SD listings
+- **New test suites**: `DFS_SD_RT_timestamp_tests` (9 tests), `DFS_SD_RT_async_tests` (12 tests), 3 auto-flush tests added to `DFS_SD_RT_volume_tests`
+- **Error codes**: `E_INVALID_PARAM` (-94), `E_ASYNC_BUSY` (-95), `E_NO_ASYNC_OP` (-96)
+- **Constants**: `IDLE_FLUSH_MS` (200), `PENDING` (1)
+
+### Changed
+- Worker loop restructured from tight blocking poll to multi-concern architecture (clock tick, command dispatch, auto-flush)
+- `setDate()` now returns `: status` (SUCCESS or E_INVALID_PARAM) -- previously void
+- SD sub-driver version bumped to v1.4.0
+- Regression runner updated: 31 standard suites, 1,332 tests
+
+### Hardware Verified
+- Full regression: 31 suites, 1,332 tests, 0 failures
+- Both pnut-ts and FlexSpin compile clean
+
 ## [1.1.0] - 2026-03-09
 
 ### Fixed
@@ -48,6 +73,7 @@ Initial release of the unified dual-FS driver for the Parallax Propeller 2.
 ### Hardware Verified
 - Tested on P2 Edge Module with 32 GB GigaStone and Elite SD cards -- 29 suites, 1,308 tests, 0 failures on both
 
-[Unreleased]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/releases/tag/v1.0.0

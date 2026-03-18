@@ -173,6 +173,7 @@ CON { command enums }
   CMD_LABEL, CMD_VOL
   CMD_ALIAS, CMD_TREE
   CMD_DEV
+  CMD_DATE
 
 
 ' Enable full driver features for card info display
@@ -361,6 +362,7 @@ PUB run_command(eCmd)
       CMD_ALIAS               : do_alias()
       CMD_TREE                : do_tree()
       CMD_DEV                 : do_dev()
+      CMD_DATE                : do_date()
       other                   : not_implemented()
 
 
@@ -384,6 +386,7 @@ PUB show_help()
     serial.fstr0(@"  label [<name>]    Vol label  audit        Check FS       touch <file>  Create\r\n")
     serial.fstr0(@"  cls               Clear      fsck         Repair FS      demo          Demo files\r\n")
     serial.fstr0(@"  alias             Aliases    bench        Throughput     format [sd|fl]\r\n")
+    serial.fstr0(@"  date [y m d h m s] Set/show date/time\r\n")
     serial.fstr0(@"  help              This help\r\n")
     serial.fstr0(@"\r\n  Cross-device:  copy sd:<file> fl:<file>  ('fl' and 'flash' both work)\r\n")
 
@@ -711,7 +714,7 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb, status, used, f
     serial.fstr0(@"\r\n")
 
 
-PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
+PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path, wDate, wTime, yr, mon, dy, hr, mn, sc
 
 '' List directory contents
 
@@ -731,8 +734,8 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
     else
       p_path := @"."
       serial.fstr1(@"\r\n Directory of %s\r\n\r\n", @cwd)
-    serial.fstr0(@"  Attr      Size  Name\r\n")
-    serial.fstr0(@"  ----  --------  --------------------------------\r\n")
+    serial.fstr0(@"  Attr  Date        Time      Size  Name\r\n")
+    serial.fstr0(@"  ----  ----------  --------  --------  --------------------------------\r\n")
 
     dh := dfs.openDirectory(dfs.DEV_SD, p_path)
     if (dh < 0)
@@ -752,6 +755,14 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
 
         attrib := dfs.attributes()
         size := dfs.fileSize()
+        wDate := dfs.wrtDate()
+        wTime := dfs.wrtTime()
+        yr  := ((wDate >> 9) & $7F) + 1980
+        mon := (wDate >> 5) & $0F
+        dy  := wDate & $1F
+        hr  := (wTime >> 11) & $1F
+        mn  := (wTime >> 5) & $3F
+        sc  := (wTime & $1F) << 1
 
         ' Format attributes
         serial.fstr0(@"  ")
@@ -759,6 +770,9 @@ PUB do_dir() | dh, status, count, total_size, attrib, size, p_name, p_path
         serial.tx((attrib & ATTR_READ_ONLY) ? "R" : "-")
         serial.tx((attrib & ATTR_HIDDEN) ? "H" : "-")
         serial.tx((attrib & ATTR_SYSTEM) ? "S" : "-")
+
+        serial.fstr3(@"  %04d-%02d-%02d  ", yr, mon, dy)
+        serial.fstr3(@"%02d:%02d:%02d", hr, mn, sc)
 
         if (attrib & ATTR_DIRECTORY)
           serial.fstr1(@"    <DIR>  %s\r\n", p_name)
@@ -1732,6 +1746,44 @@ PUB do_label() | p_label, status
           serial.fstr1(@"Failed to set volume label (error: %d)\r\n", status)
 
 
+PUB do_date() | yr, mon, dy, hr, mn, sc, status
+
+'' Set or display the real-time clock
+'' Usage: date <year> <month> <day> <hour> <minute> <second>
+''        date  (no args shows current date/time)
+
+  if (ntokens == 7)
+    yr  := decval(token(1))
+    mon := decval(token(2))
+    dy  := decval(token(3))
+    hr  := decval(token(4))
+    mn  := decval(token(5))
+    sc  := decval(token(6))
+    status := dfs.setDate(yr, mon, dy, hr, mn, sc)
+    if status < 0
+      serial.fstr1(@"Error: %d (invalid parameter)\r\n", status)
+    else
+      serial.fstr0(@"Date/time set.\r\n")
+  elseif (ntokens == 1)
+    yr, mon, dy, hr, mn, sc := dfs.getDate()
+    serial.fstr3(@"%04d-%02d-%02d ", yr, mon, dy)
+    serial.fstr3(@"%02d:%02d:%02d\r\n", hr, mn, sc)
+  else
+    bad_syntax()
+
+
+PRI decval(p_str) : value | c
+
+' Parse unsigned decimal integer from string
+
+  value := 0
+  repeat while (c := byte[p_str++])
+    if c >= "0" and c <= "9"
+      value := value * 10 + (c - "0")
+    else
+      quit
+
+
 PUB do_alias()
 
 '' Show all command aliases
@@ -2371,6 +2423,7 @@ cmdVol        BYTE    CMD_VOL,       "vol",       0
 cmdAlias      BYTE    CMD_ALIAS,     "alias",     0
 cmdTree       BYTE    CMD_TREE,      "tree",      0
 cmdDev        BYTE    CMD_DEV,       "dvc",       0
+cmdDate       BYTE    CMD_DATE,      "date",      0
 
 cmdTable      ' first table-entry must follow immediately
               WORD    @cmdHelp, @cmdVersion, @cmdCls, @cmdClear
@@ -2386,6 +2439,7 @@ cmdTable      ' first table-entry must follow immediately
               WORD    @cmdLabel, @cmdVol
               WORD    @cmdAlias, @cmdTree
               WORD    @cmdDev
+              WORD    @cmdDate
 cmdTableEnd   ' last entry must be immediately above this line
 cmdCt         BYTE    (@cmdTableEnd - @cmdTable) >> 1
 

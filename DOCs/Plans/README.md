@@ -22,6 +22,8 @@ Completed plans are in `archive/` (gitignored, local-only). Kept for reference b
 
 | Document | Description |
 |----------|-------------|
+| DEBUG-MASK-Conversion-Plan.md | DEBUG_MASK channel conversion: 448 debug() statements, 12 channels |
+| FlexSpin-Pin-Constants-Plan.md | FlexSpin compatibility: pin constants + OBJ override syntax |
 | SPI-Backend-Consolidation-Plan.md | SPI backend refactoring: 3 shared methods, ~286 lines saved |
 | R1-Bit7-Fix-Plan.md | R1 response bit-7 fix (SD spec 7.3.2.1), 9 loops in 7 methods |
 | SD-Driver-v1.3.0-Upgrade-Plan.md | SD driver v1.3.0 upgrade (CMD13/CMD23 probes, CMD12 tolerance) |

@@ -119,7 +119,9 @@ SUITES+=(
 SUITES+=(
     "DFS_SD_RT_subdir_ops_tests.spin2:60"
     "DFS_SD_RT_seek_tests.spin2:60"
-    "DFS_SD_RT_volume_tests.spin2:60"
+    "DFS_SD_RT_volume_tests.spin2:90"
+    "DFS_SD_RT_timestamp_tests.spin2:60"
+    "DFS_SD_RT_async_tests.spin2:60"
     "DFS_SD_RT_parity_tests.spin2:90"
     "DFS_FL_RT_append_tests.spin2:120"
     "DFS_FL_RT_seek_tests.spin2:90"

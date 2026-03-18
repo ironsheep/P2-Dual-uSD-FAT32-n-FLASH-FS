@@ -117,6 +117,10 @@ maxLabel        BYTE    "12345678901", 0
 ' File content
 testContent     BYTE    "Volume test content data", 0
 syncContent     BYTE    "Sync test data chunk one", 0
+flushContent    BYTE    "Auto-flush test data chunk!", 0
+
+' Auto-flush test filenames
+vlFlushFile     BYTE    "VLFLUSH.TXT", 0
 
 ' Buffers
 vbrBuf          BYTE    0[BYTES_PER_SECTOR]
@@ -125,8 +129,10 @@ vbrBuf2         BYTE    0[BYTES_PER_SECTOR]
 vbrBuf2_guard   BYTE    0[GUARD_SIZE]
 ' Saved original label
 origLabel       BYTE    0[LABEL_BUF_SIZE]
+' Auto-flush read buffer
+flushReadBuf    BYTE    0[BYTES_PER_SECTOR]
 
-PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found
+PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, fsize, loopIdx
 '' Main entry point for volume operation regression tests
 
     debug(" ")
@@ -440,6 +446,72 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, pLabel, idx,
         utils.evaluateSubValue(result, @"dir month field", 3)
 
         ' ======================================================================
+        ' TEST GROUP: Auto-Flush on Idle
+        ' ======================================================================
+        utils.startTestGroup(@"Auto-Flush on Idle")
+
+        ' Test: Write data, don't close, wait 300ms, verify size via second read handle
+        utils.startTest(@"Auto-flush persists unclosed write after 300ms")
+        dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
+        h1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
+        utils.evaluateSubBool(h1 >= 0, @"create file", true)
+        if h1 >= 0
+            bytesWritten := dfs.writeHandle(h1, @flushContent, strsize(@flushContent))
+            utils.evaluateSubBool(bytesWritten > 0, @"write data", true)
+            ' Wait for auto-flush (200ms threshold + margin)
+            waitms(300)
+            ' Open second read handle to verify data was flushed
+            h2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
+            if h2 >= 0
+                fsize := dfs.fileSizeHandle(h2)
+                debug("   flushed size=", udec_(fsize), " expected=", udec_(strsize(@flushContent)))
+                utils.evaluateSubValue(fsize, @"flushed file size", strsize(@flushContent))
+                dfs.closeFileHandle(h2)
+            else
+                utils.evaluateSubBool(false, @"open read handle", true)
+            dfs.closeFileHandle(h1)
+
+        ' Test: Two writes, wait 300ms, verify combined size
+        utils.startTest(@"Auto-flush persists two writes after 300ms")
+        dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
+        h1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
+        if h1 >= 0
+            dfs.writeHandle(h1, @flushContent, strsize(@flushContent))
+            dfs.writeHandle(h1, @flushContent, strsize(@flushContent))
+            waitms(300)
+            h2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
+            if h2 >= 0
+                fsize := dfs.fileSizeHandle(h2)
+                debug("   flushed size=", udec_(fsize), " expected=", udec_(strsize(@flushContent) * 2))
+                utils.evaluateSubValue(fsize, @"combined flushed size", strsize(@flushContent) * 2)
+                dfs.closeFileHandle(h2)
+            else
+                utils.evaluateSubBool(false, @"open read handle", true)
+            dfs.closeFileHandle(h1)
+        else
+            utils.evaluateSubBool(false, @"create file", true)
+
+        ' Test: 50 rapid writes don't lose data (flush doesn't interfere)
+        utils.startTest(@"50 rapid writes preserve all data")
+        dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
+        h1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
+        if h1 >= 0
+            repeat loopIdx from 0 to 49
+                dfs.writeHandle(h1, @"X", 1)
+            dfs.closeFileHandle(h1)
+            h2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
+            if h2 >= 0
+                fsize := dfs.fileSizeHandle(h2)
+                debug("   total size=", udec_(fsize), " expected=50")
+                utils.evaluateSingleValue(fsize, @"50 writes total size", 50)
+                dfs.closeFileHandle(h2)
+            else
+                utils.evaluateSubBool(false, @"open read handle", true)
+        else
+            utils.evaluateBool(false, @"create file", true)
+        dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
+
+        ' ======================================================================
         ' TEST GROUP: VBR Access (via readSectorRaw and readVBRRaw)
         ' ======================================================================
         utils.startTestGroup(@"VBR Access via readSectorRaw")
@@ -535,6 +607,7 @@ PRI cleanupTestFiles()
     dfs.deleteFile(dfs.DEV_SD, @vlDateFile2)
     dfs.deleteFile(dfs.DEV_SD, @vlLegacyFile)
     dfs.deleteFile(dfs.DEV_SD, @vlDateDir)
+    dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
 
 PRI strncmp(pStr1, pStr2, maxLen) : match | idx
 ' Compare first maxLen bytes of two strings.

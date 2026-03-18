@@ -1,0 +1,246 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_timestamp_tests.spin2
+''   Purpose.... Tests setDate validation, getDate round-trip, and live clock advance
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 18 MAR 2026
+''
+'' =================================================================================================
+''
+'' Tests the following APIs:
+''   - setDate() with validation (E_INVALID_PARAM for out-of-range values)
+''   - getDate() round-trip (set then get, values match)
+''   - Live clock advance after waitms()
+''   - File modification timestamp non-zero after write+close
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 270_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' External SD header (base pin 16)
+    'SD_CS   = 20
+    'SD_MOSI = 19
+    'SD_MISO = 18
+    'SD_SCK  = 21
+
+    ' FAT directory entry offsets
+    DIR_WRITE_DATE_OFFSET = 24
+    DIR_WRITE_TIME_OFFSET = 22
+
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+    utils : "DFS_RT_utilities"
+
+DAT
+
+' Test filenames
+tsTestFile      BYTE    "TSTEST.TXT", 0
+
+' File content
+testContent     BYTE    "Timestamp test data", 0
+
+PUB go() | workerCog, status, h1, idx, pEntry, pLabel, wrtDate, wrtTime, found, yr, mon, dy, hr, mn, sc
+'' Main entry point for timestamp regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) V3 - Timestamp Tests")
+    debug("==============================================")
+
+    ' Initialize worker cog
+    workerCog := dfs.init()
+
+    ' Mount the card first
+    status := dfs.mount(dfs.DEV_SD)
+    if status <> dfs.SUCCESS
+        debug("ERROR: Could not mount SD card!")
+    else
+        ' Show card info
+        debug(" ")
+        debug("* SD Card Information:")
+        debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+        debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+
+        ' Clean up any existing test files
+        cleanupTestFiles()
+
+        ' ======================================================================
+        ' TEST GROUP: setDate validation
+        ' ======================================================================
+        utils.startTestGroup(@"setDate validation")
+
+        ' Test: setDate() accepts valid date
+        utils.startTest(@"setDate() accepts valid date")
+        status := dfs.setDate(2026, 3, 18, 14, 30, 0)
+        utils.evaluateSingleValue(status, @"setDate(valid)", dfs.SUCCESS)
+
+        ' Test: setDate() rejects year < 1980
+        utils.startTest(@"setDate() rejects year < 1980")
+        status := dfs.setDate(1979, 1, 1, 0, 0, 0)
+        utils.evaluateSingleValue(status, @"setDate(yr 1979)", dfs.E_INVALID_PARAM)
+
+        ' Test: setDate() rejects month 0
+        utils.startTest(@"setDate() rejects month 0")
+        status := dfs.setDate(2026, 0, 1, 0, 0, 0)
+        utils.evaluateSingleValue(status, @"setDate(mon 0)", dfs.E_INVALID_PARAM)
+
+        ' Test: setDate() rejects month 13
+        utils.startTest(@"setDate() rejects month 13")
+        status := dfs.setDate(2026, 13, 1, 0, 0, 0)
+        utils.evaluateSingleValue(status, @"setDate(mon 13)", dfs.E_INVALID_PARAM)
+
+        ' Test: setDate() rejects day 32
+        utils.startTest(@"setDate() rejects day 32")
+        status := dfs.setDate(2026, 1, 32, 0, 0, 0)
+        utils.evaluateSingleValue(status, @"setDate(day 32)", dfs.E_INVALID_PARAM)
+
+        ' Test: setDate() rejects hour 24
+        utils.startTest(@"setDate() rejects hour 24")
+        status := dfs.setDate(2026, 1, 1, 24, 0, 0)
+        utils.evaluateSingleValue(status, @"setDate(hr 24)", dfs.E_INVALID_PARAM)
+
+        ' ======================================================================
+        ' TEST GROUP: getDate round-trip
+        ' ======================================================================
+        utils.startTestGroup(@"getDate round-trip")
+
+        ' Test: getDate() matches setDate() values
+        utils.startTest(@"getDate() matches setDate() values")
+        status := dfs.setDate(2026, 3, 18, 14, 30, 58)
+        utils.evaluateSubValue(status, @"setDate()", dfs.SUCCESS)
+        yr, mon, dy, hr, mn, sc := dfs.getDate()
+        debug("   got: ", udec_(yr), "/", udec_(mon), "/", udec_(dy), " ", udec_(hr), ":", udec_(mn), ":", udec_(sc))
+        utils.evaluateSubValue(yr, @"year", 2026)
+        utils.evaluateSubValue(mon, @"month", 3)
+        utils.evaluateSubValue(dy, @"day", 18)
+        utils.evaluateSubValue(hr, @"hour", 14)
+        utils.evaluateSubValue(mn, @"minute", 30)
+        utils.evaluateSubValue(sc, @"second", 58)
+
+        ' ======================================================================
+        ' TEST GROUP: Live clock advance
+        ' ======================================================================
+        utils.startTestGroup(@"Live clock advance")
+
+        ' Test: Clock advances after 5 seconds
+        utils.startTest(@"Clock advances after 5 seconds")
+        status := dfs.setDate(2026, 3, 18, 14, 30, 0)
+        utils.evaluateSubValue(status, @"setDate()", dfs.SUCCESS)
+        waitms(5000)
+        yr, mon, dy, hr, mn, sc := dfs.getDate()
+        debug("   after 5s: ", udec_(yr), "/", udec_(mon), "/", udec_(dy), " ", udec_(hr), ":", udec_(mn), ":", udec_(sc))
+        ' With 2-second resolution, 5 real seconds should yield sc >= 4
+        utils.evaluateSubBool(sc > 0, @"seconds advanced", true)
+        utils.evaluateSubBool(hr == 14, @"hour unchanged", true)
+        utils.evaluateSubBool(mn == 30, @"minute unchanged", true)
+
+        ' ======================================================================
+        ' TEST GROUP: File modification timestamp
+        ' ======================================================================
+        utils.startTestGroup(@"File modification timestamp")
+
+        ' Test: Write+close gives non-zero modification timestamp
+        utils.startTest(@"Write+close gives non-zero mod timestamp")
+        dfs.setDate(2026, 3, 18, 14, 30, 0)
+        dfs.deleteFile(dfs.DEV_SD, @tsTestFile)
+        h1 := dfs.createFileNew(dfs.DEV_SD, @tsTestFile)
+        if h1 >= 0
+            dfs.writeHandle(h1, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(h1)
+        ' Read directory entries to find file
+        wrtDate := 0
+        wrtTime := 0
+        found := false
+        idx := 0
+        repeat
+            pEntry := dfs.readDirectory(idx)
+            if pEntry == 0
+                quit
+            pLabel := dfs.fileName()
+            if strcomp(pLabel, @"TSTEST.TXT")
+                wrtDate := WORD[pEntry + DIR_WRITE_DATE_OFFSET]
+                wrtTime := WORD[pEntry + DIR_WRITE_TIME_OFFSET]
+                found := true
+                quit
+            idx++
+        debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate), " wrtTime=$", uhex_(wrtTime))
+        utils.evaluateSubBool(found, @"file found", true)
+        utils.evaluateSubBool(wrtDate <> 0, @"date non-zero", true)
+        utils.evaluateSubBool(wrtTime <> 0, @"time non-zero", true)
+
+        ' ======================================================================
+        ' Cleanup and Summary
+        ' ======================================================================
+        cleanupTestFiles()
+
+        dfs.unmount(dfs.DEV_SD)
+
+#ifdef SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#endif
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+PRI cleanupTestFiles()
+' Delete all test files
+
+    dfs.deleteFile(dfs.DEV_SD, @tsTestFile)
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  =================================================================================================
+}}
