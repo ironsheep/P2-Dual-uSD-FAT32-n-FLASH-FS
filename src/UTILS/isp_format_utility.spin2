@@ -22,7 +22,11 @@
 
 CON
 
-    DEBUG_DISABLE = 0   ' Enable debug output
+CON ' ---- Debug Channel Assignments (DECISION-002) ----
+    ' All channels off for committed code. Enable temporarily during format dev/repair.
+  CH_VERIFY = 0               ' Write-readback verification: hex dumps, buffer addresses, diagnostics
+
+  DEBUG_MASK = 0              ' All channels off for committed code (see DECISION-002)
 
     ' Format utility error codes (not in driver)
     E_FORMAT_FAILED     = -200      ' Format operation step failed
@@ -479,7 +483,7 @@ PRI doFormat() : status
     debug("  SD Card FAT32 Formatter")
     debug("  Volume Label: [", zstr_(@volumeLabel), "]")
     debug("==============================================")
-    debug(" ")
+    debug[CH_VERIFY](" ")
 
     ' Initialize card (low-level, no filesystem mount)
     debug("* Initializing SD card...")
@@ -516,7 +520,7 @@ PRI doFormat() : status
 
     ' Write MBR
     if status == dfs.SUCCESS
-        debug(" ")
+        debug[CH_VERIFY](" ")
         debug("* Writing MBR...")
         if not writeMBR()
             debug("ERROR: Failed to write MBR!")
@@ -527,18 +531,18 @@ PRI doFormat() : status
     if status == dfs.SUCCESS
         dfs.readSectorRaw(0, @verifyBuf)
 #ifdef __FLEXSPIN__
-        debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + MBR_SIG_OFFSET]), " type=$", uhex_byte_(verifyBuf[MBR_PART1_TYPE]), " start=", udec_(LONG[@verifyBuf + MBR_PART1_LBA]))
-        debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+        debug[CH_VERIFY]("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + MBR_SIG_OFFSET]), " type=$", uhex_byte_(verifyBuf[MBR_PART1_TYPE]), " start=", udec_(LONG[@verifyBuf + MBR_PART1_LBA]))
+        debug[CH_VERIFY]("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
 #else
-        debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + MBR_SIG_OFFSET]), ...
+        debug[CH_VERIFY]("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + MBR_SIG_OFFSET]), ...
           " type=$", uhex_byte_(verifyBuf[MBR_PART1_TYPE]), ...
           " start=", udec_(LONG[@verifyBuf + MBR_PART1_LBA]))
-        debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), ...
+        debug[CH_VERIFY]("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), ...
           " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
           " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
           " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
 #endif
-        debug("  verify buf addr: $", uhex_long_(@verifyBuf))
+        debug[CH_VERIFY]("  verify buf addr: $", uhex_long_(@verifyBuf))
         if WORD[@verifyBuf + MBR_SIG_OFFSET] <> MBR_SIGNATURE
             debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
 
@@ -554,9 +558,9 @@ PRI doFormat() : status
     if status == dfs.SUCCESS
         dfs.readSectorRaw(partitionStart, @verifyBuf)
 #ifdef __FLEXSPIN__
-        debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[VBR_JUMP_BOOT]), " OEM=$", uhex_byte_(verifyBuf[VBR_OEM_NAME]), uhex_byte_(verifyBuf[VBR_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + VBR_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[VBR_SEC_PER_CLUS]), " sig=$", uhex_word_(WORD[@verifyBuf + MBR_SIG_OFFSET]))
+        debug[CH_VERIFY]("  VBR readback: jump=$", uhex_byte_(verifyBuf[VBR_JUMP_BOOT]), " OEM=$", uhex_byte_(verifyBuf[VBR_OEM_NAME]), uhex_byte_(verifyBuf[VBR_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + VBR_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[VBR_SEC_PER_CLUS]), " sig=$", uhex_word_(WORD[@verifyBuf + MBR_SIG_OFFSET]))
 #else
-        debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[VBR_JUMP_BOOT]), ...
+        debug[CH_VERIFY]("  VBR readback: jump=$", uhex_byte_(verifyBuf[VBR_JUMP_BOOT]), ...
           " OEM=$", uhex_byte_(verifyBuf[VBR_OEM_NAME]), uhex_byte_(verifyBuf[VBR_OEM_NAME + 1]), ...
           " bps=", udec_(WORD[@verifyBuf + VBR_BYTES_PER_SEC]), ...
           " spc=", udec_(verifyBuf[VBR_SEC_PER_CLUS]), ...
@@ -600,7 +604,7 @@ PRI doFormat() : status
             status := E_FORMAT_FAILED
 
     if status == dfs.SUCCESS
-        debug(" ")
+        debug[CH_VERIFY](" ")
         debug("==============================================")
         debug("  FORMAT COMPLETE")
         debug("  Volume: [", zstr_(@volumeLabel), "]")
@@ -685,18 +689,18 @@ PRI writeMBR() : success | partitionSectors
 
     ' Diagnostic: dump write buffer before writing
 #ifdef __FLEXSPIN__
-    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + MBR_SIG_OFFSET]), " type=$", uhex_byte_(buf[MBR_PART1_TYPE]), " start=", udec_(LONG[@buf + MBR_PART1_LBA]))
-    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+    debug[CH_VERIFY]("  MBR write buf: sig=$", uhex_word_(WORD[@buf + MBR_SIG_OFFSET]), " type=$", uhex_byte_(buf[MBR_PART1_TYPE]), " start=", udec_(LONG[@buf + MBR_PART1_LBA]))
+    debug[CH_VERIFY]("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
 #else
-    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + MBR_SIG_OFFSET]), ...
+    debug[CH_VERIFY]("  MBR write buf: sig=$", uhex_word_(WORD[@buf + MBR_SIG_OFFSET]), ...
       " type=$", uhex_byte_(buf[MBR_PART1_TYPE]), ...
       " start=", udec_(LONG[@buf + MBR_PART1_LBA]))
-    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), ...
+    debug[CH_VERIFY]("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), ...
       " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), ...
       " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), ...
       " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
 #endif
-    debug("  MBR buf addr: $", uhex_long_(@buf))
+    debug[CH_VERIFY]("  MBR buf addr: $", uhex_long_(@buf))
 
     ' Write MBR to sector 0
     success := (dfs.writeSectorRaw(0, @buf) == dfs.SUCCESS)
@@ -815,11 +819,11 @@ PRI initFAT(fatStart) : success | sector, remaining, batch, written
             batch := remaining <# MULTI_BATCH_SIZE                                   ' Clamp to 64 or remainder
             written := dfs.writeSectorsRaw(fatStart + sector, batch, @zeroBuf)
             if written <> batch
-                debug("  FAT batch write FAILED at sector ", udec_(sector), " wrote ", udec_(written), "/", udec_(batch))
+                debug[CH_VERIFY]("  FAT batch write FAILED at sector ", udec_(sector), " wrote ", udec_(written), "/", udec_(batch))
                 success := false
                 quit
             if (sector & FAT_PROGRESS_MASK) == 0 or remaining <= batch
-                debug("  Progress: ", udec_(sector + batch), "/", udec_(sectorsPerFat))
+                debug[CH_VERIFY]("  Progress: ", udec_(sector + batch), "/", udec_(sectorsPerFat))
             sector += batch
             remaining -= batch
 
@@ -856,15 +860,15 @@ PRI initRootDirectory() : success | written
         if sectorsPerCluster > 1
             written := dfs.writeSectorsRaw(dataStart + 1, sectorsPerCluster - 1, @zeroBuf)
             if written <> sectorsPerCluster - 1
-                debug("  Root dir batch write FAILED: wrote ", udec_(written), "/", udec_(sectorsPerCluster - 1))
+                debug[CH_VERIFY]("  Root dir batch write FAILED: wrote ", udec_(written), "/", udec_(sectorsPerCluster - 1))
                 success := false
 
 PRI showWriteDiag() | wResult, wR1, wDresp, wSector
 ' Display write diagnostic info from driver after a write failure.
 
     wResult, wR1, wDresp, wSector := dfs.getWriteDiag()
-    debug("  DIAG: result=", udec_(wResult), " R1=$", uhex_byte_(wR1), " dresp=$", uhex_byte_(wDresp), " sector=", udec_(wSector))
-    debug("  (1=CMD24fatal 2=drespTimeout 3=CRCreject 4=writeErr 5=unknownReject 6=busyTimeout 7=OK)")
+    debug[CH_VERIFY]("  DIAG: result=", udec_(wResult), " R1=$", uhex_byte_(wR1), " dresp=$", uhex_byte_(wDresp), " sector=", udec_(wSector))
+    debug[CH_VERIFY]("  (1=CMD24fatal 2=drespTimeout 3=CRCreject 4=writeErr 5=unknownReject 6=busyTimeout 7=OK)")
 
 CON { license }
 

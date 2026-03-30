@@ -123,6 +123,7 @@ SUITES+=(
     "DFS_SD_RT_timestamp_tests.spin2:60"
     "DFS_SD_RT_async_tests.spin2:60"
     "DFS_SD_RT_parity_tests.spin2:90"
+    "DFS_SD_RT_defrag_tests.spin2:120"
     "DFS_FL_RT_append_tests.spin2:120"
     "DFS_FL_RT_seek_tests.spin2:90"
 )
@@ -220,12 +221,54 @@ REF_SD_SRC="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src" "$REGTEST_DIR
 REF_SD_UTILS="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src/UTILS" "$REGTEST_DIR")"
 REF_SD_DEMO="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src/DEMO" "$REGTEST_DIR")"
 
+# --- Dependency-aware compilation ---
+# Shared source dependencies (transitive): if ANY of these change, ALL tests need recompilation.
+# Standard tests: test.spin2 + DFS_RT_utilities + dual_sd_fat32_flash_fs + isp_stack_check
+# Format test adds: isp_format_utility + isp_string_fifo + isp_mem_strings
+SHARED_DEPS=(
+    "$PROJECT_ROOT/src/dual_sd_fat32_flash_fs.spin2"
+    "$REGTEST_DIR/DFS_RT_utilities.spin2"
+    "$PROJECT_ROOT/src/isp_stack_check.spin2"
+)
+FORMAT_EXTRA_DEPS=(
+    "$PROJECT_ROOT/src/UTILS/isp_format_utility.spin2"
+    "$PROJECT_ROOT/src/UTILS/isp_string_fifo.spin2"
+    "$PROJECT_ROOT/src/UTILS/isp_mem_strings.spin2"
+)
+
+# Check if binary is up-to-date vs all its source dependencies
+_needs_compile() {
+    local bin_file="$1"
+    local test_file="$2"
+
+    # No binary? Must compile.
+    [[ ! -f "$bin_file" ]] && return 0
+
+    # Check test file itself
+    [[ "$test_file" -nt "$bin_file" ]] && return 0
+
+    # Check shared dependencies
+    for dep in "${SHARED_DEPS[@]}"; do
+        [[ -f "$dep" && "$dep" -nt "$bin_file" ]] && return 0
+    done
+
+    # Format test has extra dependencies
+    if [[ "$test_file" == *"format_tests"* ]]; then
+        for dep in "${FORMAT_EXTRA_DEPS[@]}"; do
+            [[ -f "$dep" && "$dep" -nt "$bin_file" ]] && return 0
+        done
+    fi
+
+    return 1  # Binary is up-to-date
+}
+
 # --- Phase 1: Compile tests (from START_INDEX onward) ---
 echo -e "${CYAN}--- Phase 1: Compiling test suites ---${NC}"
 echo ""
 
 COMPILE_PASS=0
 COMPILE_FAIL=0
+COMPILE_SKIP=0
 COMPILE_FAILED_FILES=()
 
 cd "$REGTEST_DIR"
@@ -245,8 +288,18 @@ for i in "${!SUITES[@]}"; do
     fi
 
     BASENAME="${FILE%.spin2}"
+    BIN_FILE="${BASENAME}.bin"
+
+    if ! _needs_compile "$BIN_FILE" "$FILE"; then
+        SIZE=$(wc -c < "$BIN_FILE" | tr -d ' ')
+        echo -e "  ${GREEN}SKIP${NC}: $FILE (${SIZE} bytes, up-to-date)"
+        COMPILE_SKIP=$((COMPILE_SKIP + 1))
+        COMPILE_PASS=$((COMPILE_PASS + 1))
+        continue
+    fi
+
     if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I "$REF_SD_SRC" -I "$REF_SD_UTILS" -I "$REF_SD_DEMO" "$FILE" >/dev/null 2>&1; then
-        SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
+        SIZE=$(wc -c < "$BIN_FILE" | tr -d ' ')
         echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
         COMPILE_PASS=$((COMPILE_PASS + 1))
     else
@@ -260,7 +313,11 @@ done
 cd "$SCRIPT_DIR"
 
 echo ""
-echo -e "  Compile results: ${GREEN}${COMPILE_PASS} pass${NC}, ${RED}${COMPILE_FAIL} fail${NC}"
+if [[ $COMPILE_SKIP -gt 0 ]]; then
+    echo -e "  Compile results: ${GREEN}${COMPILE_PASS} pass${NC} (${COMPILE_SKIP} skipped, up-to-date), ${RED}${COMPILE_FAIL} fail${NC}"
+else
+    echo -e "  Compile results: ${GREEN}${COMPILE_PASS} pass${NC}, ${RED}${COMPILE_FAIL} fail${NC}"
+fi
 echo ""
 
 if [[ $COMPILE_FAIL -gt 0 ]]; then
