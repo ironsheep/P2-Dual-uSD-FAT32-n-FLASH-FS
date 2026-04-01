@@ -22,8 +22,6 @@ CON
      _CLKFREQ        = 320_000_000
      DEBUG_BAUD       = 2_000_000
 
-     MAX_OPEN_FILES   = 8
-
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_STACK_CHECK
 #elseifdef __FLEXSPIN__
@@ -36,7 +34,7 @@ CON
 
 OBJ
     dfs   : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 8
-    utils : "DFS_RT_utilities" | MAX_OPEN_FILES = 8
+    utils : "DFS_RT_utilities" | RT_MAX_OPEN_FILES = 8
 
 CON
     RECORD_LEN = 88 ' just for fun, tiny but even number of longs
@@ -212,7 +210,7 @@ pri readWriteStrings(pFilename)
     utils.showFiles()
 
 
-pri testWriteBytes(pFilename, count) | handle, status, testValue
+pri testWriteBytes(pFilename, count) | handle, status, testValue, bValidHndl
     '  open file for write
     '  ensure returns SUCCESS
     debug("- testWriteBytes(", zstr_(pFilename), ", ", udec_(count), ")")
@@ -222,7 +220,8 @@ pri testWriteBytes(pFilename, count) | handle, status, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       utils.startTest(@"Write N BYTEs")
       utils.setCheckCountPerTest(1)
@@ -252,7 +251,7 @@ pri testWriteBytes(pFilename, count) | handle, status, testValue
       utils.evaluateFileStats(pFilename, 1, count)
 
 
-pri testVerifyBytes(pFilename, count) | handle, status, expectedValue, testValue
+pri testVerifyBytes(pFilename, count) | handle, status, expectedValue, testValue, bValidHndl
     '  open file for read
     utils.startTest(@"Open File for read")
     handle, status := openWaitOnHandle(pFilename, dfs.FILEMODE_READ)
@@ -261,7 +260,8 @@ pri testVerifyBytes(pFilename, count) | handle, status, expectedValue, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       utils.startTest(@"read expected N BYTEs")
       utils.setCheckCountPerTest(1)
@@ -288,7 +288,7 @@ pri testVerifyBytes(pFilename, count) | handle, status, expectedValue, testValue
       utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-pri testWriteWords(pFilename, count) | handle, status, testValue
+pri testWriteWords(pFilename, count) | handle, status, testValue, bValidHndl
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -299,7 +299,8 @@ pri testWriteWords(pFilename, count) | handle, status, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       utils.startTest(@"Write N WORDs")
       utils.setCheckCountPerTest(1)
@@ -324,7 +325,7 @@ pri testWriteWords(pFilename, count) | handle, status, testValue
       utils.evaluateFileStats(pFilename, 1, count * 2)
 
 
-pri testVerifyWords(pFilename, count) | handle, status, expectedValue, testValue
+pri testVerifyWords(pFilename, count) | handle, status, expectedValue, testValue, bValidHndl
 
     '  open file for read
     utils.startTest(@"Open File for read")
@@ -334,7 +335,8 @@ pri testVerifyWords(pFilename, count) | handle, status, expectedValue, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       utils.startTest(@"read expected N WORDs")
       utils.setCheckCountPerTest(1)
@@ -361,7 +363,7 @@ pri testVerifyWords(pFilename, count) | handle, status, expectedValue, testValue
       utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-pri testWriteLongs(pFilename, count) | handle, status, testValue, blocksUsed
+pri testWriteLongs(pFilename, count) | handle, status, testValue, blocksUsed, bValidHndl
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -372,7 +374,8 @@ pri testWriteLongs(pFilename, count) | handle, status, testValue, blocksUsed
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       utils.startTest(@"Write N LONGs")
       utils.setCheckCountPerTest(1)
@@ -400,7 +403,7 @@ pri testWriteLongs(pFilename, count) | handle, status, testValue, blocksUsed
       utils.evaluateFileStats(pFilename, blocksUsed, count * 4)
 
 
-pri testVerifyLongs(pFilename, count) | handle, status, expectedValue, testValue
+pri testVerifyLongs(pFilename, count) | handle, status, expectedValue, testValue, bValidHndl
 
     '  open file for read
     utils.startTest(@"Open File for read")
@@ -410,7 +413,8 @@ pri testVerifyLongs(pFilename, count) | handle, status, expectedValue, testValue
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       utils.startTest(@"read expected LONGs")
       utils.setCheckCountPerTest(1)
@@ -477,7 +481,7 @@ stringIdCt       BYTE    (@stringIdTableEnd-@stringIdTable) >> 1   ' div by 2
 testStrBuffer    BYTE    0[MAX_STRING_SIZE * 8]               ' per-cog read buffer (indexed by cogid() * MAX_STRING_SIZE)
 idxStringWritten BYTE    0[MAX_STRINGS_WRITTEN * 8]           ' per-cog string indices (indexed by cogid() * MAX_STRINGS_WRITTEN)
 
-pri testWriteStrings(pFilename, count) | handle, status, strIdx, maxStringIdx, pString, expectedFileSize, readWriteIdx, expectedFileBlocks
+pri testWriteStrings(pFilename, count) | handle, status, strIdx, maxStringIdx, pString, expectedFileSize, readWriteIdx, expectedFileBlocks, bValidHndl
 
     '  open file for write
     '  ensure returns SUCCESS
@@ -488,7 +492,8 @@ pri testWriteStrings(pFilename, count) | handle, status, strIdx, maxStringIdx, p
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       maxStringIdx := (count - 1 < MAX_STRINGS_WRITTEN - 1) ? count - 1 : MAX_STRINGS_WRITTEN - 1
       utils.startTest(@"Write 10 STRINGs")
@@ -518,7 +523,7 @@ pri testWriteStrings(pFilename, count) | handle, status, strIdx, maxStringIdx, p
       utils.evaluateFileStats(pFilename, expectedFileBlocks, expectedFileSize)
 
 
-pri testVerifyStrings(pFilename, count) | handle, status, maxStringIdx, readWriteIdx, strIdx, pString, rdLength, expectedLength, compareResult
+pri testVerifyStrings(pFilename, count) | handle, status, maxStringIdx, readWriteIdx, strIdx, pString, rdLength, expectedLength, compareResult, bValidHndl
 
     '  open file for read
     utils.startTest(@"Open File for read")
@@ -528,7 +533,8 @@ pri testVerifyStrings(pFilename, count) | handle, status, maxStringIdx, readWrit
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       maxStringIdx := (count - 1 < MAX_STRINGS_WRITTEN - 1) ? count - 1 : MAX_STRINGS_WRITTEN - 1
       utils.startTest(@"read expected N STRINGs")
@@ -563,7 +569,7 @@ pri testVerifyStrings(pFilename, count) | handle, status, maxStringIdx, readWrit
       utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-pri testWriteRecords(pFilename, recordCount) | handle, status, testValue, writeLength, recordNbr, expectedFileSize, expectedFileBlocks, sizeUnused, allocatedFileSize
+pri testWriteRecords(pFilename, recordCount) | handle, status, testValue, writeLength, recordNbr, expectedFileSize, expectedFileBlocks, sizeUnused, allocatedFileSize, bValidHndl
     ' ----------------------------------
     ' TEST
         '  open file for write
@@ -575,7 +581,8 @@ pri testWriteRecords(pFilename, recordCount) | handle, status, testValue, writeL
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'w')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       repeat while locktry(bufferLock) == 0                                             'lock for exlusive use
 
@@ -626,7 +633,7 @@ pri testWriteRecords(pFilename, recordCount) | handle, status, testValue, writeL
       utils.evaluateResultNegError(status, dfs.SUCCESS)
 
 
-pri testVerifyRecords(pFilename, recordCount) | handle, status, recordNbr, rdLength, calcCRC
+pri testVerifyRecords(pFilename, recordCount) | handle, status, recordNbr, rdLength, calcCRC, bValidHndl
 
     '  open file for read
     utils.startTest(@"Open File for read")
@@ -638,7 +645,8 @@ pri testVerifyRecords(pFilename, recordCount) | handle, status, recordNbr, rdLen
 
     utils.startTest(@"validate handle")
     utils.evaluateHandle(handle, @"open(,'r')")
-    if handle >= 0
+    bValidHndl := (handle >= 0)
+    if bValidHndl == TRUE
 
       dumpRecords(pFilename, handle, recordCount, @record, RECORD_LEN)
 

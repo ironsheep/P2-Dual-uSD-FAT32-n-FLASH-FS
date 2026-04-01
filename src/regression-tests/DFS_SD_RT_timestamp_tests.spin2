@@ -61,7 +61,7 @@ tsTestFile      BYTE    "TSTEST.TXT", 0
 ' File content
 testContent     BYTE    "Timestamp test data", 0
 
-PUB go() | workerCog, status, h1, idx, pEntry, pLabel, wrtDate, wrtTime, found, yr, mon, dy, hr, mn, sc
+PUB go() | workerCog, status, fileHndl, idx, pEntry, pLabel, wrtDate, wrtTime, found, yr, mon, dy, hr, mn, sc, bValidHndl
 '' Main entry point for timestamp regression tests
 
     debug(" ")
@@ -152,9 +152,9 @@ PUB go() | workerCog, status, h1, idx, pEntry, pLabel, wrtDate, wrtTime, found, 
         yr, mon, dy, hr, mn, sc := dfs.getDate()
         debug("   after 5s: ", udec_(yr), "/", udec_(mon), "/", udec_(dy), " ", udec_(hr), ":", udec_(mn), ":", udec_(sc))
         ' With 2-second resolution, 5 real seconds should yield sc >= 4
-        utils.evaluateSubBool(sc > 0, @"seconds advanced", true)
-        utils.evaluateSubBool(hr == 14, @"hour unchanged", true)
-        utils.evaluateSubBool(mn == 30, @"minute unchanged", true)
+        utils.evaluateSubBool(sc > 0, @"seconds advanced", TRUE)
+        utils.evaluateSubBool(hr == 14, @"hour unchanged", TRUE)
+        utils.evaluateSubBool(mn == 30, @"minute unchanged", TRUE)
 
         ' ======================================================================
         ' TEST GROUP: File modification timestamp
@@ -165,10 +165,11 @@ PUB go() | workerCog, status, h1, idx, pEntry, pLabel, wrtDate, wrtTime, found, 
         utils.startTest(@"Write+close gives non-zero mod timestamp")
         dfs.setDate(2026, 3, 18, 14, 30, 0)
         dfs.deleteFile(dfs.DEV_SD, @tsTestFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @tsTestFile)
-        if h1 >= 0
-            dfs.writeHandle(h1, @testContent, strsize(@testContent))
-            dfs.closeFileHandle(h1)
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @tsTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(fileHndl, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(fileHndl)
         ' Read directory entries to find file
         wrtDate := 0
         wrtTime := 0
@@ -186,9 +187,9 @@ PUB go() | workerCog, status, h1, idx, pEntry, pLabel, wrtDate, wrtTime, found, 
                 quit
             idx++
         debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate), " wrtTime=$", uhex_(wrtTime))
-        utils.evaluateSubBool(found, @"file found", true)
-        utils.evaluateSubBool(wrtDate <> 0, @"date non-zero", true)
-        utils.evaluateSubBool(wrtTime <> 0, @"time non-zero", true)
+        utils.evaluateSubBool(found, @"file found", TRUE)
+        utils.evaluateSubBool(wrtDate <> 0, @"date non-zero", TRUE)
+        utils.evaluateSubBool(wrtTime <> 0, @"time non-zero", TRUE)
 
         ' ======================================================================
         ' Cleanup and Summary

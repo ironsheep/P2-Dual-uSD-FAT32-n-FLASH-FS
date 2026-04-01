@@ -62,7 +62,7 @@ crcTestFile     BYTE    "CRCVAL.TXT", 0
 writeBuffer     BYTE    0[dfs.SECTOR_SIZE]
 readBuffer      BYTE    0[64]
 
-PUB go() | workerCog, result, handle, mismatchBefore, mismatchAfter, errorCount, bytesRead
+PUB go() | workerCog, mountResult, fileHndl, bValidHndl, mismatchBefore, mismatchAfter, errorCount, bytesRead
 '' Main entry point for CRC validation regression tests
 ''
 '' Tests CRC error injection hooks for the SD card driver
@@ -74,8 +74,8 @@ PUB go() | workerCog, result, handle, mismatchBefore, mismatchAfter, errorCount,
 
     ' Initialize worker cog
     workerCog := dfs.init()
-    result := dfs.mount(dfs.DEV_SD)
-    if result == dfs.SUCCESS
+    mountResult := dfs.mount(dfs.DEV_SD)
+    if mountResult == dfs.SUCCESS
 
         debug(" ")
         debug("* SD Card mounted successfully")
@@ -105,24 +105,26 @@ PUB go() | workerCog, result, handle, mismatchBefore, mismatchAfter, errorCount,
 
         ' Create a test file for read tests
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
-        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             bytefill(@writeBuffer, $AA, dfs.SECTOR_SIZE)
-            dfs.writeHandle(handle, @writeBuffer, dfs.SECTOR_SIZE)
-            dfs.closeFileHandle(handle)
+            dfs.writeHandle(fileHndl, @writeBuffer, dfs.SECTOR_SIZE)
+            dfs.closeFileHandle(fileHndl)
 
         ' Test: Force 1 read CRC error increments mismatch counter
         utils.startTest(@"Forced read CRC error increments mismatch count")
         mismatchBefore := dfs.getCRCMismatchCount()
         dfs.clearTestErrors()
         dfs.setTestForceReadError(1)
-        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
-            bytesRead := dfs.readHandle(handle, @readBuffer, 10)
-            dfs.closeFileHandle(handle)
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, 10)
+            dfs.closeFileHandle(fileHndl)
         mismatchAfter := dfs.getCRCMismatchCount()
         debug("  Mismatch before: ", udec_(mismatchBefore), " after: ", udec_(mismatchAfter))
-        utils.evaluateBool(mismatchAfter > mismatchBefore, @"mismatch count grew", true)
+        utils.evaluateBool(mismatchAfter > mismatchBefore, @"mismatch count grew", TRUE)
 
         ' Test: Error count reflects injected error
         utils.startTest(@"getTestErrorCount() reflects injection")
@@ -140,11 +142,12 @@ PUB go() | workerCog, result, handle, mismatchBefore, mismatchAfter, errorCount,
         dfs.setTestForceWriteError(true)
         ' Write a file to trigger the hook
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
-        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             bytefill(@writeBuffer, $BB, dfs.SECTOR_SIZE)
-            dfs.writeHandle(handle, @writeBuffer, dfs.SECTOR_SIZE)
-            dfs.closeFileHandle(handle)
+            dfs.writeHandle(fileHndl, @writeBuffer, dfs.SECTOR_SIZE)
+            dfs.closeFileHandle(fileHndl)
         errorCount := dfs.getTestErrorCount()
         debug("  Write error count: ", udec_(errorCount))
         utils.evaluateSingleValue(errorCount, @"write error injected", 1)
@@ -152,11 +155,12 @@ PUB go() | workerCog, result, handle, mismatchBefore, mismatchAfter, errorCount,
         ' Test: Second write has no injection (one-shot cleared)
         utils.startTest(@"One-shot clears after first write")
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
-        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             bytefill(@writeBuffer, $CC, dfs.SECTOR_SIZE)
-            dfs.writeHandle(handle, @writeBuffer, dfs.SECTOR_SIZE)
-            dfs.closeFileHandle(handle)
+            dfs.writeHandle(fileHndl, @writeBuffer, dfs.SECTOR_SIZE)
+            dfs.closeFileHandle(fileHndl)
         ' Error count should still be 1 (no new injection)
         errorCount := dfs.getTestErrorCount()
         utils.evaluateSingleValue(errorCount, @"no second injection", 1)

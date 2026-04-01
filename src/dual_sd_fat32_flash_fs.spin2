@@ -300,6 +300,7 @@ CON ' error codes
   E_NO_CONTIGUOUS_SPACE    = -131  ' No contiguous run of sufficient length
   E_FILE_OPEN_FOR_COMPACT  = -132  ' File is open (cannot compact while open)
   E_VERIFY_FAILED          = -133  ' Read-back verification failed after compact
+  CONTIGUOUS_FRAGMENTS     = 1     ' A file with 1 fragment is contiguous (named constant for intent)
 #endif
 
 CON ' V3 multi-file handle configuration
@@ -2569,17 +2570,21 @@ PUB fileFragments(dev, p_path) : fragment_count
     send_command(CMD_FILE_FRAGMENTS, p_path, 0, 0, 0)
     fragment_count := LONG[@saved_data0][COGID()]
 
-PUB isFileContiguous(dev, p_path) : result
+PUB isFileContiguous(dev, p_path) : bContig | fragCnt
 '' Check if a file's clusters are stored contiguously on disk.
 '' Convenience wrapper around fileFragments(). SD-only.
 ''
 '' @param dev - Target device (must be DEV_SD)
 '' @param p_path - Pointer to null-terminated filename string
-'' @returns result - TRUE if contiguous (fragment_count == 1), FALSE otherwise, or negative error code
+'' @returns bContig - TRUE if contiguous, FALSE otherwise, or negative error code
+'
+' @local fragCnt - Intermediate fragment count from fileFragments()
 
-  result := fileFragments(dev, p_path)
-  if result >= 0
-    result := (result == 1)
+  fragCnt := fileFragments(dev, p_path)
+  if fragCnt < 0
+    bContig := fragCnt                                                           ' propagate error code
+  else
+    bContig := (fragCnt == CONTIGUOUS_FRAGMENTS)
 
 PUB createFileContiguous(dev, p_path, expected_size) : handle
 '' Create a new file with a pre-allocated contiguous cluster chain. SD-only.
@@ -2597,7 +2602,7 @@ PUB createFileContiguous(dev, p_path, expected_size) : handle
     send_command(CMD_CREATE_CONTIGUOUS, p_path, expected_size, 0, 0)
     handle := LONG[@saved_data0][COGID()]
 
-PUB compactFile(dev, p_path) : result
+PUB compactFile(dev, p_path) : status
 '' Relocate a file's clusters into a contiguous chain on disk. SD-only.
 '' The file must not be open (no active handles). If already contiguous, returns SUCCESS (no-op).
 '' Uses copy-then-free strategy: file is always readable during compaction.
@@ -2605,12 +2610,12 @@ PUB compactFile(dev, p_path) : result
 ''
 '' @param dev - Target device (must be DEV_SD)
 '' @param p_path - Pointer to null-terminated filename string
-'' @returns result - SUCCESS, E_FILE_NOT_FOUND, E_FILE_OPEN_FOR_COMPACT, E_NO_CONTIGUOUS_SPACE, E_VERIFY_FAILED, E_IO_ERROR
+'' @returns status - SUCCESS, E_FILE_NOT_FOUND, E_FILE_OPEN_FOR_COMPACT, E_NO_CONTIGUOUS_SPACE, E_VERIFY_FAILED, E_IO_ERROR
 
   if dev <> DEV_SD
-    result := set_error(E_NOT_SUPPORTED)
+    status := set_error(E_NOT_SUPPORTED)
   else
-    result := send_command(CMD_COMPACT_FILE, p_path, 0, 0, 0)
+    status := send_command(CMD_COMPACT_FILE, p_path, 0, 0, 0)
 
 #endif
 
@@ -5539,6 +5544,7 @@ PRI do_newdir(name_ptr) : status | temp, p_leaf, saved_sec
           clearCluster(temp)
 
       temp := allocateCluster(0)
+      clearCluster(temp)                                                           ' Zero all sectors in new dir cluster
       dirEntSetAttr(@entry_buffer, $10)                                            ' Directory attribute
       dirEntSetCreateStamp(@entry_buffer, date_stamp)
       dirEntSetStartClus(@entry_buffer, temp)
@@ -8837,7 +8843,7 @@ PRI readFat(cluster) : p_fat_entry | contents, p_contents
   else
     p_fat_entry := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
 
-PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, start_fat_idx, fat_limit, wrapped
+PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, startFatIdx, fatLimit, wrapped
 ' Search FAT for an empty cluster using next-fit allocation, allocate it, and return cluster number.
 ' If cluster parameter is non-zero, links the new cluster to that chain.
 ' Next-fit: scans from previous cluster+1 (or fsi_nxt_free for new chains), wraps to cluster 2 at end-of-FAT.
@@ -8847,8 +8853,8 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, start_
 ' @local fat_idx - Current FAT byte index
 ' @local buf_idx - Index within FAT buffer
 ' @local high_bits - Preserved high 4 bits of FAT entry
-' @local start_fat_idx - Byte index where scan began (for wrap-around termination)
-' @local fat_limit - End of FAT in bytes (sec_per_fat << SECTOR_BITS)
+' @local startFatIdx - Byte index where scan began (for wrap-around termination)
+' @local fatLimit - End of FAT in bytes (sec_per_fat << SECTOR_BITS)
 ' @local wrapped - Boolean, TRUE after scan wraps from end-of-FAT back to cluster 2
 
   ' Next-fit: choose starting scan position
@@ -8859,13 +8865,13 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, start_
   else
     fat_idx := 8                                                                 ' Default: cluster 2
 
-  fat_limit := sec_per_fat << SECTOR_BITS                                        ' End of FAT in bytes
-  if fat_idx >= fat_limit                                                        ' Guard: if start is past end, wrap to cluster 2
+  fatLimit := sec_per_fat << SECTOR_BITS                                        ' End of FAT in bytes
+  if fat_idx >= fatLimit                                                        ' Guard: if start is past end, wrap to cluster 2
     fat_idx := 8
   if test_max_clusters > 0 and (fat_idx >> FAT_ENTRY_SHIFT) >= test_max_clusters
     fat_idx := 8                                                                 ' Guard: if start is past test limit, wrap
-  start_fat_idx := fat_idx                                                       ' Remember where we started
-  wrapped := false
+  startFatIdx := fat_idx                                                       ' Remember where we started
+  wrapped := FALSE
 
   if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0                  ' Pre-load FAT sector at starting position
     debug[CH_SECTOR]("  [allocateCluster] FAT pre-load FAILED")
@@ -8873,13 +8879,13 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, start_
   else
     repeat
       if fat_idx & SECTOR_MASK == 0 and fat_idx > 0                             '  if at sector boundary (but not first iteration)
-        if fat_idx >= fat_limit                                                  '    past end of FAT?
+        if fat_idx >= fatLimit                                                  '    past end of FAT?
           if wrapped                                                             '      already wrapped — entire FAT scanned
             cluster_num := E_DISK_FULL
             quit
           fat_idx := 8                                                           '      wrap to cluster 2
-          wrapped := true
-        if wrapped and fat_idx >= start_fat_idx                                  '    wrapped and reached starting point?
+          wrapped := TRUE
+        if wrapped and fat_idx >= startFatIdx                                  '    wrapped and reached starting point?
           cluster_num := E_DISK_FULL
           quit
         if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0            '    load next sector of FAT
@@ -8894,7 +8900,7 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, start_
         fat_idx := 8                                                             '    wrap to cluster 2
         buf_idx := 8
         wrapped := true
-        if fat_idx >= start_fat_idx                                              '    started at cluster 2? nowhere left to scan
+        if fat_idx >= startFatIdx                                              '    started at cluster 2? nowhere left to scan
           cluster_num := E_DISK_FULL
           quit
         if readSector(fat_sec, BUF_FAT) < 0                                     '    pre-load first FAT sector after wrap
@@ -8926,49 +8932,49 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, start_
         quit
       else
         fat_idx += 4                                                             '  advance index to next cluster cell
-        if fat_idx >= fat_limit and not wrapped                                  '  past end of FAT? wrap around
+        if fat_idx >= fatLimit and not wrapped                                  '  past end of FAT? wrap around
           fat_idx := 8
-          wrapped := true
+          wrapped := TRUE
           if readSector(fat_sec, BUF_FAT) < 0                                   '    pre-load first FAT sector after wrap
             debug[CH_SECTOR]("  [allocateCluster] FAT wrap pre-load FAILED")
             cluster_num := E_IO_ERROR
             quit
-        elseif wrapped and fat_idx >= start_fat_idx                              '  wrapped and back to start?
+        elseif wrapped and fat_idx >= startFatIdx                              '  wrapped and back to start?
           cluster_num := E_DISK_FULL
           quit
 
-PRI freeClusterChain(first_cluster) : result | clus, next_clus, last_clus, fat_sector, loop_count
+PRI freeClusterChain(first_cluster) : status | clstr, nextClstr, lastClstr, fat_sector, loop_count
 ' Walk a FAT chain and mark every cluster as free (zero entry).
 ' Writes both FAT1 and FAT2 (mirror) at sector boundaries and at end.
 ' Used by do_delete() and compactFile().
 '
 ' @param first_cluster - First cluster of the chain to free
-' @returns result - SUCCESS or E_IO_ERROR on safety limit
+' @returns status - SUCCESS or E_IO_ERROR on safety limit
 
-  result := SUCCESS
-  clus := first_cluster
-  last_clus := first_cluster
+  status := SUCCESS
+  clstr := first_cluster
+  lastClstr := first_cluster
   loop_count := 0
-  if clus >= ROOT_CLUSTER
+  if clstr >= ROOT_CLUSTER
     repeat
-      next_clus := long[readFat(clus)]
-      long[@fat_buf + ((clus << FAT_ENTRY_SHIFT) & SECTOR_MASK)] := 0              ' Zero the FAT entry
+      nextClstr := long[readFat(clstr)]
+      long[@fat_buf + ((clstr << FAT_ENTRY_SHIFT) & SECTOR_MASK)] := 0             ' Zero the FAT entry
       if fsi_free_count <> $FFFF_FFFF                                              ' Track free count
         fsi_free_count++
-      last_clus := clus
-      if (next_clus >> 7) - (clus >> 7) <> 0                                      ' Different FAT sector?
-        fat_sector := clus >> 7
+      lastClstr := clstr
+      if (nextClstr >> 7) - (clstr >> 7) <> 0                                     ' Different FAT sector?
+        fat_sector := clstr >> 7
         writeSector(fat_sector + fat_sec, BUF_FAT)
         writeSector(fat_sector + fat2_sec, BUF_FAT)
-      clus := next_clus
+      clstr := nextClstr
       loop_count++
       if loop_count > 100000                                                       ' Safety limit
-        result := E_IO_ERROR
+        status := E_IO_ERROR
         quit
-    until next_clus +>= FAT_EOC_MIN
+    until nextClstr +>= FAT_EOC_MIN
     ' Always write the FAT sector containing the last freed cluster
-    if result == SUCCESS
-      fat_sector := last_clus >> 7
+    if status == SUCCESS
+      fat_sector := lastClstr >> 7
       writeSector(fat_sector + fat_sec, BUF_FAT)
       writeSector(fat_sector + fat2_sec, BUF_FAT)
 
@@ -8977,33 +8983,32 @@ PRI freeClusterChain(first_cluster) : result | clus, next_clus, last_clus, fat_s
 ' DEFRAGMENTATION INTERNAL HELPERS
 ' =============================================================================
 
-PRI countFileFragments(first_cluster) : count | clus, next_clus, loop_count
+PRI countFileFragments(first_cluster) : count | clstr, nextClstr, loop_count
 ' Count non-contiguous fragments in a FAT chain.
 ' A contiguous file = 1 fragment. Each gap (next != current+1) adds one.
 '
 ' @param first_cluster - First cluster of the file's chain
 ' @returns count - Fragment count (1 = contiguous), 0 if empty chain
 
-  if first_cluster < ROOT_CLUSTER
-    count := 0
-    return
-  count := 1
-  clus := first_cluster
-  loop_count := 0
-  repeat
-    next_clus := long[readFat(clus)] & FAT_EOC_MASK
-    if next_clus >= FAT_EOC_MIN
-      quit                                                                       ' end of chain
-    if next_clus < ROOT_CLUSTER                                                  ' bad reference
-      quit
-    if next_clus <> clus + 1                                                     ' non-contiguous?
-      count++
-    clus := next_clus
-    loop_count++
-    if loop_count > 100000                                                       ' safety limit
-      quit
+  count := 0
+  if first_cluster >= ROOT_CLUSTER
+    count := 1
+    clstr := first_cluster
+    loop_count := 0
+    repeat
+      nextClstr := long[readFat(clstr)] & FAT_EOC_MASK
+      if nextClstr >= FAT_EOC_MIN
+        quit                                                                     ' end of chain
+      if nextClstr < ROOT_CLUSTER                                                ' bad reference
+        quit
+      if nextClstr <> clstr + 1                                                  ' non-contiguous?
+        count++
+      clstr := nextClstr
+      loop_count++
+      if loop_count > 100000                                                     ' safety limit
+        quit
 
-PRI do_file_fragments(p_path) : count | start_cluster, p_leaf, saved_sec
+PRI do_file_fragments(p_path) : count | startClstr, p_leaf, saved_sec
 ' Worker-side handler for CMD_FILE_FRAGMENTS.
 '
 ' @param p_path - Pointer to null-terminated filename string
@@ -9015,22 +9020,23 @@ PRI do_file_fragments(p_path) : count | start_cluster, p_leaf, saved_sec
   elseif searchDirectory(p_leaf) == 0
     count := E_FILE_NOT_FOUND
   else
-    start_cluster := firstCluster()
-    if start_cluster < ROOT_CLUSTER
+    startClstr := firstCluster()
+    if startClstr < ROOT_CLUSTER
       count := 0                                                                 ' empty file (no clusters)
     else
-      count := countFileFragments(start_cluster)
+      count := countFileFragments(startClstr)
   sd_restore_path(saved_sec)
 
-PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, run_start, run_length
+PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, runStart, runLen
 ' Scan FAT for a contiguous run of N free clusters.
 ' Linear scan from cluster 2 through end of FAT.
 '
 ' @param cluster_count - Number of consecutive free clusters needed
-' @returns first_cluster - First cluster of the run, or E_NO_CONTIGUOUS_SPACE
+' @returns first_cluster - First cluster of the run, or E_NO_CONTIGUOUS_SPACE / E_IO_ERROR
 
-  run_start := ROOT_CLUSTER
-  run_length := 0
+  first_cluster := E_NO_CONTIGUOUS_SPACE
+  runStart := ROOT_CLUSTER
+  runLen := 0
   fat_idx := ROOT_CLUSTER * 4                                                   ' start at cluster 2
   repeat
     if fat_idx & SECTOR_MASK == 0                                                ' at sector boundary?
@@ -9039,37 +9045,34 @@ PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, run_start
       if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0
         debug[CH_SECTOR]("  [findContiguousRun] FAT read FAILED")
         first_cluster := E_IO_ERROR
-        fat_sec_in_buf := -1
-        return
+        quit
     if test_max_clusters > 0 and (fat_idx >> FAT_ENTRY_SHIFT) >= test_max_clusters
       quit                                                                       ' test hook: artificial limit
     entry := long[@fat_buf + (fat_idx & SECTOR_MASK)]
     if (entry & FAT_EOC_MASK) == 0                                               ' free cluster?
-      if run_length == 0
-        run_start := fat_idx >> FAT_ENTRY_SHIFT                                  '   start new run
-      run_length++
-      if run_length >= cluster_count                                             ' found enough?
-        first_cluster := run_start
-        fat_sec_in_buf := -1
-        return
+      if runLen == 0
+        runStart := fat_idx >> FAT_ENTRY_SHIFT                                   '   start new run
+      runLen++
+      if runLen >= cluster_count                                                 ' found enough?
+        first_cluster := runStart
+        quit
     else
-      run_length := 0                                                            ' reset run
+      runLen := 0                                                                ' reset run
     fat_idx += 4
-  first_cluster := E_NO_CONTIGUOUS_SPACE
-  fat_sec_in_buf := -1
+  fat_sec_in_buf := -1                                                           ' invalidate cache at single exit
 
-PRI allocateContiguousChain(first_cluster, count) : result | clus, fat_idx, buf_idx, high_bits, prev_fat_sector
+PRI allocateContiguousChain(first_cluster, count) : status | clstr, fat_idx, buf_idx, high_bits, prev_fat_sector
 ' Mark N consecutive clusters as a linked sequential chain in FAT.
 ' Writes both FAT1 and FAT2 (mirror). Preserves high 4 reserved bits.
 '
 ' @param first_cluster - First cluster of the contiguous run
 ' @param count - Number of clusters to link
-' @returns result - SUCCESS or E_IO_ERROR
+' @returns status - SUCCESS or E_IO_ERROR
 
-  result := SUCCESS
+  status := SUCCESS
   prev_fat_sector := -1
-  repeat clus from first_cluster to first_cluster + count - 1
-    fat_idx := clus << FAT_ENTRY_SHIFT
+  repeat clstr from first_cluster to first_cluster + count - 1
+    fat_idx := clstr << FAT_ENTRY_SHIFT
     buf_idx := fat_idx & SECTOR_MASK
     ' Load FAT sector if needed
     if (fat_idx >> SECTOR_BITS) <> prev_fat_sector
@@ -9078,26 +9081,26 @@ PRI allocateContiguousChain(first_cluster, count) : result | clus, fat_idx, buf_
         writeSector(fat2_sec + prev_fat_sector, BUF_FAT)
       prev_fat_sector := fat_idx >> SECTOR_BITS
       if readSector(fat_sec + prev_fat_sector, BUF_FAT) < 0
-        debug[CH_SECTOR]("  [allocateContiguousChain] FAT read FAILED at cluster ", udec_(clus))
-        result := E_IO_ERROR
+        debug[CH_SECTOR]("  [allocateContiguousChain] FAT read FAILED at cluster ", udec_(clstr))
+        status := E_IO_ERROR
         quit
     ' Write chain link or EOC
     high_bits := long[@fat_buf + buf_idx] & FAT_HIGH_BITS_MASK                   ' preserve high 4 bits
-    if clus < first_cluster + count - 1
-      long[@fat_buf + buf_idx] := high_bits | ((clus + 1) & FAT_EOC_MASK)        ' link to next
+    if clstr < first_cluster + count - 1
+      long[@fat_buf + buf_idx] := high_bits | ((clstr + 1) & FAT_EOC_MASK)       ' link to next
     else
       long[@fat_buf + buf_idx] := high_bits | FAT_EOC_MASK                       ' end of chain
   ' Write final FAT sector
-  if prev_fat_sector >= 0 and result == SUCCESS
+  if prev_fat_sector >= 0 and status == SUCCESS
     writeSector(fat_sec + prev_fat_sector, BUF_FAT)
     writeSector(fat2_sec + prev_fat_sector, BUF_FAT)
   ' Update free cluster tracking
-  if result == SUCCESS
+  if status == SUCCESS
     if fsi_free_count <> $FFFF_FFFF
       fsi_free_count -= count
     fsi_nxt_free := first_cluster + count                                        ' update next-free hint
 
-PRI do_create_contiguous(p_path, expected_size) : handle | cluster_count, new_first, temp, first_cluster, p_leaf, saved_sec
+PRI do_create_contiguous(p_path, expected_size) : handle | clstrCnt, newFirstClstr, allocStatus, firstClstr, p_leaf, saved_sec
 ' Worker-side handler for CMD_CREATE_CONTIGUOUS.
 ' Creates a new file with a pre-allocated contiguous cluster chain.
 '
@@ -9110,19 +9113,19 @@ PRI do_create_contiguous(p_path, expected_size) : handle | cluster_count, new_fi
     handle := E_FILE_NOT_FOUND
   else
     ' Calculate clusters needed
-    cluster_count := (expected_size + (sec_per_clus << SECTOR_BITS) - 1) / (sec_per_clus << SECTOR_BITS)
-    if cluster_count < 1
-      cluster_count := 1                                                         ' minimum 1 cluster
+    clstrCnt := (expected_size + (sec_per_clus << SECTOR_BITS) - 1) / (sec_per_clus << SECTOR_BITS)
+    if clstrCnt < 1
+      clstrCnt := 1                                                              ' minimum 1 cluster
 
     ' Find contiguous run
-    new_first := findContiguousRun(cluster_count)
-    if new_first < 0
-      handle := new_first                                                        ' E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
+    newFirstClstr := findContiguousRun(clstrCnt)
+    if newFirstClstr < 0
+      handle := newFirstClstr                                                    ' E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
     else
       ' Allocate the contiguous chain in FAT
-      temp := allocateContiguousChain(new_first, cluster_count)
-      if temp < 0
-        handle := temp
+      allocStatus := allocateContiguousChain(newFirstClstr, clstrCnt)
+      if allocStatus < 0
+        handle := allocStatus
       else
         ' Allocate a handle slot
         handle := allocateHandle()
@@ -9140,21 +9143,21 @@ PRI do_create_contiguous(p_path, expected_size) : handle | cluster_count, new_fi
             handle := E_FILE_NOT_FOUND
           else
             ' Check if directory needs a new cluster for the entry
-            temp := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
-            if temp == (sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE)
+            allocStatus := (entry_address + cluster_offset << SECTOR_BITS) & (sec_per_clus << SECTOR_BITS - 1)
+            if allocStatus == (sec_per_clus << SECTOR_BITS - DIR_ENTRY_SIZE)
               if dir_buf[480] == $00
-                temp := allocateCluster(byte2clus(entry_address))
-                if temp < 0
+                allocStatus := allocateCluster(byte2clus(entry_address))
+                if allocStatus < 0
                   debug[CH_FILE]("  [do_create_contiguous] Failed to allocate dir cluster")
                   freeHandle(handle)
                   handle := E_DISK_FULL
 
             if handle >= 0
               ' Set up directory entry
-              first_cluster := new_first
+              firstClstr := newFirstClstr
               dirEntSetAttr(@entry_buffer, $20)                                    ' Archive attribute
               dirEntSetCreateStamp(@entry_buffer, date_stamp)
-              dirEntSetStartClus(@entry_buffer, first_cluster)
+              dirEntSetStartClus(@entry_buffer, firstClstr)
               dirEntSetModifyStamp(@entry_buffer, date_stamp)
               dirEntSetFileSize(@entry_buffer, 0)
 
@@ -9171,57 +9174,60 @@ PRI do_create_contiguous(p_path, expected_size) : handle | cluster_count, new_fi
                   handle := E_IO_ERROR
                 else
                   ' Populate handle state
-                  h_start_clus[handle] := first_cluster
+                  h_start_clus[handle] := firstClstr
                   h_size[handle] := 0
                   h_attr[handle] := $20
                   h_dir_sector[handle] := entry_address >> SECTOR_BITS
                   h_dir_offset[handle] := entry_address & SECTOR_MASK
-                  h_cluster[handle] := first_cluster
-                  h_sector[handle] := clus2sec(first_cluster)
+                  h_cluster[handle] := firstClstr
+                  h_sector[handle] := clus2sec(firstClstr)
                   h_position[handle] := 0
                   h_buf_sector[handle] := -1
                   h_flags[handle] := HF_WRITE
-                  h_prealloc_end[handle] := new_first + cluster_count - 1
+                  h_prealloc_end[handle] := newFirstClstr + clstrCnt - 1
 
   sd_restore_path(saved_sec)
 
-PRI copyClusterData(src_cluster, dst_cluster) : result | idx
+PRI copyClusterData(src_cluster, dst_cluster) : status | idx
 ' Copy all sectors of one cluster from source to destination.
 '
 ' @param src_cluster - Source cluster
 ' @param dst_cluster - Destination cluster
-' @returns result - SUCCESS or E_IO_ERROR
+' @returns status - SUCCESS or E_IO_ERROR
 
-  result := SUCCESS
+  status := SUCCESS
   repeat idx from 0 to sec_per_clus - 1
     if readSector(clus2sec(src_cluster) + idx, BUF_DATA) < 0
-      result := E_IO_ERROR
+      status := E_IO_ERROR
       quit
     if not writeSector(clus2sec(dst_cluster) + idx, BUF_DATA)
-      result := E_IO_ERROR
+      status := E_IO_ERROR
       quit
 
-PRI verifyClusterCopy(src_cluster, dst_cluster) : result | idx, byte_idx
+PRI verifyClusterCopy(src_cluster, dst_cluster) : status | idx, byteIdx
 ' Verify that all sectors in a cluster were copied correctly.
 ' Repurposes dir_buf for destination reads (safe when file is closed).
 '
 ' @param src_cluster - Source cluster (read into buf via BUF_DATA)
 ' @param dst_cluster - Destination cluster (read into dir_buf via BUF_DIR)
-' @returns result - SUCCESS or E_VERIFY_FAILED or E_IO_ERROR
+' @returns status - SUCCESS or E_VERIFY_FAILED or E_IO_ERROR
 
-  result := SUCCESS
+  status := SUCCESS
   repeat idx from 0 to sec_per_clus - 1
     if readSector(clus2sec(src_cluster) + idx, BUF_DATA) < 0
-      result := E_IO_ERROR
+      status := E_IO_ERROR
       quit
     if readSector(clus2sec(dst_cluster) + idx, BUF_DIR) < 0
-      result := E_IO_ERROR
+      status := E_IO_ERROR
       quit
-    repeat byte_idx from 0 to SECTOR_SIZE - 1
-      if byte[@buf][byte_idx] <> byte[@dir_buf][byte_idx]
-        debug[CH_FILE]("  [verifyClusterCopy] Mismatch at sector ", udec_(idx), " byte ", udec_(byte_idx))
-        result := E_VERIFY_FAILED
-        return
+    if status == SUCCESS
+      repeat byteIdx from 0 to SECTOR_SIZE - 1
+        if byte[@buf][byteIdx] <> byte[@dir_buf][byteIdx]
+          debug[CH_FILE]("  [verifyClusterCopy] Mismatch at sector ", udec_(idx), " byte ", udec_(byteIdx))
+          status := E_VERIFY_FAILED
+          quit
+    if status <> SUCCESS
+      quit
 
 PRI invalidateAllCaches()
 ' Reset all three sector cache tracking variables to force re-reads.
@@ -9231,125 +9237,125 @@ PRI invalidateAllCaches()
   fat_sec_in_buf := -1
   sec_in_buf := -1
 
-PRI isFileOpenAny(dir_sector, dir_offset) : result | handle
+PRI isFileOpenAny(dir_sector, dir_offset) : bOpen | hndl
 ' Check if a file is open in any mode (read, write, or directory).
 ' Used by compactFile() to reject compaction on open files.
 '
 ' @param dir_sector - Directory sector of the file
 ' @param dir_offset - Directory offset within sector
-' @returns result - TRUE if file is open, FALSE otherwise
+' @returns bOpen - TRUE if file is open, FALSE otherwise
 
-  result := FALSE
-  repeat handle from 0 to MAX_OPEN_FILES - 1
-    if h_flags[handle] <> HF_FREE
-      if h_dir_sector[handle] == dir_sector and h_dir_offset[handle] == dir_offset
-        result := TRUE
+  bOpen := FALSE
+  repeat hndl from 0 to MAX_OPEN_FILES - 1
+    if h_flags[hndl] <> HF_FREE
+      if h_dir_sector[hndl] == dir_sector and h_dir_offset[hndl] == dir_offset
+        bOpen := TRUE
         quit
 
-PRI do_compact_file(p_path) : result | dir_sec, dir_off, start_cluster, fsize, cluster_count, new_first, clus, next_clus, idx, frag_count, p_leaf, saved_sec
+PRI do_compact_file(p_path) : status | dir_sec, dir_off, startClstr, fileSzBytes, clstrCnt, newFirstClstr, clstr, nextClstr, idx, fragCnt, p_leaf, saved_sec
 ' Worker-side handler for CMD_COMPACT_FILE.
 ' Relocates a file's clusters into a contiguous chain using copy-then-free.
 ' 12-step process with mandatory read-back verification.
 '
 ' @param p_path - Pointer to null-terminated filename string
-' @returns result - SUCCESS or negative error code
+' @returns status - SUCCESS or negative error code
 
   p_leaf, saved_sec := sd_resolve_path(p_path)
   if p_leaf == 0
-    result := E_FILE_NOT_FOUND
+    status := E_FILE_NOT_FOUND
   else
     ' Step 1: Find the file
     if searchDirectory(p_leaf) == 0
-      result := E_FILE_NOT_FOUND
+      status := E_FILE_NOT_FOUND
     else
       dir_sec := entry_address >> SECTOR_BITS
       dir_off := entry_address & SECTOR_MASK
-      start_cluster := firstCluster()
-      fsize := dirEntFileSize(@entry_buffer)
+      startClstr := firstCluster()
+      fileSzBytes := dirEntFileSize(@entry_buffer)
 
       ' Step 2: Check file is not open
-      if isFileOpenAny(dir_sec, dir_off)
-        result := E_FILE_OPEN_FOR_COMPACT
+      if isFileOpenAny(dir_sec, dir_off) == TRUE
+        status := E_FILE_OPEN_FOR_COMPACT
       ' Step 3: Empty file — nothing to compact
-      elseif fsize == 0
-        result := SUCCESS
+      elseif fileSzBytes == 0
+        status := SUCCESS
       else
         ' Step 4: Count clusters and check fragmentation
-        frag_count := countFileFragments(start_cluster)
-        if frag_count == 1
-          result := SUCCESS                                                      ' already contiguous
+        fragCnt := countFileFragments(startClstr)
+        if fragCnt == CONTIGUOUS_FRAGMENTS
+          status := SUCCESS                                                      ' already contiguous
         else
           ' Count clusters by walking the chain
-          cluster_count := 0
-          clus := start_cluster
+          clstrCnt := 0
+          clstr := startClstr
           repeat
-            cluster_count++
-            next_clus := long[readFat(clus)] & FAT_EOC_MASK
-            if next_clus >= FAT_EOC_MIN
+            clstrCnt++
+            nextClstr := long[readFat(clstr)] & FAT_EOC_MASK
+            if nextClstr >= FAT_EOC_MIN
               quit
-            if next_clus < ROOT_CLUSTER
+            if nextClstr < ROOT_CLUSTER
               quit
-            clus := next_clus
+            clstr := nextClstr
 
           ' Step 5: Find contiguous free space
-          new_first := findContiguousRun(cluster_count)
-          if new_first < 0
-            result := new_first                                                  ' E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
+          newFirstClstr := findContiguousRun(clstrCnt)
+          if newFirstClstr < 0
+            status := newFirstClstr                                              ' E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
           else
             ' Step 6: Copy phase — walk old chain, copy each cluster to new location
-            clus := start_cluster
+            clstr := startClstr
             idx := 0
-            result := SUCCESS
+            status := SUCCESS
             repeat
-              result := copyClusterData(clus, new_first + idx)
-              if result < 0
+              status := copyClusterData(clstr, newFirstClstr + idx)
+              if status < 0
                 quit                                                             ' E_IO_ERROR
               idx++
-              next_clus := long[readFat(clus)] & FAT_EOC_MASK
-              if next_clus >= FAT_EOC_MIN
+              nextClstr := long[readFat(clstr)] & FAT_EOC_MASK
+              if nextClstr >= FAT_EOC_MIN
                 quit
-              if next_clus < ROOT_CLUSTER
+              if nextClstr < ROOT_CLUSTER
                 quit
-              clus := next_clus
+              clstr := nextClstr
 
-            if result == SUCCESS
+            if status == SUCCESS
               ' Step 7: Verify phase — read-back compare every cluster
-              clus := start_cluster
+              clstr := startClstr
               idx := 0
               repeat
-                result := verifyClusterCopy(clus, new_first + idx)
-                if result < 0
+                status := verifyClusterCopy(clstr, newFirstClstr + idx)
+                if status < 0
                   quit                                                           ' E_VERIFY_FAILED
                 idx++
-                next_clus := long[readFat(clus)] & FAT_EOC_MASK
-                if next_clus >= FAT_EOC_MIN
+                nextClstr := long[readFat(clstr)] & FAT_EOC_MASK
+                if nextClstr >= FAT_EOC_MIN
                   quit
-                if next_clus < ROOT_CLUSTER
+                if nextClstr < ROOT_CLUSTER
                   quit
-                clus := next_clus
+                clstr := nextClstr
 
-            if result == SUCCESS
+            if status == SUCCESS
               ' Step 8: Build new FAT chain
-              result := allocateContiguousChain(new_first, cluster_count)
+              status := allocateContiguousChain(newFirstClstr, clstrCnt)
 
-            if result == SUCCESS
+            if status == SUCCESS
               ' Step 9: Update directory entry to point to new first cluster
               if readSector(dir_sec, BUF_DIR) < 0
-                result := E_IO_ERROR
+                status := E_IO_ERROR
               else
                 bytemove(@entry_buffer, @dir_buf + dir_off, DIR_ENTRY_SIZE)
-                dirEntSetStartClus(@entry_buffer, new_first)
+                dirEntSetStartClus(@entry_buffer, newFirstClstr)
                 bytemove(@dir_buf + dir_off, @entry_buffer, DIR_ENTRY_SIZE)
                 writeSector(dir_sec, BUF_DIR)
 
                 ' Step 10: Free old clusters
-                freeClusterChain(start_cluster)
+                freeClusterChain(startClstr)
 
                 ' Step 11: Invalidate all caches
                 invalidateAllCaches()
 
                 ' Step 12: Success
-                result := SUCCESS
+                status := SUCCESS
 
   sd_restore_path(saved_sec)
 

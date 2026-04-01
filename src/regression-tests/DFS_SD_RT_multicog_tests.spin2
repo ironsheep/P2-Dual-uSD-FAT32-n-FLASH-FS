@@ -34,6 +34,8 @@ CON
      ITERATIONS      = 10            ' Number of iterations per stress test
      WORKER_BUF_SIZE = 64            ' Read buffer size per worker cog (bytes)
 
+     GUARD_SIZE       = 16
+
      ' Worker status codes
      STATUS_IDLE      = 0
      STATUS_RUNNING   = 1
@@ -68,7 +70,7 @@ worker_stacks   LONG    0[NUM_WORKER_COGS * STACK_SIZE]
 
 ' Read buffers for worker cogs (separate from stacks!)
 worker_buffers  BYTE    0[NUM_WORKER_COGS * WORKER_BUF_SIZE]
-worker_buffers_guard BYTE 0[16]
+worker_buffers_guard BYTE 0[GUARD_SIZE]
 
 ' Worker status and results (shared between cogs)
 worker_status   LONG    0[NUM_WORKER_COGS]    ' Current status
@@ -83,12 +85,12 @@ test_phase      LONG    0                     ' Current test phase
 ' Cog IDs of launched workers
 launched_cogs   LONG    0[NUM_WORKER_COGS]
 
-PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
+PUB go() | workerCog, opStatus, idx, firstCogId, allSame, totalErrors
 '' Run multi-cog SD filesystem regression tests.
 ''
 ' @local workerCog - Driver worker cog ID
-' @local result - Test result value
-' @local i - Loop counter
+' @local opStatus - Test result value
+' @local idx - Loop counter
 ' @local firstCogId - Cog ID from first init() call
 ' @local allSame - TRUE if all workers got same cog ID
 ' @local totalErrors - Accumulated error count across workers
@@ -105,12 +107,12 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
     debug("  and API lock serialization with ", udec_(NUM_WORKER_COGS), " worker cogs")
 
     ' Initialize worker status
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_IDLE
-        worker_cogid[i] := -1
-        worker_result[i] := 0
-        worker_errors[i] := 0
-        launched_cogs[i] := -1
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        worker_status[idx] := STATUS_IDLE
+        worker_cogid[idx] := -1
+        worker_result[idx] := 0
+        worker_errors[idx] := 0
+        launched_cogs[idx] := -1
 
     ' ----------------------------------
     ' TEST GROUP: Singleton Pattern
@@ -122,19 +124,19 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
     utils.evaluateRange(firstCogId, @"init() cog ID", 0, 7)
 
     utils.startTest(@"Second init() returns SAME cog ID (singleton)")
-    result := dfs.init()
-    utils.evaluateSingleValue(result, @"second init()", firstCogId)
+    opStatus := dfs.init()
+    utils.evaluateSingleValue(opStatus, @"second init()", firstCogId)
 
     utils.startTest(@"Third init() returns SAME cog ID (singleton)")
-    result := dfs.init()
-    utils.evaluateSingleValue(result, @"third init()", firstCogId)
+    opStatus := dfs.init()
+    utils.evaluateSingleValue(opStatus, @"third init()", firstCogId)
 
     ' Mount the filesystem for subsequent tests
     utils.startTest(@"mount() succeeds")
-    result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"mount()", dfs.SUCCESS)
+    opStatus := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(opStatus, @"mount()", dfs.SUCCESS)
 
-    if result <> dfs.SUCCESS
+    if opStatus <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card - aborting multi-cog tests!")
     else
         ' Create test files for worker cogs to read
@@ -151,12 +153,12 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         utils.initGuard(@worker_buffers_guard)
 
         ' Launch worker cogs
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            worker_status[i] := STATUS_RUNNING
-            launched_cogs[i] := cogspin(NEWCOG, worker_singleton_test(i), @worker_stacks[i * STACK_SIZE])
-            if launched_cogs[i] == -1
-                debug("  FAIL: Could not launch worker cog ", udec_(i))
-                worker_status[i] := STATUS_FAIL
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            worker_status[idx] := STATUS_RUNNING
+            launched_cogs[idx] := cogspin(NEWCOG, worker_singleton_test(idx), @worker_stacks[idx * STACK_SIZE])
+            if launched_cogs[idx] == -1
+                debug("  FAIL: Could not launch worker cog ", udec_(idx))
+                worker_status[idx] := STATUS_FAIL
 
         ' Release workers
         sync_barrier := 1
@@ -169,18 +171,18 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         ' Verify all workers got the same cog ID
         utils.startTest(@"All workers see same cog ID (singleton)")
         allSame := true
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            if worker_cogid[i] <> firstCogId
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            if worker_cogid[idx] <> firstCogId
                 allSame := false
-                debug("  Worker ", udec_(i), " got cog ID ", sdec_(worker_cogid[i]), " (expected ", udec_(firstCogId), ")")
-        utils.evaluateBool(allSame, @"All workers see same cog ID", true)
+                debug("  Worker ", udec_(idx), " got cog ID ", sdec_(worker_cogid[idx]), " (expected ", udec_(firstCogId), ")")
+        utils.evaluateBool(allSame, @"All workers see same cog ID", TRUE)
 
         utils.startTest(@"All workers report success")
         totalErrors := 0
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            if worker_status[i] <> STATUS_PASS
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            if worker_status[idx] <> STATUS_PASS
                 totalErrors++
-                debug("  Worker ", udec_(i), " status: ", sdec_(worker_status[i]))
+                debug("  Worker ", udec_(idx), " status: ", sdec_(worker_status[idx]))
         utils.evaluateSingleValue(totalErrors, @"Worker failures", 0)
 
         ' Stop worker cogs
@@ -197,17 +199,17 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         utils.initGuard(@worker_buffers_guard)
 
         ' Reset worker status
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            worker_status[i] := STATUS_RUNNING
-            worker_result[i] := 0
-            worker_errors[i] := 0
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            worker_status[idx] := STATUS_RUNNING
+            worker_result[idx] := 0
+            worker_errors[idx] := 0
 
         ' Launch worker cogs
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            launched_cogs[i] := cogspin(NEWCOG, worker_read_test(i), @worker_stacks[i * STACK_SIZE])
-            if launched_cogs[i] == -1
-                debug("  FAIL: Could not launch worker cog ", udec_(i))
-                worker_status[i] := STATUS_FAIL
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            launched_cogs[idx] := cogspin(NEWCOG, worker_read_test(idx), @worker_stacks[idx * STACK_SIZE])
+            if launched_cogs[idx] == -1
+                debug("  FAIL: Could not launch worker cog ", udec_(idx))
+                worker_status[idx] := STATUS_FAIL
 
         ' Release workers
         sync_barrier := 1
@@ -223,11 +225,11 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         ' that at least ONE worker succeeds (proves the lock mechanism works).
         utils.startTest(@"Concurrent operations completed (lock mechanism works)")
         totalErrors := 0
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            if worker_status[i] == STATUS_PASS
-                debug("  Worker ", udec_(i), ": read ", udec_(worker_result[i]), " bytes OK")
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            if worker_status[idx] == STATUS_PASS
+                debug("  Worker ", udec_(idx), ": read ", udec_(worker_result[idx]), " bytes OK")
             else
-                debug("  Worker ", udec_(i), ": status=", sdec_(worker_status[i]), " (expected due to shared file state)")
+                debug("  Worker ", udec_(idx), ": status=", sdec_(worker_status[idx]), " (expected due to shared file state)")
                 totalErrors++
         ' At least one worker should succeed to prove lock serialization works
         utils.evaluateRange(totalErrors, @"Failed workers (0-2 acceptable)", 0, NUM_WORKER_COGS - 1)
@@ -246,17 +248,17 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         utils.initGuard(@worker_buffers_guard)
 
         ' Reset worker status
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            worker_status[i] := STATUS_RUNNING
-            worker_result[i] := 0
-            worker_errors[i] := 0
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            worker_status[idx] := STATUS_RUNNING
+            worker_result[idx] := 0
+            worker_errors[idx] := 0
 
         ' Launch worker cogs
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            launched_cogs[i] := cogspin(NEWCOG, worker_stress_test(i), @worker_stacks[i * STACK_SIZE])
-            if launched_cogs[i] == -1
-                debug("  FAIL: Could not launch worker cog ", udec_(i))
-                worker_status[i] := STATUS_FAIL
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            launched_cogs[idx] := cogspin(NEWCOG, worker_stress_test(idx), @worker_stacks[idx * STACK_SIZE])
+            if launched_cogs[idx] == -1
+                debug("  FAIL: Could not launch worker cog ", udec_(idx))
+                worker_status[idx] := STATUS_FAIL
 
         ' Release workers
         sync_barrier := 1
@@ -271,9 +273,9 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         ' lock prevents crashes and operations complete safely.
         utils.startTest(@"Stress test completed (no crashes, lock works under load)")
         totalErrors := 0
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            debug("  Worker ", udec_(i), ": ", udec_(worker_result[i]), " iterations, ", udec_(worker_errors[i]), " errors")
-            if worker_result[i] < ITERATIONS
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            debug("  Worker ", udec_(idx), ": ", udec_(worker_result[idx]), " iterations, ", udec_(worker_errors[idx]), " errors")
+            if worker_result[idx] < ITERATIONS
                 totalErrors++   ' Worker didn't complete all iterations
         ' All workers should complete all iterations (even if some ops fail)
         utils.evaluateSingleValue(totalErrors, @"Workers that didn't complete", 0)
@@ -288,9 +290,9 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
 
         utils.startTest(@"error() returns value for calling cog")
         ' This tests that error() uses COGID() correctly
-        result := dfs.error()  ' Should return 0 (SUCCESS) after clean operations
-        debug("  Main cog error(): ", sdec_(result))
-        utils.evaluateSingleValue(result, @"error()", dfs.SUCCESS)
+        opStatus := dfs.error()  ' Should return 0 (SUCCESS) after clean operations
+        debug("  Main cog error(): ", sdec_(opStatus))
+        utils.evaluateSingleValue(opStatus, @"error()", dfs.SUCCESS)
 
         ' ----------------------------------
         ' TEST GROUP: Cleanup
@@ -301,8 +303,8 @@ PUB go() | workerCog, result, i, firstCogId, allSame, totalErrors
         cleanupTestFiles()
 
         utils.startTest(@"unmount() succeeds")
-        result := dfs.unmount(dfs.DEV_SD)
-        utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
+        opStatus := dfs.unmount(dfs.DEV_SD)
+        utils.evaluateSingleValue(opStatus, @"unmount()", dfs.SUCCESS)
 
 #ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
@@ -346,7 +348,7 @@ PRI worker_singleton_test(worker_id) | cogResult
 
     ' Worker cog terminates here
 
-PRI worker_read_test(worker_id) | handle, bytesRead
+PRI worker_read_test(worker_id) | fileHndl, bytesRead, bValidHndl
     ' Worker cog: Perform file read operations
     ' NOTE: All workers use the SAME file because the driver only
     ' supports one open file at a time. The lock serializes access.
@@ -356,22 +358,23 @@ PRI worker_read_test(worker_id) | handle, bytesRead
 
     ' All workers use the same file (driver limitation: one file at a time)
     ' Perform complete open-read-close cycle
-    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-    if handle < 0
+    fileHndl := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl <> TRUE
         worker_errors[worker_id]++
         worker_status[worker_id] := STATUS_FAIL
     else
-        bytesRead := readFileToBuffer(worker_id, handle)
+        bytesRead := readFileToBuffer(worker_id, fileHndl)
         worker_result[worker_id] := bytesRead
 
-        dfs.closeFileHandle(handle)
+        dfs.closeFileHandle(fileHndl)
 
         if bytesRead > 0 and worker_errors[worker_id] == 0
             worker_status[worker_id] := STATUS_PASS
         else
             worker_status[worker_id] := STATUS_FAIL
 
-PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
+PRI worker_stress_test(worker_id) | iter, fileHndl, bytesRead, expectedLen, bValidHndl
     ' Worker cog: Rapid open/read/close cycles
 
     ' Wait for barrier
@@ -381,17 +384,18 @@ PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
 
     repeat iter from 1 to ITERATIONS
         ' Open file
-        handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-        if handle < 0
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl <> TRUE
             worker_errors[worker_id]++
         else
             ' Read into worker's dedicated buffer (NOT stack!)
-            bytesRead := dfs.readHandle(handle, @worker_buffers[worker_id * WORKER_BUF_SIZE], expectedLen)
+            bytesRead := dfs.readHandle(fileHndl, @worker_buffers[worker_id * WORKER_BUF_SIZE], expectedLen)
             if bytesRead <> expectedLen
                 worker_errors[worker_id]++
 
             ' Close file
-            dfs.closeFileHandle(handle)
+            dfs.closeFileHandle(fileHndl)
 
         worker_result[worker_id] := iter
 
@@ -405,15 +409,15 @@ PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
 ' HELPER METHODS
 ' ===========================================================================
 
-PRI waitForWorkers() | i, allDone
+PRI waitForWorkers() | idx, allDone
     ' Wait for all worker cogs to complete
     ' No internal timeout - if workers hang, that's a driver bug to expose.
     ' External test runner provides CI safety timeout.
 
     repeat
         allDone := true
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            if worker_status[i] == STATUS_RUNNING
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            if worker_status[idx] == STATUS_RUNNING
                 allDone := false
                 quit
 
@@ -423,13 +427,13 @@ PRI waitForWorkers() | i, allDone
         waitms(10)
 
 
-PRI stopWorkerCogs() | i
+PRI stopWorkerCogs() | idx
     ' Stop all launched worker cogs
 
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if launched_cogs[i] <> -1
-            cogstop(launched_cogs[i])
-            launched_cogs[i] := -1
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        if launched_cogs[idx] <> -1
+            cogstop(launched_cogs[idx])
+            launched_cogs[idx] := -1
 
 
 PRI readFileToBuffer(worker_id, handle) : bytesRead | size, toRead
@@ -444,7 +448,7 @@ PRI readFileToBuffer(worker_id, handle) : bytesRead | size, toRead
         worker_errors[worker_id]++
 
 
-PRI createTestFiles() | i, pFile, handle
+PRI createTestFiles() | idx, pFile, fileHndl, bValidHndl
     ' Create test files for multi-cog read tests
 
     debug("  Creating test files for worker cogs...")
@@ -455,16 +459,17 @@ PRI createTestFiles() | i, pFile, handle
     dfs.deleteFile(dfs.DEV_SD, @testfile3)
 
     ' Create test files with known content
-    repeat i from 0 to 2
-        case i
+    repeat idx from 0 to 2
+        case idx
             0: pFile := @testfile1
             1: pFile := @testfile2
             2: pFile := @testfile3
 
-        handle := dfs.createFileNew(dfs.DEV_SD, pFile)
-        if handle >= 0
-            dfs.writeHandle(handle, @testContent, strsize(@testContent))
-            dfs.closeFileHandle(handle)
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, pFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(fileHndl, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(fileHndl)
             debug("    Created: ", zstr_(pFile))
         else
             debug("    FAILED to create: ", zstr_(pFile))

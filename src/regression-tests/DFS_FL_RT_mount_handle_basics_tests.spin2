@@ -51,7 +51,7 @@ testfileX           BYTE   "noHandlesTest.bin", 0
 
 filename            BYTE    0[127+1]
 
-PUB go() | workerCog, usedBlocks, freeBlocks, fileCount, handle, handle1, badHandle, status, desiredId, fileSize, rdCount, rdValue, snHi, snLo, endPosition, writeLength
+PUB go() | workerCog, usedBlocks, freeBlocks, fileCount, handle, circHndl, badHandle, status, desiredId, fileSize, rdCount, rdValue, snHi, snLo, endPosition, writeLength
 '' Run Flash mount and handle basics regression tests.
 ''
 ' @local workerCog - Driver worker cog ID
@@ -223,9 +223,9 @@ PUB go() | workerCog, usedBlocks, freeBlocks, fileCount, handle, handle1, badHan
     utils.evaluateSubStatus(status, @"open()", dfs.SUCCESS)
 
     utils.startTest(@"open_circular() OK")
-    handle1 := dfs.open_circular(dfs.DEV_FLASH, @testfile2, dfs.FILEMODE_APPEND, 8192)
+    circHndl := dfs.open_circular(dfs.DEV_FLASH, @testfile2, dfs.FILEMODE_APPEND, 8192)
     status := dfs.error()
-    utils.evaluateSubValue(handle1, @"open_circular()", 1)
+    utils.evaluateSubValue(circHndl, @"open_circular()", 1)
     utils.evaluateSubStatus(status, @"open_circular()", dfs.SUCCESS)
 
     ' Exhaust remaining handles (unified driver has 6 total)

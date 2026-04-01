@@ -32,8 +32,9 @@ If your product only ever needs one device, the standalone drivers ([Flash-only]
 - **Shared SPI bus management** — automatic bus switching between SD (Mode 0) and Flash (Mode 3) with proper smart pin reconfiguration
 - **Flash directory emulation** — per-cog current working directory on the flat Flash filesystem using slash-delimited filename convention
 - **Multi-cog safety** — hardware lock serializes access from up to 8 cogs
-- **Conditional compilation** — `SD_INCLUDE_RAW`, `SD_INCLUDE_REGISTERS`, `SD_INCLUDE_SPEED`, `SD_INCLUDE_DEBUG` for minimal or full builds
-- **1,332 regression tests** across 31 standard test suites verified on real P2 hardware
+- **Defragmentation** — query file fragmentation, compact files in-place, create pre-allocated contiguous files (`SD_INCLUDE_DEFRAG`)
+- **Conditional compilation** — `SD_INCLUDE_RAW`, `SD_INCLUDE_REGISTERS`, `SD_INCLUDE_SPEED`, `SD_INCLUDE_DEBUG`, `SD_INCLUDE_DEFRAG` for minimal or full builds
+- **1,344 regression tests** across 32 standard test suites verified on real P2 hardware
 
 ## Architecture Overview
 
@@ -115,7 +116,7 @@ src/
 │   └── DFS_demo_shell.spin2
 ├── EXAMPLES/                      # Compilable example programs (4)
 ├── UTILS/                         # Standalone utilities (format, audit, fsck, characterize)
-└── regression-tests/              # 31 standard suites, 1,332 tests
+└── regression-tests/              # 32 standard suites, 1,344 tests
 
 DOCs/
 ├── DUAL-DRIVER-THEORY.md          # Theory of operations

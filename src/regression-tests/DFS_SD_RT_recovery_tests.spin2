@@ -41,6 +41,7 @@ CON
      'SD_SCK  = 21
 
      BUFFER_SIZE = 512
+     GUARD_SIZE  = 16
 
      MAX_READ_CRC_RETRIES = 3  ' Must match driver constant
 
@@ -74,15 +75,15 @@ recWriteFile    BYTE    "RECWR1.TXT", 0
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
-readBuffer_guard BYTE   0[16]
+readBuffer_guard BYTE   0[GUARD_SIZE]
 readBuffer2     BYTE    0[BUFFER_SIZE]
-readBuffer2_guard BYTE  0[16]
+readBuffer2_guard BYTE  0[GUARD_SIZE]
 
 ' Short content for write tests
 beforeContent   BYTE    "BEFORE", 0
 afterContent    BYTE    "AFTER", 0
 
-PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
+PUB go() | workerCog, verifyStatus, handle, hndl0, hndl1, hndl2, bytesRead, bytesRead2, bValidHndl
 '' Main entry point for recovery scenario regression tests
 
     debug(" ")
@@ -92,8 +93,8 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
 
     ' Mount the card first
     workerCog := dfs.init()
-    result := dfs.mount(dfs.DEV_SD)
-    if result == dfs.SUCCESS
+    verifyStatus := dfs.mount(dfs.DEV_SD)
+    if verifyStatus == dfs.SUCCESS
 
         ' Show card info
         debug(" ")
@@ -110,7 +111,8 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         ' recFile1: pattern $31 (1024 bytes = 2 sectors)
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $31)
         handle := dfs.createFileNew(dfs.DEV_SD, @recFile1)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
             dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
             dfs.closeFileHandle(handle)
@@ -118,14 +120,16 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         ' recFile2: pattern $42
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $42)
         handle := dfs.createFileNew(dfs.DEV_SD, @recFile2)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
             dfs.closeFileHandle(handle)
 
         ' recFile3: pattern $53
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $53)
         handle := dfs.createFileNew(dfs.DEV_SD, @recFile3)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
             dfs.closeFileHandle(handle)
 
@@ -142,7 +146,8 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         utils.startTest(@"Continue reading after CRC retry")
         utils.setCheckCountPerTest(2)
         handle := dfs.openFileRead(dfs.DEV_SD, @recFile1)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.setTestForceReadError(1)
             bytefill(@readBuffer, 0, BUFFER_SIZE)
             utils.initGuard(@readBuffer_guard)
@@ -164,7 +169,8 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         utils.setCheckCountPerTest(3)
         dfs.clearTestErrors()
         handle := dfs.openFileRead(dfs.DEV_SD, @recFile1)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.setTestForceReadError(MAX_READ_CRC_RETRIES)
             bytefill(@readBuffer, 0, BUFFER_SIZE)
             bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
@@ -180,8 +186,8 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             utils.evaluateSubValue(bytesRead, @"retry read 512 bytes", BUFFER_SIZE)
 
-            result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
-            utils.evaluateSubBool(result, @"data matches pattern", true)
+            verifyStatus := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
+            utils.evaluateSubBool(verifyStatus, @"data matches pattern", TRUE)
             dfs.closeFileHandle(handle)
         utils.showSubTestResults()
 
@@ -197,13 +203,15 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         dfs.clearTestErrors()
         dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
         handle := dfs.createFileNew(dfs.DEV_SD, @recWriteFile)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @beforeContent, strsize(@beforeContent))
             dfs.closeFileHandle(handle)
 
         ' Reopen for write, arm error, attempt write
         handle := dfs.openFileWrite(dfs.DEV_SD, @recWriteFile)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.setTestForceWriteError(1)
             dfs.writeHandle(handle, @afterContent, strsize(@afterContent))
             dfs.closeFileHandle(handle)
@@ -211,31 +219,34 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         ' Read back and verify original content is present
         dfs.clearTestErrors()
         handle := dfs.openFileRead(dfs.DEV_SD, @recWriteFile)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             bytefill(@readBuffer, 0, BUFFER_SIZE)
             bytesRead := dfs.readHandle(handle, @readBuffer, 64)
             dfs.closeFileHandle(handle)
         debug("  Read back: ", udec_(bytesRead), " bytes, content=[", lstr_(@readBuffer, bytesRead <# 20), "]")
         ' File should contain at least "BEFORE" - data should not be corrupted
-        utils.evaluateSubBool(bytesRead >= strsize(@beforeContent), @"has content", true)
+        utils.evaluateSubBool(bytesRead >= strsize(@beforeContent), @"has content", TRUE)
 
         ' Test 4: Retry write after rejection succeeds
         utils.startTest(@"Retry write after rejection succeeds")
         dfs.clearTestErrors()
         dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
         handle := dfs.createFileNew(dfs.DEV_SD, @recWriteFile)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @afterContent, strsize(@afterContent))
             dfs.closeFileHandle(handle)
 
         ' Verify "AFTER" was written
         handle := dfs.openFileRead(dfs.DEV_SD, @recWriteFile)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             bytefill(@readBuffer, 0, BUFFER_SIZE)
             bytesRead := dfs.readHandle(handle, @readBuffer, 64)
             dfs.closeFileHandle(handle)
         debug("  Read back: ", udec_(bytesRead), " bytes, content=[", lstr_(@readBuffer, bytesRead <# 20), "]")
-        utils.evaluateSubBool(bytesRead == strsize(@afterContent), @"write succeeded", true)
+        utils.evaluateSubBool(bytesRead == strsize(@afterContent), @"write succeeded", TRUE)
 
         ' ======================================================================
         ' TEST GROUP: Remount Recovery
@@ -248,28 +259,30 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         ' Force some errors then unmount/remount
         dfs.setTestForceReadError(1)
         dfs.unmount(dfs.DEV_SD)
-        result := dfs.mount(dfs.DEV_SD)
-        utils.evaluateSubValue(result, @"remount succeeds", dfs.SUCCESS)
+        verifyStatus := dfs.mount(dfs.DEV_SD)
+        utils.evaluateSubValue(verifyStatus, @"remount succeeds", dfs.SUCCESS)
 
         ' Create a new file
         dfs.clearTestErrors()
         dfs.deleteFile(dfs.DEV_SD, @"REMOUNT.TXT")
         handle := dfs.createFileNew(dfs.DEV_SD, @"REMOUNT.TXT")
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @"Remount test", 12)
             dfs.closeFileHandle(handle)
-        utils.evaluateSubBool(handle >= 0, @"create file after remount", true)
+        utils.evaluateSubBool(handle >= 0, @"create file after remount", TRUE)
 
         ' Read existing file
         handle := dfs.openFileRead(dfs.DEV_SD, @recFile2)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             bytefill(@readBuffer, 0, BUFFER_SIZE)
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             dfs.closeFileHandle(handle)
-        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $42)
-        utils.evaluateSubBool(result, @"existing file data OK", true)
+        verifyStatus := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $42)
+        utils.evaluateSubBool(verifyStatus, @"existing file data OK", TRUE)
         utils.showSubTestResults()
 
         dfs.deleteFile(dfs.DEV_SD, @"REMOUNT.TXT")
@@ -285,57 +298,58 @@ PUB go() | workerCog, result, handle, h0, h1, h2, bytesRead, bytesRead2
         dfs.clearTestErrors()
 
         ' Open three files
-        h0 := dfs.openFileRead(dfs.DEV_SD, @recFile1)
-        h1 := dfs.openFileRead(dfs.DEV_SD, @recFile2)
-        h2 := dfs.openFileRead(dfs.DEV_SD, @recFile3)
+        hndl0 := dfs.openFileRead(dfs.DEV_SD, @recFile1)
+        hndl1 := dfs.openFileRead(dfs.DEV_SD, @recFile2)
+        hndl2 := dfs.openFileRead(dfs.DEV_SD, @recFile3)
 
-        ' Read h0 successfully
+        ' Read hndl0 successfully
         bytefill(@readBuffer, 0, BUFFER_SIZE)
         utils.initGuard(@readBuffer_guard)
-        bytesRead := dfs.readHandle(h0, @readBuffer, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(hndl0, @readBuffer, BUFFER_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
-        utils.evaluateSubBool(result, @"h0 read correct", true)
+        verifyStatus := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
+        utils.evaluateSubBool(verifyStatus, @"h0 read correct", TRUE)
 
-        ' Force error on h1
+        ' Force error on hndl1
         dfs.setTestForceReadError(MAX_READ_CRC_RETRIES)
-        bytesRead := dfs.readHandle(h1, @readBuffer, BUFFER_SIZE)
-        debug("  h1 read after force error: ", sdec_(bytesRead))
+        bytesRead := dfs.readHandle(hndl1, @readBuffer, BUFFER_SIZE)
+        debug("  hndl1 read after force error: ", sdec_(bytesRead))
 
-        ' Clear errors, verify h0 and h2 still work
+        ' Clear errors, verify hndl0 and hndl2 still work
         dfs.clearTestErrors()
-        ' h0 is at position 512 (already read first sector), read second sector
+        ' hndl0 is at position 512 (already read first sector), read second sector
         bytefill(@readBuffer, 0, BUFFER_SIZE)
         utils.initGuard(@readBuffer_guard)
-        bytesRead := dfs.readHandle(h0, @readBuffer, BUFFER_SIZE)
+        bytesRead := dfs.readHandle(hndl0, @readBuffer, BUFFER_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"h0 2nd read OK", BUFFER_SIZE)
 
         bytefill(@readBuffer2, 0, BUFFER_SIZE)
         utils.initGuard(@readBuffer2_guard)
-        bytesRead2 := dfs.readHandle(h2, @readBuffer2, BUFFER_SIZE)
+        bytesRead2 := dfs.readHandle(hndl2, @readBuffer2, BUFFER_SIZE)
         utils.checkGuard(@readBuffer2_guard, @"readBuffer2 guard")
-        result := utils.verifyBufferPattern(@readBuffer2, BUFFER_SIZE, $53)
-        utils.evaluateSubBool(result, @"h2 read correct", true)
+        verifyStatus := utils.verifyBufferPattern(@readBuffer2, BUFFER_SIZE, $53)
+        utils.evaluateSubBool(verifyStatus, @"h2 read correct", TRUE)
 
-        dfs.closeFileHandle(h0)
-        dfs.closeFileHandle(h1)
-        dfs.closeFileHandle(h2)
+        dfs.closeFileHandle(hndl0)
+        dfs.closeFileHandle(hndl1)
+        dfs.closeFileHandle(hndl2)
         utils.showSubTestResults()
 
         ' Test 7: Handle reuse after error close
         utils.startTest(@"Handle reuse after error close")
         dfs.clearTestErrors()
-        ' h1 was closed above, open a new file in freed slot
+        ' hndl1 was closed above, open a new file in freed slot
         handle := dfs.openFileRead(dfs.DEV_SD, @recFile2)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             bytefill(@readBuffer, 0, BUFFER_SIZE)
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             dfs.closeFileHandle(handle)
-        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $42)
-        utils.evaluateBool(result, @"reused handle reads OK", true)
+        verifyStatus := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $42)
+        utils.evaluateBool(verifyStatus, @"reused handle reads OK", TRUE)
 
     ' ======================================================================
     ' Cleanup and Summary

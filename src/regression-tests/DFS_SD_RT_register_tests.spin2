@@ -35,6 +35,8 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
+     GUARD_SIZE  = 16
+
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_RAW
@@ -66,21 +68,21 @@ DAT
 
 ' CSD register buffer (16 bytes)
 csdBuf          BYTE    0[16]
-csdBuf_guard    BYTE    0[16]
+csdBuf_guard    BYTE    0[GUARD_SIZE]
 
 ' CID register buffer (16 bytes)
 cidBuf          BYTE    0[16]
-cidBuf_guard    BYTE    0[16]
+cidBuf_guard    BYTE    0[GUARD_SIZE]
 
 ' SCR register buffer (8 bytes)
 scrBuf          BYTE    0[8]
-scrBuf_guard    BYTE    0[16]
+scrBuf_guard    BYTE    0[GUARD_SIZE]
 
 ' SD Status buffer (64 bytes)
 sdsBuf          BYTE    0[64]
-sdsBuf_guard    BYTE    0[16]
+sdsBuf_guard    BYTE    0[GUARD_SIZE]
 
-PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, ocr, mid, sdSpec
+PUB go() | workerCog, opResult, regStatus, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, ocr, mid, sdSpec
 '' Main entry point for register access regression tests
 
     debug(" ")
@@ -92,8 +94,8 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    opResult := dfs.mount(dfs.DEV_SD)
+    if opResult <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -111,9 +113,9 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
         utils.startTest(@"readCSDRaw() returns data successfully")
         bytefill(@csdBuf, 0, 16)
         utils.initGuard(@csdBuf_guard)
-        status := dfs.readCSDRaw(@csdBuf)
+        regStatus := dfs.readCSDRaw(@csdBuf)
         utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
-        utils.evaluateSingleValue(status, @"readCSDRaw()", dfs.SUCCESS)
+        utils.evaluateSingleValue(regStatus, @"readCSDRaw()", dfs.SUCCESS)
 
         ' Test: CSD version is valid (0 for SDSC, 1 for SDHC/SDXC)
         utils.startTest(@"CSD version is valid (0 or 1)")
@@ -132,7 +134,7 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
         utils.startTest(@"Card capacity > 0 sectors")
         cardSectors := dfs.cardSizeSectors()
         debug("   Card sectors: ", udec(cardSectors))
-        utils.evaluateSubBool(cardSectors > 0, @"capacity > 0", true)
+        utils.evaluateSubBool(cardSectors > 0, @"capacity > 0", TRUE)
 
         ' Test: Capacity matches cardSizeSectors()
         utils.startTest(@"CSD capacity consistent with cardSizeSectors()")
@@ -146,21 +148,21 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
             utils.evaluateSingleValue(capacity, @"CSD vs cardSizeSectors", cardSectors)
         else
             ' SDSC: more complex calculation, just verify non-zero
-            utils.evaluateSubBool(cardSectors > 0, @"SDSC capacity > 0", true)
+            utils.evaluateSubBool(cardSectors > 0, @"SDSC capacity > 0", TRUE)
 
         ' Test: readCSDRaw works via initCardOnly path (unmounted)
         utils.startTest(@"readCSDRaw() works after initCardOnly")
         dfs.unmount(dfs.DEV_SD)
-        status := dfs.initCardOnly()
-        utils.evaluateSubValue(status, @"initCardOnly()", dfs.SUCCESS)
+        regStatus := dfs.initCardOnly()
+        utils.evaluateSubValue(regStatus, @"initCardOnly()", dfs.SUCCESS)
         bytefill(@csdBuf, 0, 16)
         utils.initGuard(@csdBuf_guard)
-        status := dfs.readCSDRaw(@csdBuf)
+        regStatus := dfs.readCSDRaw(@csdBuf)
         utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
-        utils.evaluateSubValue(status, @"readCSDRaw() unmounted", dfs.SUCCESS)
+        utils.evaluateSubValue(regStatus, @"readCSDRaw() unmounted", dfs.SUCCESS)
         ' Verify same version
-        result := (csdBuf[0] >> 6) & $03
-        utils.evaluateSubValue(result, @"CSD version matches", csdVer)
+        opResult := (csdBuf[0] >> 6) & $03
+        utils.evaluateSubValue(opResult, @"CSD version matches", csdVer)
 
 #ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
@@ -170,8 +172,8 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
         dfs.stop()
 
         ' Remount for timeout tests
-        result := dfs.mount(dfs.DEV_SD)
-        if result <> dfs.SUCCESS
+        opResult := dfs.mount(dfs.DEV_SD)
+        if opResult <> dfs.SUCCESS
             debug("ERROR: Could not remount!")
         else
             ' ==================================================================
@@ -193,7 +195,7 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
 
             ' Test: Write timeout >= read timeout
             utils.startTest(@"Write timeout >= read timeout")
-            utils.evaluateSubBool(writeTimeout >= readTimeout, @"write >= read", true)
+            utils.evaluateSubBool(writeTimeout >= readTimeout, @"write >= read", TRUE)
 
             ' Test: TRAN_SPEED matches getCardMaxSpeed()
             utils.startTest(@"TRAN_SPEED consistent with getCardMaxSpeed()")
@@ -216,18 +218,18 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
             utils.startTest(@"readCIDRaw() returns SUCCESS")
             bytefill(@cidBuf, 0, 16)
             utils.initGuard(@cidBuf_guard)
-            status := dfs.readCIDRaw(@cidBuf)
+            regStatus := dfs.readCIDRaw(@cidBuf)
             utils.checkGuard(@cidBuf_guard, @"cidBuf guard")
-            utils.evaluateSingleValue(status, @"readCIDRaw()", dfs.SUCCESS)
+            utils.evaluateSingleValue(regStatus, @"readCIDRaw()", dfs.SUCCESS)
 
             utils.startTest(@"CID manufacturer ID > 0")
             mid := cidBuf[0]
             debug("   CID Manufacturer ID: $", uhex_byte_(mid))
-            utils.evaluateSubBool(mid > 0, @"MID > 0", true)
+            utils.evaluateSubBool(mid > 0, @"MID > 0", TRUE)
 
             utils.startTest(@"CID MID matches getManufacturerID()")
-            result := dfs.getManufacturerID()
-            utils.evaluateSingleValue(result, @"getManufacturerID()", mid)
+            opResult := dfs.getManufacturerID()
+            utils.evaluateSingleValue(opResult, @"getManufacturerID()", mid)
 
             ' ==================================================================
             ' TEST GROUP: SCR Register
@@ -237,9 +239,9 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
             utils.startTest(@"readSCRRaw() returns SUCCESS")
             bytefill(@scrBuf, 0, 8)
             utils.initGuard(@scrBuf_guard)
-            status := dfs.readSCRRaw(@scrBuf)
+            regStatus := dfs.readSCRRaw(@scrBuf)
             utils.checkGuard(@scrBuf_guard, @"scrBuf guard")
-            utils.evaluateSingleValue(status, @"readSCRRaw()", dfs.SUCCESS)
+            utils.evaluateSingleValue(regStatus, @"readSCRRaw()", dfs.SUCCESS)
 
             utils.startTest(@"SCR SD_SPEC version in valid range")
             sdSpec := (scrBuf[0] >> 4) & $0F
@@ -255,11 +257,11 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
             utils.startTest(@"getOCR() returns non-zero")
             ocr := dfs.getOCR()
             debug("   OCR: $", uhex_long_(ocr))
-            utils.evaluateSubBool(ocr <> 0, @"OCR non-zero", true)
+            utils.evaluateSubBool(ocr <> 0, @"OCR non-zero", TRUE)
 
             utils.startTest(@"OCR voltage range bits set")
             ' Bits 20-23 should have voltage range bits set (3.2-3.6V typical)
-            utils.evaluateSubBool((ocr >> 20) & $0F <> 0, @"voltage bits set", true)
+            utils.evaluateSubBool((ocr >> 20) & $0F <> 0, @"voltage bits set", TRUE)
 
             ' ==================================================================
             ' TEST GROUP: SD Status Register
@@ -269,9 +271,9 @@ PUB go() | workerCog, result, status, csdVer, tranSpeed, capacity, cardSectors, 
             utils.startTest(@"readSDStatusRaw() returns SUCCESS")
             bytefill(@sdsBuf, 0, 64)
             utils.initGuard(@sdsBuf_guard)
-            status := dfs.readSDStatusRaw(@sdsBuf)
+            regStatus := dfs.readSDStatusRaw(@sdsBuf)
             utils.checkGuard(@sdsBuf_guard, @"sdsBuf guard")
-            utils.evaluateSingleValue(status, @"readSDStatusRaw()", dfs.SUCCESS)
+            utils.evaluateSingleValue(regStatus, @"readSDStatusRaw()", dfs.SUCCESS)
 
             ' ==================================================================
             ' Cleanup

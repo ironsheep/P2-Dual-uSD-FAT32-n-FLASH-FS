@@ -133,7 +133,7 @@ testStr3        BYTE    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 0
 ' Temp byte for single-byte writes
 tempByte        BYTE    0
 
-PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
+PUB go() | workerCog, opStatus, handle, bytesRead, bytesWritten, idx, fileSize, bValidHndl
 '' Main entry point for read/write regression tests
 ''
 '' Tests various data patterns and file sizes using V3 handle API
@@ -148,8 +148,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    opStatus := dfs.mount(dfs.DEV_SD)
+    if opStatus <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -172,21 +172,23 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"writeHandle() - write 10 bytes")
         handle := dfs.createFileNew(dfs.DEV_SD, @testBytes)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             repeat idx from 1 to BYTE_COUNT_10
                 tempByte := idx
                 dfs.writeHandle(handle, @tempByte, 1)
             dfs.closeFileHandle(handle)
             debug("  Wrote 10 bytes (1-10)")
-        utils.evaluateSubBool(handle >= 0, @"createFileNew + writeHandle", true)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew + writeHandle", TRUE)
 
         utils.startTest(@"readHandle() - read back 10 bytes")
         handle := dfs.openFileRead(dfs.DEV_SD, @testBytes)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead()", TRUE)
 
         utils.startTest(@"Verify byte values")
         utils.setCheckCountPerTest(BYTE_COUNT_10)
-        if handle >= 0
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, BYTE_COUNT_10)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
@@ -194,7 +196,7 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
                 utils.evaluateSubValue(readBuffer[idx], @"byte value", idx + 1)
 
         utils.startTest(@"Verify file size")
-        if handle >= 0
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", BYTE_COUNT_10)
             dfs.closeFileHandle(handle)
@@ -206,9 +208,10 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"writeHandle() - write test strings")
         handle := dfs.createFileNew(dfs.DEV_SD, @testString)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
 
-        if handle >= 0
+        if bValidHndl == TRUE
             ' Write all strings to file with CRLF between them
             dfs.writeHandle(handle, @testStr1, strsize(@testStr1))
             tempByte := ASCII_CR
@@ -230,13 +233,14 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Read back and verify content accessible")
         handle := dfs.openFileRead(dfs.DEV_SD, @testString)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead()", TRUE)
 
         ' Calculate expected size
         fileSize := strsize(@testStr1) + 2 + strsize(@testStr2) + 2 + strsize(@testStr3)
 
         utils.startTest(@"Verify total file size")
-        if handle >= 0
+        if bValidHndl == TRUE
             utils.evaluateSingleValue(dfs.fileSizeHandle(handle), @"fileSizeHandle()", fileSize)
             dfs.closeFileHandle(handle)
 
@@ -250,28 +254,30 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"writeHandle() - write 256 byte buffer")
         handle := dfs.createFileNew(dfs.DEV_SD, @testPattern)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
 
-        if handle >= 0
+        if bValidHndl == TRUE
             bytesWritten := dfs.writeHandle(handle, @writeBuffer, PATTERN_BUF_SIZE)
             dfs.closeFileHandle(handle)
             debug("  Wrote ", udec_(bytesWritten), " bytes")
 
         utils.startTest(@"Read back buffer")
         handle := dfs.openFileRead(dfs.DEV_SD, @testPattern)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead()", TRUE)
 
         utils.startTest(@"Verify bytes read count")
-        if handle >= 0
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, PATTERN_BUF_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             utils.evaluateSingleValue(bytesRead, @"bytes read", PATTERN_BUF_SIZE)
 
         utils.startTest(@"Verify buffer content")
-        result := utils.verifyBufferPattern(@readBuffer, PATTERN_BUF_SIZE, FILL_PATTERN_A0)
-        utils.evaluateBool(result, @"pattern match", true)
-        if handle >= 0
+        opStatus := utils.verifyBufferPattern(@readBuffer, PATTERN_BUF_SIZE, FILL_PATTERN_A0)
+        utils.evaluateBool(opStatus, @"pattern match", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
 
         ' ----------------------------------
@@ -284,33 +290,35 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Write 2KB file (4 sectors)")
         handle := dfs.createFileNew(dfs.DEV_SD, @testLarge)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
 
-        if handle >= 0
+        if bValidHndl == TRUE
             bytesWritten := dfs.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
             dfs.closeFileHandle(handle)
             debug("  Wrote ", udec_(bytesWritten), " bytes")
 
         utils.startTest(@"Read back 2KB file")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead()", TRUE)
 
         utils.startTest(@"Verify file size is 2048")
-        if handle >= 0
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", LARGE_BUFFER_SIZE)
 
         utils.startTest(@"Read and verify content")
-        if handle >= 0
+        if bValidHndl == TRUE
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
             utils.evaluateSingleValue(bytesRead, @"bytes read", LARGE_BUFFER_SIZE)
 
         utils.startTest(@"Verify large buffer pattern")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, $00)
-        utils.evaluateBool(result, @"pattern match", true)
-        if handle >= 0
+        opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, $00)
+        utils.evaluateBool(opStatus, @"pattern match", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
 
         ' ----------------------------------
@@ -320,9 +328,10 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Create file with first write")
         handle := dfs.createFileNew(dfs.DEV_SD, @testMulti)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
 
-        if handle >= 0
+        if bValidHndl == TRUE
             utils.fillBufferWithValue(@writeBuffer, BYTE_COUNT_100, FILL_PATTERN_AA)
             dfs.writeHandle(handle, @writeBuffer, BYTE_COUNT_100)
             dfs.closeFileHandle(handle)
@@ -330,10 +339,11 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Reopen and verify file size")
         handle := dfs.openFileRead(dfs.DEV_SD, @testMulti)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead()", TRUE)
 
         utils.startTest(@"Verify file size after first write")
-        if handle >= 0
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", BYTE_COUNT_100)
             dfs.closeFileHandle(handle)
@@ -346,16 +356,17 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Create file and write data")
         dfs.deleteFile(dfs.DEV_SD, @testPattern)
         handle := dfs.createFileNew(dfs.DEV_SD, @testPattern)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
 
-        if handle >= 0
+        if bValidHndl == TRUE
             utils.fillBufferWithValue(@writeBuffer, BYTE_COUNT_100, FILL_PATTERN_11)
             dfs.writeHandle(handle, @writeBuffer, BYTE_COUNT_100)
             debug("  Wrote 100 bytes of $11")
 
             utils.startTest(@"Call syncHandle() to flush without close")
-            result := dfs.syncHandle(handle)
-            utils.evaluateSingleValue(result, @"syncHandle()", dfs.SUCCESS)
+            opStatus := dfs.syncHandle(handle)
+            utils.evaluateSingleValue(opStatus, @"syncHandle()", dfs.SUCCESS)
 
             utils.fillBufferWithValue(@writeBuffer, BYTE_COUNT_100, FILL_PATTERN_22)
             dfs.writeHandle(handle, @writeBuffer, BYTE_COUNT_100)
@@ -366,7 +377,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Verify total file size")
         handle := dfs.openFileRead(dfs.DEV_SD, @testPattern)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", SYNC_TOTAL_SIZE)
             dfs.closeFileHandle(handle)
@@ -378,7 +390,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Read 0 bytes returns 0")
         handle := dfs.openFileRead(dfs.DEV_SD, @testPattern)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, 0)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
@@ -387,7 +400,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
 
         utils.startTest(@"Read more than file size")
         handle := dfs.openFileRead(dfs.DEV_SD, @testBytes)  ' 10 byte file
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, BYTE_COUNT_100)  ' Request 100
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
@@ -403,30 +417,34 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Empty file - create 0-byte file")
         dfs.deleteFile(dfs.DEV_SD, @testBoundary)
         handle := dfs.createFileNew(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)  ' Close immediately without writing
         handle := dfs.openFileRead(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"fileSize of empty file", 0)
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, BYTE_COUNT_10)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             utils.evaluateSubValue(bytesRead, @"read from empty file", 0)
-            result := dfs.eofHandle(handle)
-            utils.evaluateSubBool(result <> 0, @"EOF true immediately", true)
+            opStatus := dfs.eofHandle(handle)
+            utils.evaluateSubBool(opStatus <> 0, @"EOF true immediately", TRUE)
             dfs.closeFileHandle(handle)
 
         ' Test: Single byte file (1 byte)
         utils.startTest(@"Single byte file - create 1-byte file")
         dfs.deleteFile(dfs.DEV_SD, @testBoundary)
         handle := dfs.createFileNew(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             tempByte := TEST_BYTE_42
             dfs.writeHandle(handle, @tempByte, 1)
             dfs.closeFileHandle(handle)
         handle := dfs.openFileRead(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"fileSize of 1-byte file", 1)
             utils.initGuard(@readBuffer_guard)
@@ -440,34 +458,38 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Exact sector boundary - 512 bytes")
         dfs.deleteFile(dfs.DEV_SD, @testBoundary)
         handle := dfs.createFileNew(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             utils.fillBufferWithPattern(@writeBuffer, BYTES_PER_SECTOR, FILL_PATTERN_B0)
             dfs.writeHandle(handle, @writeBuffer, BYTES_PER_SECTOR)
             dfs.closeFileHandle(handle)
         handle := dfs.openFileRead(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"fileSize 512 bytes", BYTES_PER_SECTOR)
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, BYTES_PER_SECTOR)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             utils.evaluateSubValue(bytesRead, @"read 512 bytes", BYTES_PER_SECTOR)
-            result := utils.verifyBufferPattern(@readBuffer, BYTES_PER_SECTOR, FILL_PATTERN_B0)
-            utils.evaluateSubBool(result, @"512-byte pattern match", true)
+            opStatus := utils.verifyBufferPattern(@readBuffer, BYTES_PER_SECTOR, FILL_PATTERN_B0)
+            utils.evaluateSubBool(opStatus, @"512-byte pattern match", TRUE)
             dfs.closeFileHandle(handle)
 
         ' Test: Sector + 1 (513 bytes - spans 2 sectors)
         utils.startTest(@"Sector + 1 boundary - 513 bytes")
         dfs.deleteFile(dfs.DEV_SD, @testBoundary)
         handle := dfs.createFileNew(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             utils.fillBufferWithPattern(@writeBuffer, BYTES_PER_SECTOR, FILL_PATTERN_C0)
             dfs.writeHandle(handle, @writeBuffer, BYTES_PER_SECTOR)
             tempByte := EXTRA_BYTE_C1  ' Extra byte in second sector
             dfs.writeHandle(handle, @tempByte, 1)
             dfs.closeFileHandle(handle)
         handle := dfs.openFileRead(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"fileSize 513 bytes", SECTOR_PLUS_ONE)
             bytefill(@readBuffer, 0, BYTES_PER_SECTOR)
@@ -486,7 +508,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Large file - 64KB (128 sectors)")
         dfs.deleteFile(dfs.DEV_SD, @testBoundary)
         handle := dfs.createFileNew(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             ' Write 64KB in 2KB chunks (32 chunks)
             utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, FILL_PATTERN_D0)
             repeat idx from 0 to CHUNKS_32 - 1
@@ -494,7 +517,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
             dfs.closeFileHandle(handle)
             debug("  Wrote 64KB (32 x 2KB chunks)")
         handle := dfs.openFileRead(dfs.DEV_SD, @testBoundary)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"fileSize 65536 bytes", SIZE_64KB)
             ' Read back and verify first chunk
@@ -502,8 +526,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
             utils.evaluateSubValue(bytesRead, @"read first 2KB", LARGE_BUFFER_SIZE)
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, FILL_PATTERN_D0)
-            utils.evaluateSubBool(result, @"first chunk pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, FILL_PATTERN_D0)
+            utils.evaluateSubBool(opStatus, @"first chunk pattern", TRUE)
             dfs.closeFileHandle(handle)
 
         ' Clean up boundary test file
@@ -518,8 +542,9 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Create 128KB file (256 sectors)")
         dfs.deleteFile(dfs.DEV_SD, @testLarge128)
         handle := dfs.createFileNew(dfs.DEV_SD, @testLarge128)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
+        if bValidHndl == TRUE
             ' Write 64 chunks of 2KB, each with unique pattern
             repeat idx from 0 to CHUNKS_64 - 1
                 utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, (idx * PATTERN_STEP) & BYTE_MASK)
@@ -527,7 +552,8 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
             dfs.closeFileHandle(handle)
             debug("  Wrote 128KB (64 x 2KB chunks)")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge128)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"file size 131072", SIZE_128KB)
             dfs.closeFileHandle(handle)
@@ -535,55 +561,59 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         ' Test 2: Verify first chunk (pattern starts at 0)
         utils.startTest(@"Verify first 2KB chunk of 128KB file")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge128)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
             utils.evaluateSubValue(bytesRead, @"read 2KB", LARGE_BUFFER_SIZE)
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
-            utils.evaluateSubBool(result, @"first chunk pattern(0)", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
+            utils.evaluateSubBool(opStatus, @"first chunk pattern(0)", TRUE)
             dfs.closeFileHandle(handle)
 
         ' Test 3: Verify middle chunk (chunk 32, pattern starts at 32*8=256)
         utils.startTest(@"Verify middle chunk (seek to 65536)")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge128)
-        if handle >= 0
-            result := dfs.seekHandle(handle, SIZE_64KB)
-            utils.evaluateSubValue(result, @"seek to 65536", dfs.SUCCESS)
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
+            opStatus := dfs.seekHandle(handle, SIZE_64KB)
+            utils.evaluateSubValue(opStatus, @"seek to 65536", dfs.SUCCESS)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
             utils.evaluateSubValue(bytesRead, @"read middle 2KB", LARGE_BUFFER_SIZE)
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (CHUNKS_32 * PATTERN_STEP) & BYTE_MASK)
-            utils.evaluateSubBool(result, @"middle chunk pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (CHUNKS_32 * PATTERN_STEP) & BYTE_MASK)
+            utils.evaluateSubBool(opStatus, @"middle chunk pattern", TRUE)
             dfs.closeFileHandle(handle)
 
         ' Test 4: Verify last chunk (chunk 63, pattern starts at 63*8=504)
         utils.startTest(@"Verify last chunk (seek to 129024)")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge128)
-        if handle >= 0
-            result := dfs.seekHandle(handle, SEEK_LAST_128KB)
-            utils.evaluateSubValue(result, @"seek to 129024", dfs.SUCCESS)
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
+            opStatus := dfs.seekHandle(handle, SEEK_LAST_128KB)
+            utils.evaluateSubValue(opStatus, @"seek to 129024", dfs.SUCCESS)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
             utils.evaluateSubValue(bytesRead, @"read last 2KB", LARGE_BUFFER_SIZE)
             ' Pattern start: chunk 63 * 8 = 504, but masked to 8 bits = $F8
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, ((CHUNKS_64 - 1) * PATTERN_STEP) & BYTE_MASK)
-            utils.evaluateSubBool(result, @"last chunk pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, ((CHUNKS_64 - 1) * PATTERN_STEP) & BYTE_MASK)
+            utils.evaluateSubBool(opStatus, @"last chunk pattern", TRUE)
             dfs.closeFileHandle(handle)
 
         ' Test 5: Sequential read all 128KB
         utils.startTest(@"Sequential read all 128KB verifies all chunks")
         utils.setCheckCountPerTest(CHUNKS_64)
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge128)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@largeReadBuf_guard)
             repeat idx from 0 to CHUNKS_64 - 1
                 bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
                 utils.initAndCheckGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-                result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (idx * PATTERN_STEP) & BYTE_MASK)
-                utils.evaluateSubBool(result, @"chunk pattern match", true)
+                opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (idx * PATTERN_STEP) & BYTE_MASK)
+                utils.evaluateSubBool(opStatus, @"chunk pattern match", TRUE)
             dfs.closeFileHandle(handle)
         utils.setCheckCountPerTest(1)
 
@@ -591,15 +621,17 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Create 256KB file (512 sectors)")
         dfs.deleteFile(dfs.DEV_SD, @testLarge256)
         handle := dfs.createFileNew(dfs.DEV_SD, @testLarge256)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
+        if bValidHndl == TRUE
             repeat idx from 0 to CHUNKS_128 - 1
                 utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, (idx * PATTERN_STEP) & BYTE_MASK)
                 dfs.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
             dfs.closeFileHandle(handle)
             debug("  Wrote 256KB (128 x 2KB chunks)")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge256)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSubValue(fileSize, @"file size 262144", SIZE_256KB)
             dfs.closeFileHandle(handle)
@@ -608,38 +640,39 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.startTest(@"Random access across cluster boundaries in 256KB file")
         utils.setCheckCountPerTest(4)
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge256)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             ' Position 0 (cluster 0)
             dfs.seekHandle(handle, 0)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
-            utils.evaluateSubBool(result, @"pos 0 pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
+            utils.evaluateSubBool(opStatus, @"pos 0 pattern", TRUE)
 
             ' Position 32768 (cluster boundary area)
             dfs.seekHandle(handle, SEEK_32KB)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (16 * PATTERN_STEP) & BYTE_MASK)
-            utils.evaluateSubBool(result, @"pos 32768 pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (16 * PATTERN_STEP) & BYTE_MASK)
+            utils.evaluateSubBool(opStatus, @"pos 32768 pattern", TRUE)
 
             ' Position 131072 (halfway, cluster 16)
             dfs.seekHandle(handle, SIZE_128KB)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (CHUNKS_64 * PATTERN_STEP) & BYTE_MASK)
-            utils.evaluateSubBool(result, @"pos 131072 pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (CHUNKS_64 * PATTERN_STEP) & BYTE_MASK)
+            utils.evaluateSubBool(opStatus, @"pos 131072 pattern", TRUE)
 
             ' Position 260096 (near end, last 2KB chunk)
             dfs.seekHandle(handle, SEEK_LAST_256KB)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, ((CHUNKS_128 - 1) * PATTERN_STEP) & BYTE_MASK)
-            utils.evaluateSubBool(result, @"pos 260096 pattern", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, ((CHUNKS_128 - 1) * PATTERN_STEP) & BYTE_MASK)
+            utils.evaluateSubBool(opStatus, @"pos 260096 pattern", TRUE)
 
             dfs.closeFileHandle(handle)
         utils.setCheckCountPerTest(1)
@@ -647,35 +680,36 @@ PUB go() | workerCog, result, handle, bytesRead, bytesWritten, idx, fileSize
         ' Test 8: Backward seek in large file
         utils.startTest(@"Backward seek in 256KB file")
         handle := dfs.openFileRead(dfs.DEV_SD, @testLarge256)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             ' Read near end first
             dfs.seekHandle(handle, SEEK_LAST_256KB)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, ((CHUNKS_128 - 1) * PATTERN_STEP) & BYTE_MASK)
-            utils.evaluateSubBool(result, @"near-end read OK", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, ((CHUNKS_128 - 1) * PATTERN_STEP) & BYTE_MASK)
+            utils.evaluateSubBool(opStatus, @"near-end read OK", TRUE)
 
             ' Seek backward to beginning
             dfs.seekHandle(handle, 0)
             utils.initGuard(@largeReadBuf_guard)
             bytesRead := dfs.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
             utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
-            utils.evaluateSubBool(result, @"backward seek read OK", true)
+            opStatus := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
+            utils.evaluateSubBool(opStatus, @"backward seek read OK", TRUE)
 
             dfs.closeFileHandle(handle)
 
         ' Test 9: Delete reclaims space
         utils.startTest(@"Delete 256KB file reclaims space")
-        result := dfs.freeSpace(dfs.DEV_SD)
-        debug("   Free space before: ", udec(result), " sectors")
+        opStatus := dfs.freeSpace(dfs.DEV_SD)
+        debug("   Free space before: ", udec(opStatus), " sectors")
         dfs.deleteFile(dfs.DEV_SD, @testLarge256)
         fileSize := dfs.freeSpace(dfs.DEV_SD)
         debug("   Free space after: ", udec(fileSize), " sectors")
         ' 256KB = 512 sectors, free space should increase by approximately that
-        debug("   sectors reclaimed: ", udec(fileSize - result))
-        utils.evaluateRange(fileSize - result, @"sectors reclaimed", RECLAIM_MIN_SECTORS, RECLAIM_MAX_SECTORS)
+        debug("   sectors reclaimed: ", udec(fileSize - opStatus))
+        utils.evaluateRange(fileSize - opStatus, @"sectors reclaimed", RECLAIM_MIN_SECTORS, RECLAIM_MAX_SECTORS)
 
         ' Clean up remaining large file
         dfs.deleteFile(dfs.DEV_SD, @testLarge128)

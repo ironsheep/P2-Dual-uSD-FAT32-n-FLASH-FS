@@ -1026,6 +1026,46 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `getResult() : status` | Get result and release lock |
 | `cancelAsync() : status` | Cancel in-flight async operation and release lock |
 
+### SD_INCLUDE_DEFRAG
+
+| Method | Description |
+|--------|-------------|
+| `fileFragments(dev, p_path) : fragment_count` | Count non-contiguous fragments (1 = contiguous, 0 = empty) |
+| `isFileContiguous(dev, p_path) : result` | TRUE if file has exactly 1 fragment |
+| `createFileContiguous(dev, p_path, expected_size) : handle` | Create file with pre-allocated contiguous cluster chain |
+| `compactFile(dev, p_path) : result` | Relocate fragmented file to contiguous clusters |
+
+## Allocation and Defragmentation
+
+### Next-Fit Allocator
+
+The SD allocator uses a **next-fit** strategy: `allocateCluster()` begins scanning from the previously allocated cluster + 1, rather than always starting at cluster 2 (first-fit). This reduces fragmentation by avoiding filling gaps left by deleted files.
+
+The `fsi_nxt_free` hint from the FSInfo sector seeds the starting position for new chains. On success, the hint is updated to `allocated_cluster + 1` and persists across mount/unmount cycles. At end-of-FAT, the scan wraps to cluster 2 and stops when it returns to the starting position (returning `E_DISK_FULL`).
+
+### Compaction Algorithm (compactFile)
+
+`compactFile()` uses a 12-step **copy-then-free** process:
+
+1. Find the file via `searchDirectory()`
+2. Verify the file is not open (`isFileOpenAny()`)
+3. Check for empty file (no-op)
+4. Count fragments — if already contiguous, return SUCCESS
+5. Find a contiguous free run via `findContiguousRun()`
+6. Copy each cluster from old chain to new contiguous location
+7. Read-back verify every copied cluster (`verifyClusterCopy()`)
+8. Build new FAT chain (`allocateContiguousChain()`)
+9. Update directory entry to point to new first cluster
+10. Free old cluster chain (`freeClusterChain()`)
+11. Invalidate all sector caches
+12. Return SUCCESS
+
+Steps 8-10 form the **critical window**: if power fails after step 8 but before step 10, both chains exist. FSCK can detect this via cross-link detection.
+
+### Pre-Allocated Contiguous Files
+
+`createFileContiguous()` allocates a contiguous cluster chain upfront. The `h_prealloc_end` handle state tracks the last pre-allocated cluster. During writes, `do_write_h()` advances clusters by simple `+1` instead of calling `allocateCluster()`, guaranteeing zero fragmentation and avoiding FAT lookups on cluster boundaries.
+
 ---
 
 *Part of the [P2 Dual Filesystem](../README.md) project — Iron Sheep Productions*

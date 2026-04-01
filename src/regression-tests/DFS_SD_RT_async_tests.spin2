@@ -66,10 +66,10 @@ DAT
 
 asyncTestFile   BYTE    "ASYNCTST.TXT", 0
 asyncContent    BYTE    "Async test data for verification", 0
-readBuf         BYTE    0[512]
-readBuf_guard   BYTE    0[16]
+readBuf         BYTE    0[BUF_SIZE]
+readBuf_guard   BYTE    0[GUARD_SIZE]
 
-PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
+PUB go() | workerCog, status, hndl1, hndl2, byteCount, bComplete, pollCount
 '' Main entry point for async I/O regression tests
 ''
 '' Tests non-blocking async file read/write APIs
@@ -100,17 +100,17 @@ PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
     utils.startTestGroup(@"startWriteHandle + getResult")
 
     utils.startTest(@"startWriteHandle returns PENDING")
-    h1 := dfs.createFileNew(dfs.DEV_SD, @asyncTestFile)
-    if h1 < 0
-      debug("* SKIP: createFileNew() failed, h1=", sdec_(h1))
+    hndl1 := dfs.createFileNew(dfs.DEV_SD, @asyncTestFile)
+    if hndl1 < 0
+      debug("* SKIP: createFileNew() failed, hndl1=", sdec_(hndl1))
     else
-      status := dfs.startWriteHandle(h1, @asyncContent, CONTENT_LEN)
+      status := dfs.startWriteHandle(hndl1, @asyncContent, CONTENT_LEN)
       utils.evaluateSingleValue(status, @"startWriteHandle()", dfs.PENDING)
 
-      bytes := dfs.getResult()
-      utils.evaluateSubValue(bytes, @"getResult() bytes written", CONTENT_LEN)
+      byteCount := dfs.getResult()
+      utils.evaluateSubValue(byteCount, @"getResult() bytes written", CONTENT_LEN)
 
-      status := dfs.closeFileHandle(h1)
+      status := dfs.closeFileHandle(hndl1)
       utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
 
     ' ----------------------------------
@@ -119,26 +119,26 @@ PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
     utils.startTestGroup(@"startReadHandle + getResult")
 
     utils.startTest(@"startReadHandle returns PENDING, result matches blocking")
-    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
-    if h1 < 0
-      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1))
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if hndl1 < 0
+      debug("* SKIP: openFileRead() failed, hndl1=", sdec_(hndl1))
     else
       bytefill(@readBuf, 0, BUF_SIZE)
       utils.initGuard(@readBuf_guard)
 
-      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      status := dfs.startReadHandle(hndl1, @readBuf, BUF_SIZE)
       utils.evaluateSingleValue(status, @"startReadHandle()", dfs.PENDING)
 
-      bytes := dfs.getResult()
-      utils.evaluateSubValue(bytes, @"getResult() bytes read", CONTENT_LEN)
+      byteCount := dfs.getResult()
+      utils.evaluateSubValue(byteCount, @"getResult() bytes read", CONTENT_LEN)
       utils.checkGuard(@readBuf_guard, @"readBuf guard")
 
       ' Verify first bytes match asyncContent
-      utils.evaluateSubBool(readBuf[0] == asyncContent[0], @"readBuf[0] matches", true)
-      utils.evaluateSubBool(readBuf[1] == asyncContent[1], @"readBuf[1] matches", true)
-      utils.evaluateSubBool(readBuf[CONTENT_LEN - 1] == asyncContent[CONTENT_LEN - 1], @"readBuf[last] matches", true)
+      utils.evaluateSubBool(readBuf[0] == asyncContent[0], @"readBuf[0] matches", TRUE)
+      utils.evaluateSubBool(readBuf[1] == asyncContent[1], @"readBuf[1] matches", TRUE)
+      utils.evaluateSubBool(readBuf[CONTENT_LEN - 1] == asyncContent[CONTENT_LEN - 1], @"readBuf[last] matches", TRUE)
 
-      status := dfs.closeFileHandle(h1)
+      status := dfs.closeFileHandle(hndl1)
       utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
 
     ' ----------------------------------
@@ -147,13 +147,13 @@ PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
     utils.startTestGroup(@"isComplete poll")
 
     utils.startTest(@"isComplete() returns true after operation finishes")
-    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
-    if h1 < 0
-      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1))
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if hndl1 < 0
+      debug("* SKIP: openFileRead() failed, hndl1=", sdec_(hndl1))
     else
       bytefill(@readBuf, 0, BUF_SIZE)
 
-      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      status := dfs.startReadHandle(hndl1, @readBuf, BUF_SIZE)
       utils.evaluateSingleValue(status, @"startReadHandle()", dfs.PENDING)
 
       ' Poll isComplete() with timeout guard
@@ -165,13 +165,13 @@ PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
           quit
         pollCount++
 
-      utils.evaluateSubBool(bComplete, @"isComplete() returned true", true)
-      utils.evaluateSubBool(pollCount < MAX_POLL_COUNT, @"completed before timeout", true)
+      utils.evaluateSubBool(bComplete, @"isComplete() returned true", TRUE)
+      utils.evaluateSubBool(pollCount < MAX_POLL_COUNT, @"completed before timeout", TRUE)
 
-      bytes := dfs.getResult()
-      utils.evaluateSubBool(bytes > 0, @"getResult() > 0", true)
+      byteCount := dfs.getResult()
+      utils.evaluateSubBool(byteCount > 0, @"getResult() > 0", TRUE)
 
-      status := dfs.closeFileHandle(h1)
+      status := dfs.closeFileHandle(hndl1)
       utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
 
     ' ----------------------------------
@@ -180,22 +180,22 @@ PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
     utils.startTestGroup(@"Error conditions")
 
     utils.startTest(@"E_ASYNC_BUSY on double start")
-    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
-    h2 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
-    if h1 < 0 or h2 < 0
-      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1), " h2=", sdec_(h2))
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    hndl2 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if hndl1 < 0 or hndl2 < 0
+      debug("* SKIP: openFileRead() failed, hndl1=", sdec_(hndl1), " hndl2=", sdec_(hndl2))
     else
-      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      status := dfs.startReadHandle(hndl1, @readBuf, BUF_SIZE)
       utils.evaluateSingleValue(status, @"first startReadHandle()", dfs.PENDING)
 
-      status := dfs.startReadHandle(h2, @readBuf, BUF_SIZE)
+      status := dfs.startReadHandle(hndl2, @readBuf, BUF_SIZE)
       utils.evaluateSubValue(status, @"second startReadHandle()", dfs.E_ASYNC_BUSY)
 
       ' Clean up the first async operation
-      bytes := dfs.getResult()
+      byteCount := dfs.getResult()
 
-      dfs.closeFileHandle(h1)
-      dfs.closeFileHandle(h2)
+      dfs.closeFileHandle(hndl1)
+      dfs.closeFileHandle(hndl2)
 
     utils.startTest(@"E_NO_ASYNC_OP on orphan getResult")
     status := dfs.getResult()
@@ -211,27 +211,27 @@ PUB go() | workerCog, status, h1, h2, bytes, bComplete, pollCount
     utils.startTestGroup(@"cancelAsync")
 
     utils.startTest(@"cancelAsync works and allows next operation")
-    h1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
-    if h1 < 0
-      debug("* SKIP: openFileRead() failed, h1=", sdec_(h1))
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @asyncTestFile)
+    if hndl1 < 0
+      debug("* SKIP: openFileRead() failed, hndl1=", sdec_(hndl1))
     else
       ' Start an async read, then cancel it
-      status := dfs.startReadHandle(h1, @readBuf, BUF_SIZE)
+      status := dfs.startReadHandle(hndl1, @readBuf, BUF_SIZE)
       utils.evaluateSingleValue(status, @"startReadHandle()", dfs.PENDING)
 
       status := dfs.cancelAsync()
-      utils.evaluateSubBool(status >= 0, @"cancelAsync() succeeded", true)
+      utils.evaluateSubBool(status >= 0, @"cancelAsync() succeeded", TRUE)
 
       ' Verify the lock was released by doing a normal blocking read
       ' First seek back to beginning of file
-      status := dfs.seekHandle(h1, 0)
-      utils.evaluateSubBool(status >= 0, @"seekHandle(0) succeeded", true)
+      status := dfs.seekHandle(hndl1, 0)
+      utils.evaluateSubBool(status >= 0, @"seekHandle(0) succeeded", TRUE)
 
       bytefill(@readBuf, 0, BUF_SIZE)
-      bytes := dfs.readHandle(h1, @readBuf, BUF_SIZE)
-      utils.evaluateSubValue(bytes, @"blocking readHandle()", CONTENT_LEN)
+      byteCount := dfs.readHandle(hndl1, @readBuf, BUF_SIZE)
+      utils.evaluateSubValue(byteCount, @"blocking readHandle()", CONTENT_LEN)
 
-      status := dfs.closeFileHandle(h1)
+      status := dfs.closeFileHandle(hndl1)
       utils.evaluateSubValue(status, @"closeFileHandle()", dfs.SUCCESS)
 
     ' ----------------------------------

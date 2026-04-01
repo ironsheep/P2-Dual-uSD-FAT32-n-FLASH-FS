@@ -6,7 +6,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... JAN 2026
-''   Updated.... 16 JAN 2026
+''   Updated.... 30 MAR 2026
 ''
 '' =================================================================================================
 
@@ -28,6 +28,12 @@ CON
      'SD_SCK  = 21
 
      STRESS_COUNT = 20
+
+     ' Stale cluster test: file size must exceed one cluster to guarantee cluster reuse
+     ' 32 KB = 64 sectors = 2 clusters at sec_per_clus=32, ensures at least one full cluster of fill
+     POLLUTE_FILE_SIZE = 32768
+     POLLUTE_BUF_SIZE  = 512
+     POLLUTE_FILL      = $AA       ' Fill byte with no $00 or $E5 (both are FAT dir markers)
 
      ATTR_DIRECTORY       = $10    ' FAT32 directory attribute bit
 
@@ -73,10 +79,17 @@ manyFilesDir    BYTE    "RTMANY", 0
 stressDir       BYTE    "RTSTRESS", 0
 stressContent   BYTE    "Stress file data", 0
 
+' Stale cluster test
+polluteFile     BYTE    "POLLUTE.DAT", 0
+staleDir        BYTE    "RTSTALE", 0
+
 ' Buffer for generated filenames
 genFileName     BYTE    0[16]
 
-PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, created
+' Write buffer for polluting cluster data
+polluteBuf      BYTE    0[POLLUTE_BUF_SIZE]
+
+PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, created, bValidHndl, wrIdx
 '' Main entry point for directory regression tests
 ''
 '' Tests directory creation, navigation, listing, and nested directories
@@ -114,7 +127,7 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
         utils.startTest(@"newDirectory() fails if directory exists")
         status := dfs.newDirectory(dfs.DEV_SD, @testDir1)
-        utils.evaluateBool(status < 0, @"newDirectory() existing", true)
+        utils.evaluateBool(status < 0, @"newDirectory() existing", TRUE)
 
         utils.startTest(@"Create second directory")
         status := dfs.newDirectory(dfs.DEV_SD, @testDir2)
@@ -131,7 +144,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
         utils.startTest(@"Create file in subdirectory")
         handle := dfs.createFileNew(dfs.DEV_SD, @testFile1)
-        utils.evaluateBool(handle >= 0, @"newFile() in subdir", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"newFile() in subdir", TRUE)
         dfs.writeHandle(handle, @testContent, strsize(@testContent))
         dfs.closeFileHandle(handle)
 
@@ -145,12 +159,12 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
         utils.startTest(@"changeDirectory() fails for non-existent")
         status := dfs.changeDirectory(dfs.DEV_SD, @"NOEXIST")
-        utils.evaluateBool(status < 0, @"changeDirectory() non-existent", true)
+        utils.evaluateBool(status < 0, @"changeDirectory() non-existent", TRUE)
 
         utils.startTest(@"changeDirectory() fails on a file (not a directory)")
         dfs.changeDirectory(dfs.DEV_SD, @testDir1)                                             ' Go to RTDIR1 where FILE1.TXT exists
         status := dfs.changeDirectory(dfs.DEV_SD, @testFile1)                                  ' Should fail - FILE1.TXT is not a directory
-        utils.evaluateBool(status < 0, @"changeDirectory() on file", true)
+        utils.evaluateBool(status < 0, @"changeDirectory() on file", TRUE)
         dfs.changeDirectory(dfs.DEV_SD, @"/")                                                  ' Return to root
 
         ' ----------------------------------
@@ -172,7 +186,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
         utils.startTest(@"Create file in nested directory")
         handle := dfs.createFileNew(dfs.DEV_SD, @testFile2)
-        utils.evaluateBool(handle >= 0, @"newFile() nested", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"newFile() nested", TRUE)
         dfs.writeHandle(handle, @"Nested file content", strsize(@"Nested file content"))
         dfs.closeFileHandle(handle)
 
@@ -188,12 +203,14 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
         utils.startTest(@"Open file with path: /RTDIR1/FILE1.TXT")
         handle := dfs.openFileRead(dfs.DEV_SD, @"/RTDIR1/FILE1.TXT")
-        utils.evaluateBool(handle >= 0, @"openFile() with path", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"openFile() with path", TRUE)
         dfs.closeFileHandle(handle)
 
         utils.startTest(@"Open nested file: /RTDIR1/SUBDIR1/FILE2.TXT")
         handle := dfs.openFileRead(dfs.DEV_SD, @"/RTDIR1/SUBDIR1/FILE2.TXT")
-        utils.evaluateBool(handle >= 0, @"openFile() nested path", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"openFile() nested path", TRUE)
         dfs.closeFileHandle(handle)
 
         utils.startTest(@"Ensure back at root after path operations")
@@ -244,7 +261,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         ' Create a file in root to move
         utils.startTest(@"Create file in root to move")
         handle := dfs.createFileNew(dfs.DEV_SD, @"MOVEME.TXT")
-        utils.evaluateBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"createFileNew()", TRUE)
         dfs.writeHandle(handle, @"File to be moved", strsize(@"File to be moved"))
         dfs.closeFileHandle(handle)
 
@@ -254,12 +272,14 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
 
         utils.startTest(@"File no longer in root")
         handle := dfs.openFileRead(dfs.DEV_SD, @"MOVEME.TXT")
-        utils.evaluateBool(handle >= 0, @"openFile() old location", false)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"openFile() old location", FALSE)
 
         utils.startTest(@"File exists in new location")
         dfs.changeDirectory(dfs.DEV_SD, @testDir2)
         handle := dfs.openFileRead(dfs.DEV_SD, @"MOVEME.TXT")
-        utils.evaluateBool(handle >= 0, @"openFile() new location", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateBool(bValidHndl, @"openFile() new location", TRUE)
         dfs.closeFileHandle(handle)
         dfs.changeDirectory(dfs.DEV_SD, @"/")
 
@@ -289,7 +309,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         utils.startTest(@"Navigate to deepest level and create file")
         dfs.changeDirectory(dfs.DEV_SD, @deepDir5)
         handle := dfs.createFileNew(dfs.DEV_SD, @"DEEP.TXT")
-        utils.evaluateSubBool(handle >= 0, @"create file at depth 5", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"create file at depth 5", TRUE)
         dfs.writeHandle(handle, @"Deep file", strsize(@"Deep file"))
         dfs.closeFileHandle(handle)
 
@@ -323,13 +344,15 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         utils.startTest(@"Max filename length (8.3)")
         dfs.changeDirectory(dfs.DEV_SD, @manyFilesDir)
         handle := dfs.createFileNew(dfs.DEV_SD, @maxNameFile)
-        utils.evaluateSubBool(handle >= 0, @"create 12345678.123", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"create 12345678.123", TRUE)
         dfs.writeHandle(handle, @"Max name file content", strsize(@"Max name file content"))
         dfs.closeFileHandle(handle)
 
         ' Verify can open and read it
         handle := dfs.openFileRead(dfs.DEV_SD, @maxNameFile)
-        utils.evaluateSubBool(handle >= 0, @"open 12345678.123", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"open 12345678.123", TRUE)
         dfs.closeFileHandle(handle)
         dfs.changeDirectory(dfs.DEV_SD, @"/")
 
@@ -358,6 +381,97 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         dfs.deleteFile(dfs.DEV_SD, @deepDir1)
 
         ' ----------------------------------
+        ' TEST GROUP: Stale Cluster Directory Test
+        '
+        ' Regression guard for the clearCluster() bug in do_newdir().
+        ' See DOCs/Analysis/STALE-DIRECTORY-CLUSTER-BUG-ANALYSIS.md
+        '
+        ' Strategy: create a large file filled with $AA, delete it so its clusters
+        ' are freed (containing stale $AA data), then create a new subdirectory
+        ' whose cluster comes from that freed space. Create 20 files in the subdir
+        ' (overflowing the first sector) and verify all 20 are enumerable and openable.
+        '
+        ' Without the fix, files 15-20 would be silently lost because searchDirectory()
+        ' interprets the stale $AA bytes as occupied entries and writes new directory
+        ' entries to sectors outside the directory's cluster chain.
+        ' ----------------------------------
+        utils.startTestGroup(@"Stale Cluster Directory Test")
+
+        ' Step 1: Pollute clusters with non-zero fill data
+        utils.startTest(@"Create polluting file with $AA fill")
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+        dfs.deleteFile(dfs.DEV_SD, @polluteFile)
+        handle := dfs.createFileNew(dfs.DEV_SD, @polluteFile)
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
+            bytefill(@polluteBuf, POLLUTE_FILL, POLLUTE_BUF_SIZE)
+            repeat wrIdx from 0 to (POLLUTE_FILE_SIZE / POLLUTE_BUF_SIZE) - 1
+                dfs.writeHandle(handle, @polluteBuf, POLLUTE_BUF_SIZE)
+            dfs.closeFileHandle(handle)
+        utils.evaluateBool(bValidHndl, @"polluting file created", TRUE)
+
+        ' Step 2: Delete the polluting file (clusters now contain stale $AA data)
+        utils.startTest(@"Delete polluting file to free stale clusters")
+        status := dfs.deleteFile(dfs.DEV_SD, @polluteFile)
+        utils.evaluateSingleValue(status, @"delete polluting file", dfs.SUCCESS)
+
+        ' Step 3: Create subdirectory (should get a cluster from the freed stale space)
+        utils.startTest(@"Create subdir on stale cluster")
+        dfs.deleteFile(dfs.DEV_SD, @staleDir)
+        status := dfs.newDirectory(dfs.DEV_SD, @staleDir)
+        utils.evaluateSingleValue(status, @"newDirectory on stale cluster", dfs.SUCCESS)
+
+        ' Step 4: Create 20 files in the stale-cluster subdirectory
+        utils.startTest(@"Create 20 files in stale-cluster subdir")
+        dfs.changeDirectory(dfs.DEV_SD, @staleDir)
+        created := 0
+        repeat idx from 0 to STRESS_COUNT - 1
+            makeStressName(idx)
+            handle := dfs.createFileNew(dfs.DEV_SD, @genFileName)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                dfs.writeHandle(handle, @stressContent, strsize(@stressContent))
+                dfs.closeFileHandle(handle)
+                created++
+        utils.evaluateSubValue(created, @"files created", STRESS_COUNT)
+
+        ' Step 5: Enumerate and verify all 20 files are visible
+        utils.startTest(@"Enumerate all 20 files in stale-cluster subdir")
+        fileCount := 0
+        handle := dfs.openDirectory(dfs.DEV_SD, @".")
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
+            repeat
+                pEntry := dfs.readDirectoryHandle(handle)
+                if pEntry == 0
+                    quit
+                pFilename := dfs.fileName()
+                attrs := BYTE[pEntry + 11]
+                if attrs & ATTR_DIRECTORY == 0 and BYTE[pFilename] <> "."
+                    fileCount++
+            dfs.closeDirectoryHandle(handle)
+        utils.evaluateSingleValue(fileCount, @"enumerated files", STRESS_COUNT)
+
+        ' Step 6: Verify all 20 files can be opened for read
+        utils.startTest(@"Open all 20 files in stale-cluster subdir")
+        created := 0
+        repeat idx from 0 to STRESS_COUNT - 1
+            makeStressName(idx)
+            handle := dfs.openFileRead(dfs.DEV_SD, @genFileName)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                created++
+                dfs.closeFileHandle(handle)
+        utils.evaluateSingleValue(created, @"files opened", STRESS_COUNT)
+
+        ' Cleanup stale cluster test
+        repeat idx from 0 to STRESS_COUNT - 1
+            makeStressName(idx)
+            dfs.deleteFile(dfs.DEV_SD, @genFileName)
+        dfs.changeDirectory(dfs.DEV_SD, @"/")
+        dfs.deleteFile(dfs.DEV_SD, @staleDir)
+
+        ' ----------------------------------
         ' TEST GROUP: Many File Stress Test
         ' ----------------------------------
         utils.startTestGroup(@"Many File Stress Test")
@@ -373,7 +487,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         repeat idx from 0 to STRESS_COUNT - 1
             makeStressName(idx)
             handle := dfs.createFileNew(dfs.DEV_SD, @genFileName)
-            if handle >= 0
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
                 dfs.writeHandle(handle, @stressContent, strsize(@stressContent))
                 dfs.closeFileHandle(handle)
                 created++
@@ -383,7 +498,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         utils.startTest(@"Enumerate finds all 20 files")
         fileCount := 0
         handle := dfs.openDirectory(dfs.DEV_SD, @".")
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             repeat
                 pEntry := dfs.readDirectoryHandle(handle)
                 if pEntry == 0
@@ -401,7 +517,8 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         repeat idx from 0 to STRESS_COUNT - 1
             makeStressName(idx)
             handle := dfs.openFileRead(dfs.DEV_SD, @genFileName)
-            if handle >= 0
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
                 created++
                 dfs.closeFileHandle(handle)
         utils.evaluateSingleValue(created, @"files opened", STRESS_COUNT)

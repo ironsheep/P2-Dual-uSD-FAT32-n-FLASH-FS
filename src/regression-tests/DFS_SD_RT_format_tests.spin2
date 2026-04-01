@@ -141,15 +141,15 @@ OBJ
 
 VAR
 
-    BYTE    buf[BYTES_PER_SECTOR]
-    BYTE    buf_guard[GUARD_SIZE]
-    BYTE    buf2[BYTES_PER_SECTOR]
-    BYTE    buf2_guard[GUARD_SIZE]
+    BYTE    sectorBuf[BYTES_PER_SECTOR]
+    BYTE    sectorBuf_guard[GUARD_SIZE]
+    BYTE    sectorBuf2[BYTES_PER_SECTOR]
+    BYTE    sectorBuf2_guard[GUARD_SIZE]
     LONG    sectorsPerFat
     LONG    totalSectors
     LONG    partitionStart
 
-PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
+PUB go() | workerCog, fieldValue, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 '' Main entry point for FAT32 format regression tests
 ''
 '' WARNING: This test ERASES ALL DATA on the card!
@@ -169,8 +169,8 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
     utils.startTestGroup(@"Format Operation")
     utils.startTest(@"Format card with default label")
 
-    result := fmt.format()
-    utils.evaluateSingleValue(result, @"format() returns SUCCESS", dfs.SUCCESS)
+    fieldValue := fmt.format()
+    utils.evaluateSingleValue(fieldValue, @"format() returns SUCCESS", dfs.SUCCESS)
 
     ' Release format utility's worker cog before using dfs driver for verification
     fmt.stop()
@@ -179,8 +179,8 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
     workerCog := dfs.init()
 
     ' Initialize card for raw access (no filesystem mount)
-    result := dfs.initCardOnly()
-    if result == dfs.SUCCESS
+    fieldValue := dfs.initCardOnly()
+    if fieldValue == dfs.SUCCESS
 
         cardSectors := dfs.cardSizeSectors()
         debug("  Card size: ", udec(cardSectors), " sectors (", udec(cardSectors / SECTORS_PER_MB), " MB)")
@@ -190,127 +190,127 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
         ' ========================================
         utils.startTestGroup(@"MBR Verification")
 
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(0, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(0, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
 
         utils.startTest(@"MBR boot signature")
-        result := WORD[@buf + MBR_SIG_OFFSET]
-        utils.evaluateBool(result == MBR_SIGNATURE, @"$AA55 at offset $1FE", true)
+        fieldValue := WORD[@sectorBuf + MBR_SIG_OFFSET]
+        utils.evaluateBool(fieldValue == MBR_SIGNATURE, @"$AA55 at offset $1FE", TRUE)
 
         utils.startTest(@"Partition 1 bootable flag")
-        result := buf[MBR_PART_BOOT_OFFSET]
-        utils.evaluateBool(result == BOOT_FLAG_INACTIVE OR result == BOOT_FLAG_ACTIVE, @"$00 or $80", true)
+        fieldValue := sectorBuf[MBR_PART_BOOT_OFFSET]
+        utils.evaluateBool(fieldValue == BOOT_FLAG_INACTIVE OR fieldValue == BOOT_FLAG_ACTIVE, @"$00 or $80", TRUE)
 
         utils.startTest(@"Partition 1 type")
-        result := buf[MBR_PART_TYPE_OFFSET]
-        utils.evaluateBool(result == PARTITION_TYPE_FAT32_LBA, @"$0C (FAT32 LBA)", true)
+        fieldValue := sectorBuf[MBR_PART_TYPE_OFFSET]
+        utils.evaluateBool(fieldValue == PARTITION_TYPE_FAT32_LBA, @"$0C (FAT32 LBA)", TRUE)
 
         utils.startTest(@"Partition 1 start sector")
-        partitionStart := LONG[@buf + MBR_PART_LBA_OFFSET]
-        utils.evaluateBool(partitionStart == PARTITION_START, @"8192 (4MB aligned)", true)
+        partitionStart := LONG[@sectorBuf + MBR_PART_LBA_OFFSET]
+        utils.evaluateBool(partitionStart == PARTITION_START, @"8192 (4MB aligned)", TRUE)
 
         utils.startTest(@"Partition 1 size")
-        result := LONG[@buf + MBR_PART_SIZE_OFFSET]
+        fieldValue := LONG[@sectorBuf + MBR_PART_SIZE_OFFSET]
         ' Partition size should be card size minus partition start
-        utils.evaluateBool(result > 0, @"Size > 0", true)
-        debug("  Partition size: ", udec(result), " sectors")
+        utils.evaluateBool(fieldValue > 0, @"Size > 0", TRUE)
+        debug("  Partition size: ", udec(fieldValue), " sectors")
 
         ' ========================================
         ' VBR VERIFICATION (Primary Boot Sector)
         ' ========================================
         utils.startTestGroup(@"VBR Verification")
 
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(partitionStart, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(partitionStart, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
 
         utils.startTest(@"VBR jump instruction")
         ' Must start with $EB xx $90 or $E9 xx xx
-        result := buf[0]
-        utils.evaluateBool(result == VBR_JUMP_EB OR result == VBR_JUMP_E9, @"Jump ($EB or $E9)", true)
+        fieldValue := sectorBuf[0]
+        utils.evaluateBool(fieldValue == VBR_JUMP_EB OR fieldValue == VBR_JUMP_E9, @"Jump ($EB or $E9)", TRUE)
 
         utils.startTest(@"VBR boot signature")
-        result := WORD[@buf + MBR_SIG_OFFSET]
-        utils.evaluateBool(result == MBR_SIGNATURE, @"$AA55 at offset $1FE", true)
+        fieldValue := WORD[@sectorBuf + MBR_SIG_OFFSET]
+        utils.evaluateBool(fieldValue == MBR_SIGNATURE, @"$AA55 at offset $1FE", TRUE)
 
         utils.startTest(@"OEM name present")
         ' OEM name at offset $03, should be printable ASCII
-        result := buf[VBR_OEM_OFFSET]
-        utils.evaluateBool(result >= ASCII_SPACE AND result <= ASCII_TILDE, @"Printable OEM name", true)
-        debug("  OEM name: ", lstr_(@buf + VBR_OEM_OFFSET, OEM_NAME_LENGTH))
+        fieldValue := sectorBuf[VBR_OEM_OFFSET]
+        utils.evaluateBool(fieldValue >= ASCII_SPACE AND fieldValue <= ASCII_TILDE, @"Printable OEM name", TRUE)
+        debug("  OEM name: ", lstr_(@sectorBuf + VBR_OEM_OFFSET, OEM_NAME_LENGTH))
 
         utils.startTest(@"Bytes per sector")
-        result := WORD[@buf + VBR_BPS_OFFSET]
-        utils.evaluateBool(result == BYTES_PER_SECTOR, @"512 bytes/sector", true)
+        fieldValue := WORD[@sectorBuf + VBR_BPS_OFFSET]
+        utils.evaluateBool(fieldValue == BYTES_PER_SECTOR, @"512 bytes/sector", TRUE)
 
         utils.startTest(@"Sectors per cluster")
-        result := buf[VBR_SPC_OFFSET]
+        fieldValue := sectorBuf[VBR_SPC_OFFSET]
         ' Must be power of 2: 1, 2, 4, 8, 16, 32, 64, 128
-        utils.evaluateBool(result >= 1 AND result <= MAX_SPC AND (result & (result - 1)) == 0, @"Power of 2", true)
-        debug("  Sectors per cluster: ", udec(result))
+        utils.evaluateBool(fieldValue >= 1 AND fieldValue <= MAX_SPC AND (fieldValue & (fieldValue - 1)) == 0, @"Power of 2", TRUE)
+        debug("  Sectors per cluster: ", udec(fieldValue))
 
         utils.startTest(@"Reserved sectors")
-        result := WORD[@buf + VBR_RSVD_OFFSET]
-        utils.evaluateBool(result == RESERVED_SECTORS, @"32 reserved sectors", true)
+        fieldValue := WORD[@sectorBuf + VBR_RSVD_OFFSET]
+        utils.evaluateBool(fieldValue == RESERVED_SECTORS, @"32 reserved sectors", TRUE)
 
         utils.startTest(@"Number of FATs")
-        result := buf[VBR_NUMFATS_OFFSET]
-        utils.evaluateBool(result == NUM_FATS, @"2 FATs", true)
+        fieldValue := sectorBuf[VBR_NUMFATS_OFFSET]
+        utils.evaluateBool(fieldValue == NUM_FATS, @"2 FATs", TRUE)
 
         utils.startTest(@"Root entry count (must be 0 for FAT32)")
-        result := WORD[@buf + VBR_ROOTENT_OFFSET]
-        utils.evaluateBool(result == 0, @"0 (FAT32 requirement)", true)
+        fieldValue := WORD[@sectorBuf + VBR_ROOTENT_OFFSET]
+        utils.evaluateBool(fieldValue == 0, @"0 (FAT32 requirement)", TRUE)
 
         utils.startTest(@"Total sectors 16-bit (must be 0 for FAT32)")
-        result := WORD[@buf + VBR_TOTSEC16_OFFSET]
-        utils.evaluateBool(result == 0, @"0 (FAT32 uses 32-bit)", true)
+        fieldValue := WORD[@sectorBuf + VBR_TOTSEC16_OFFSET]
+        utils.evaluateBool(fieldValue == 0, @"0 (FAT32 uses 32-bit)", TRUE)
 
         utils.startTest(@"Media type")
-        result := buf[VBR_MEDIA_OFFSET]
-        utils.evaluateBool(result == FAT32_MEDIA_TYPE, @"$F8 (fixed disk)", true)
+        fieldValue := sectorBuf[VBR_MEDIA_OFFSET]
+        utils.evaluateBool(fieldValue == FAT32_MEDIA_TYPE, @"$F8 (fixed disk)", TRUE)
 
         utils.startTest(@"FAT size 16-bit (must be 0 for FAT32)")
-        result := WORD[@buf + VBR_FATSZ16_OFFSET]
-        utils.evaluateBool(result == 0, @"0 (FAT32 uses 32-bit)", true)
+        fieldValue := WORD[@sectorBuf + VBR_FATSZ16_OFFSET]
+        utils.evaluateBool(fieldValue == 0, @"0 (FAT32 uses 32-bit)", TRUE)
 
         utils.startTest(@"Hidden sectors match partition start")
-        result := LONG[@buf + VBR_HIDDEN_OFFSET]
-        utils.evaluateBool(result == partitionStart, @"Matches partition start", true)
+        fieldValue := LONG[@sectorBuf + VBR_HIDDEN_OFFSET]
+        utils.evaluateBool(fieldValue == partitionStart, @"Matches partition start", TRUE)
 
         utils.startTest(@"Total sectors 32-bit")
-        totalSectors := LONG[@buf + VBR_TOTSEC32_OFFSET]
-        utils.evaluateBool(totalSectors > 0, @"Total sectors > 0", true)
+        totalSectors := LONG[@sectorBuf + VBR_TOTSEC32_OFFSET]
+        utils.evaluateBool(totalSectors > 0, @"Total sectors > 0", TRUE)
         debug("  Total sectors: ", udec(totalSectors))
 
         utils.startTest(@"FAT32 sectors per FAT")
-        sectorsPerFat := LONG[@buf + VBR_FATSZ32_OFFSET]
-        utils.evaluateBool(sectorsPerFat > 0, @"Sectors per FAT > 0", true)
+        sectorsPerFat := LONG[@sectorBuf + VBR_FATSZ32_OFFSET]
+        utils.evaluateBool(sectorsPerFat > 0, @"Sectors per FAT > 0", TRUE)
         debug("  Sectors per FAT: ", udec(sectorsPerFat))
 
         utils.startTest(@"Root cluster number")
-        result := LONG[@buf + VBR_ROOTCLUS_OFFSET]
-        utils.evaluateBool(result == ROOT_CLUSTER, @"Root cluster = 2", true)
+        fieldValue := LONG[@sectorBuf + VBR_ROOTCLUS_OFFSET]
+        utils.evaluateBool(fieldValue == ROOT_CLUSTER, @"Root cluster = 2", TRUE)
 
         utils.startTest(@"FSInfo sector location")
-        result := WORD[@buf + VBR_FSINFO_OFFSET]
-        utils.evaluateBool(result == FSINFO_SECTOR, @"FSInfo at sector 1", true)
+        fieldValue := WORD[@sectorBuf + VBR_FSINFO_OFFSET]
+        utils.evaluateBool(fieldValue == FSINFO_SECTOR, @"FSInfo at sector 1", TRUE)
 
         utils.startTest(@"Backup boot sector location")
-        result := WORD[@buf + VBR_BKBOOT_OFFSET]
-        utils.evaluateBool(result == BACKUP_VBR_SECTOR, @"Backup at sector 6", true)
+        fieldValue := WORD[@sectorBuf + VBR_BKBOOT_OFFSET]
+        utils.evaluateBool(fieldValue == BACKUP_VBR_SECTOR, @"Backup at sector 6", TRUE)
 
         utils.startTest(@"Extended boot signature")
-        result := buf[VBR_EXTBOOTSIG_OFFSET]
-        utils.evaluateBool(result == EXT_BOOT_SIG, @"$29", true)
+        fieldValue := sectorBuf[VBR_EXTBOOTSIG_OFFSET]
+        utils.evaluateBool(fieldValue == EXT_BOOT_SIG, @"$29", TRUE)
 
         utils.startTest(@"File system type string")
         ' At offset $52, should be "FAT32   " (8 bytes)
-        result := true
-        if buf[VBR_FSTYPE_OFFSET] <> "F" OR buf[VBR_FSTYPE_OFFSET + 1] <> "A" OR buf[VBR_FSTYPE_OFFSET + 2] <> "T" OR buf[VBR_FSTYPE_OFFSET + 3] <> "3" OR buf[VBR_FSTYPE_OFFSET + 4] <> "2"
-            result := false
-        utils.evaluateBool(result, @"FAT32 string at $52", true)
-        debug("  FS Type: ", lstr_(@buf + VBR_FSTYPE_OFFSET, OEM_NAME_LENGTH))
+        fieldValue := true
+        if sectorBuf[VBR_FSTYPE_OFFSET] <> "F" OR sectorBuf[VBR_FSTYPE_OFFSET + 1] <> "A" OR sectorBuf[VBR_FSTYPE_OFFSET + 2] <> "T" OR sectorBuf[VBR_FSTYPE_OFFSET + 3] <> "3" OR sectorBuf[VBR_FSTYPE_OFFSET + 4] <> "2"
+            fieldValue := false
+        utils.evaluateBool(fieldValue, @"FAT32 string at $52", TRUE)
+        debug("  FS Type: ", lstr_(@sectorBuf + VBR_FSTYPE_OFFSET, OEM_NAME_LENGTH))
 
         ' ========================================
         ' BACKUP VBR VERIFICATION
@@ -319,62 +319,62 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
 
         utils.startTest(@"Backup VBR matches primary")
         ' Read backup boot sector at partition + 6
-        utils.initGuard(@buf2_guard)
-        dfs.readSectorRaw(partitionStart + BACKUP_VBR_SECTOR, @buf2)
-        utils.checkGuard(@buf2_guard, @"buf2 guard")
+        utils.initGuard(@sectorBuf2_guard)
+        dfs.readSectorRaw(partitionStart + BACKUP_VBR_SECTOR, @sectorBuf2)
+        utils.checkGuard(@sectorBuf2_guard, @"buf2 guard")
 
         ' Compare the two boot sectors
         mismatch := false
         repeat idx from 0 to BYTES_PER_SECTOR - 1
-            if buf[idx] <> buf2[idx]
+            if sectorBuf[idx] <> sectorBuf2[idx]
                 mismatch := true
-                debug("  Mismatch at offset ", udec(idx), ": $", uhex_(buf[idx]), " vs $", uhex_(buf2[idx]))
+                debug("  Mismatch at offset ", udec(idx), ": $", uhex_(sectorBuf[idx]), " vs $", uhex_(sectorBuf2[idx]))
                 quit
-        utils.evaluateBool(mismatch == false, @"Primary and backup match", true)
+        utils.evaluateBool(mismatch == false, @"Primary and backup match", TRUE)
 
         ' ========================================
         ' FSINFO VERIFICATION
         ' ========================================
         utils.startTestGroup(@"FSInfo Verification")
 
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(partitionStart + FSINFO_SECTOR, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(partitionStart + FSINFO_SECTOR, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
 
         utils.startTest(@"FSInfo lead signature")
-        result := LONG[@buf + 0]
-        utils.evaluateBool(result == FSINFO_SIG1, @"$41615252 (RRaA)", true)
+        fieldValue := LONG[@sectorBuf + 0]
+        utils.evaluateBool(fieldValue == FSINFO_SIG1, @"$41615252 (RRaA)", TRUE)
 
         utils.startTest(@"FSInfo structure signature")
-        result := LONG[@buf + FSINFO_SIG2_OFFSET]
-        utils.evaluateBool(result == FSINFO_SIG2, @"$61417272 (rrAa)", true)
+        fieldValue := LONG[@sectorBuf + FSINFO_SIG2_OFFSET]
+        utils.evaluateBool(fieldValue == FSINFO_SIG2, @"$61417272 (rrAa)", TRUE)
 
         utils.startTest(@"FSInfo trail signature")
-        result := LONG[@buf + FSINFO_TRAIL_OFFSET]
-        utils.evaluateBool(result == FSINFO_TRAIL_SIG, @"$AA550000 at $1FC", true)
+        fieldValue := LONG[@sectorBuf + FSINFO_TRAIL_OFFSET]
+        utils.evaluateBool(fieldValue == FSINFO_TRAIL_SIG, @"$AA550000 at $1FC", TRUE)
 
         utils.startTest(@"FSInfo free cluster count")
-        result := LONG[@buf + FSINFO_FREE_OFFSET]
+        fieldValue := LONG[@sectorBuf + FSINFO_FREE_OFFSET]
         ' Can be $FFFFFFFF (unknown) or actual count
-        utils.evaluateBool(result <> 0, @"Free count set", true)
-        debug("  Free clusters: ", udec(result))
+        utils.evaluateBool(fieldValue <> 0, @"Free count set", TRUE)
+        debug("  Free clusters: ", udec(fieldValue))
 
         utils.startTest(@"FSInfo next free cluster hint")
-        result := LONG[@buf + FSINFO_NEXT_OFFSET]
+        fieldValue := LONG[@sectorBuf + FSINFO_NEXT_OFFSET]
         ' Should be 3 (first free after root) or $FFFFFFFF (unknown)
-        utils.evaluateBool(result == FIRST_FREE_CLUSTER OR result == FAT_UNKNOWN, @"Next free = 3 or unknown", true)
-        debug("  Next free hint: ", udec(result))
+        utils.evaluateBool(fieldValue == FIRST_FREE_CLUSTER OR fieldValue == FAT_UNKNOWN, @"Next free = 3 or unknown", TRUE)
+        debug("  Next free hint: ", udec(fieldValue))
 
         utils.startTest(@"Backup FSInfo matches primary")
-        utils.initGuard(@buf2_guard)
-        dfs.readSectorRaw(partitionStart + BACKUP_FSINFO_SECTOR, @buf2)
-        utils.checkGuard(@buf2_guard, @"buf2 guard")
+        utils.initGuard(@sectorBuf2_guard)
+        dfs.readSectorRaw(partitionStart + BACKUP_FSINFO_SECTOR, @sectorBuf2)
+        utils.checkGuard(@sectorBuf2_guard, @"buf2 guard")
         mismatch := false
         repeat idx from 0 to BYTES_PER_SECTOR - 1
-            if buf[idx] <> buf2[idx]
+            if sectorBuf[idx] <> sectorBuf2[idx]
                 mismatch := true
                 quit
-        utils.evaluateBool(mismatch == false, @"Primary and backup FSInfo match", true)
+        utils.evaluateBool(mismatch == false, @"Primary and backup FSInfo match", TRUE)
 
         ' ========================================
         ' FAT TABLE VERIFICATION
@@ -385,59 +385,59 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
         fat2Start := fat1Start + sectorsPerFat
 
         ' Read FAT1 first sector for multiple tests
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(fat1Start, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(fat1Start, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
 
         utils.startTest(@"FAT[0] media type entry")
-        result := LONG[@buf + 0]
-        utils.evaluateBool(result == FAT_MEDIA_ENTRY, @"FAT[0] = $0FFFFFF8", true)
+        fieldValue := LONG[@sectorBuf + 0]
+        utils.evaluateBool(fieldValue == FAT_MEDIA_ENTRY, @"FAT[0] = $0FFFFFF8", TRUE)
 
         utils.startTest(@"FAT[1] end of chain marker")
-        result := LONG[@buf + 1 * FAT_ENTRY_SIZE]
-        utils.evaluateBool(result == FAT_EOC, @"FAT[1] = $0FFFFFFF (EOC)", true)
+        fieldValue := LONG[@sectorBuf + 1 * FAT_ENTRY_SIZE]
+        utils.evaluateBool(fieldValue == FAT_EOC, @"FAT[1] = $0FFFFFFF (EOC)", TRUE)
 
         utils.startTest(@"FAT[2] root directory EOC")
-        result := LONG[@buf + 2 * FAT_ENTRY_SIZE]
-        utils.evaluateBool(result == FAT_EOC, @"FAT[2] = $0FFFFFFF (root EOC)", true)
+        fieldValue := LONG[@sectorBuf + 2 * FAT_ENTRY_SIZE]
+        utils.evaluateBool(fieldValue == FAT_EOC, @"FAT[2] = $0FFFFFFF (root EOC)", TRUE)
 
         utils.startTest(@"FAT[3] first free cluster")
-        result := LONG[@buf + 3 * FAT_ENTRY_SIZE]
-        utils.evaluateBool(result == 0, @"FAT[3] = 0 (free)", true)
+        fieldValue := LONG[@sectorBuf + 3 * FAT_ENTRY_SIZE]
+        utils.evaluateBool(fieldValue == 0, @"FAT[3] = 0 (free)", TRUE)
 
         utils.startTest(@"FAT2 mirrors FAT1 (first sector)")
-        utils.initGuard(@buf2_guard)
-        dfs.readSectorRaw(fat2Start, @buf2)
-        utils.checkGuard(@buf2_guard, @"buf2 guard")
+        utils.initGuard(@sectorBuf2_guard)
+        dfs.readSectorRaw(fat2Start, @sectorBuf2)
+        utils.checkGuard(@sectorBuf2_guard, @"buf2 guard")
         mismatch := false
         repeat idx from 0 to BYTES_PER_SECTOR - 1
-            if buf[idx] <> buf2[idx]
+            if sectorBuf[idx] <> sectorBuf2[idx]
                 mismatch := true
                 debug("  FAT mismatch at offset ", udec(idx))
                 quit
-        utils.evaluateBool(mismatch == false, @"FAT1 and FAT2 identical", true)
+        utils.evaluateBool(mismatch == false, @"FAT1 and FAT2 identical", TRUE)
 
         utils.startTest(@"FAT1 second sector is zeroed")
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(fat1Start + 1, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(fat1Start + 1, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
         mismatch := false
         repeat idx from 0 to BYTES_PER_SECTOR - 1
-            if buf[idx] <> 0
+            if sectorBuf[idx] <> 0
                 mismatch := true
                 quit
-        utils.evaluateBool(mismatch == false, @"All zeros", true)
+        utils.evaluateBool(mismatch == false, @"All zeros", TRUE)
 
         utils.startTest(@"FAT2 second sector is zeroed")
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(fat2Start + 1, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(fat2Start + 1, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
         mismatch := false
         repeat idx from 0 to BYTES_PER_SECTOR - 1
-            if buf[idx] <> 0
+            if sectorBuf[idx] <> 0
                 mismatch := true
                 quit
-        utils.evaluateBool(mismatch == false, @"All zeros", true)
+        utils.evaluateBool(mismatch == false, @"All zeros", TRUE)
 
         ' ========================================
         ' ROOT DIRECTORY VERIFICATION
@@ -447,33 +447,33 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
         dataStart := partitionStart + RESERVED_SECTORS + NUM_FATS * sectorsPerFat
         debug("  Data region starts at sector ", udec(dataStart))
 
-        utils.initGuard(@buf_guard)
-        dfs.readSectorRaw(dataStart, @buf)
-        utils.checkGuard(@buf_guard, @"buf guard")
+        utils.initGuard(@sectorBuf_guard)
+        dfs.readSectorRaw(dataStart, @sectorBuf)
+        utils.checkGuard(@sectorBuf_guard, @"buf guard")
 
         utils.startTest(@"Volume label entry present")
         ' First entry should be volume label
-        result := buf[DIR_ATTR_OFFSET]
-        utils.evaluateBool(result == ATTR_VOLUME_LABEL, @"Attr = $08 (volume label)", true)
+        fieldValue := sectorBuf[DIR_ATTR_OFFSET]
+        utils.evaluateBool(fieldValue == ATTR_VOLUME_LABEL, @"Attr = $08 (volume label)", TRUE)
 
         utils.startTest(@"Volume label name")
-        debug("  Volume label: ", lstr_(@buf, LABEL_LENGTH))
+        debug("  Volume label: ", lstr_(@sectorBuf, LABEL_LENGTH))
         ' Check first char is printable
-        result := buf[0]
-        utils.evaluateBool(result >= ASCII_SPACE AND result <= ASCII_TILDE, @"Valid label chars", true)
+        fieldValue := sectorBuf[0]
+        utils.evaluateBool(fieldValue >= ASCII_SPACE AND fieldValue <= ASCII_TILDE, @"Valid label chars", TRUE)
 
         utils.startTest(@"Second entry is end marker or empty")
-        result := buf[SECOND_ENTRY_OFFSET]
+        fieldValue := sectorBuf[SECOND_ENTRY_OFFSET]
         ' Should be $00 (end) or another valid entry
-        utils.evaluateBool(result == END_OF_DIR_MARKER OR result == DELETED_ENTRY_MARKER OR (result >= ASCII_SPACE AND result <= ASCII_TILDE), @"Valid second entry", true)
+        utils.evaluateBool(fieldValue == END_OF_DIR_MARKER OR fieldValue == DELETED_ENTRY_MARKER OR (fieldValue >= ASCII_SPACE AND fieldValue <= ASCII_TILDE), @"Valid second entry", TRUE)
 
         utils.startTest(@"Rest of root cluster is zeroed")
         mismatch := false
         repeat idx from THIRD_ENTRY_OFFSET to BYTES_PER_SECTOR - 1  ' Start after possible 2nd entry
-            if buf[idx] <> 0
+            if sectorBuf[idx] <> 0
                 mismatch := true
                 quit
-        utils.evaluateBool(mismatch == false, @"Remaining bytes zero", true)
+        utils.evaluateBool(mismatch == false, @"Remaining bytes zero", TRUE)
 
         ' ========================================
         ' MOUNT AND USABILITY TEST
@@ -481,18 +481,18 @@ PUB go() | workerCog, result, dataStart, fat1Start, fat2Start, idx, mismatch, ca
         utils.startTestGroup(@"Mount and Usability")
 
         utils.startTest(@"Mount formatted card")
-        result := dfs.mount(dfs.DEV_SD)
-        utils.evaluateSingleValue(result, @"mount() succeeds", dfs.SUCCESS)
+        fieldValue := dfs.mount(dfs.DEV_SD)
+        utils.evaluateSingleValue(fieldValue, @"mount() succeeds", dfs.SUCCESS)
 
         utils.startTest(@"Read volume label")
         debug("  Mounted volume: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
-        result := dfs.volumeLabel(dfs.DEV_SD)
-        utils.evaluateBool(result <> 0, @"Label pointer valid", true)
+        fieldValue := dfs.volumeLabel(dfs.DEV_SD)
+        utils.evaluateBool(fieldValue <> 0, @"Label pointer valid", TRUE)
 
         utils.startTest(@"Check free space reported")
-        result := dfs.freeSpace(dfs.DEV_SD)
-        utils.evaluateBool(result > 0, @"Free space > 0", true)
-        debug("  Free space: ", udec(result), " sectors")
+        fieldValue := dfs.freeSpace(dfs.DEV_SD)
+        utils.evaluateBool(fieldValue > 0, @"Free space > 0", TRUE)
+        debug("  Free space: ", udec(fieldValue), " sectors")
 
         dfs.unmount(dfs.DEV_SD)
 

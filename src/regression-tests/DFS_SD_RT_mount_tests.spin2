@@ -21,6 +21,8 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 
+     GUARD_SIZE  = 16
+
      ' External SD header (base pin 16)
      'SD_CS   = 20
      'SD_MOSI = 19
@@ -56,9 +58,9 @@ DAT
 
 testfile1       BYTE    "TEST1.TXT", 0
 sectorBuffer    BYTE    0[dfs.SECTOR_SIZE]
-sectorBuffer_guard BYTE 0[16]
+sectorBuffer_guard BYTE 0[GUARD_SIZE]
 
-PUB go() | workerCog, result, status, pLabel, freeSpace, handle
+PUB go() | workerCog, mountResult, opStatus, pLabel, freeSpace, fileHndl
 '' Main entry point for mount/unmount regression tests
 ''
 '' Tests SD card mount, unmount, and basic card operations
@@ -78,12 +80,12 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
 
     ' These operations should not crash when card isn't mounted
     utils.startTest(@"openFile() before mount")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-    utils.evaluateBool(handle >= 0, @"openFileRead()", false)
+    fileHndl := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateBool(fileHndl >= 0, @"openFileRead()", FALSE)
 
     utils.startTest(@"closeFile() before mount")
-    status := dfs.closeFileHandle(handle)
-    utils.evaluateSingleValue(status, @"closeFileHandle(bad)", dfs.E_INVALID_HANDLE)
+    opStatus := dfs.closeFileHandle(fileHndl)
+    utils.evaluateSingleValue(opStatus, @"closeFileHandle(bad)", dfs.E_INVALID_HANDLE)
 
     utils.startTest(@"freeSpace() before mount")
     freeSpace := dfs.freeSpace(dfs.DEV_SD)
@@ -95,22 +97,22 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
     utils.startTestGroup(@"Pre-Mount Error Validation (V3 Handle API)")
 
     utils.startTest(@"openFileRead() before mount returns E_NOT_MOUNTED")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-    utils.evaluateSingleValue(handle, @"openFileRead()", dfs.E_NOT_MOUNTED)
+    fileHndl := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateSingleValue(fileHndl, @"openFileRead()", dfs.E_NOT_MOUNTED)
 
     utils.startTest(@"createFileNew() before mount returns E_NOT_MOUNTED")
-    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-    utils.evaluateSingleValue(handle, @"createFileNew()", dfs.E_NOT_MOUNTED)
+    fileHndl := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    utils.evaluateSingleValue(fileHndl, @"createFileNew()", dfs.E_NOT_MOUNTED)
 
     utils.startTest(@"readSectorRaw() before mount returns error")
     utils.initGuard(@sectorBuffer_guard)
-    status := dfs.readSectorRaw(0, @sectorBuffer)
+    opStatus := dfs.readSectorRaw(0, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
-    utils.evaluateSingleValue(status, @"readSectorRaw()", dfs.E_NOT_MOUNTED)
+    utils.evaluateSingleValue(opStatus, @"readSectorRaw()", dfs.E_NOT_MOUNTED)
 
     utils.startTest(@"changeDirectory() before mount returns error")
-    status := dfs.changeDirectory(dfs.DEV_SD, @"TESTDIR")
-    utils.evaluateSingleValue(status, @"changeDirectory()", dfs.E_NOT_MOUNTED)
+    opStatus := dfs.changeDirectory(dfs.DEV_SD, @"TESTDIR")
+    utils.evaluateSingleValue(opStatus, @"changeDirectory()", dfs.E_NOT_MOUNTED)
 
     ' ----------------------------------
     ' TEST GROUP: Mount card
@@ -118,8 +120,8 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
     utils.startTestGroup(@"Mount SD card")
 
     utils.startTest(@"mount() with valid pins")
-    result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"mount()", dfs.SUCCESS)
+    mountResult := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"mount()", dfs.SUCCESS)
 
     ' DIAGNOSTIC: Show CMD13 and CRC state after mount attempt
     debug(" ")
@@ -156,8 +158,8 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
     utils.startTestGroup(@"Unmount SD card")
 
     utils.startTest(@"unmount() card")
-    result := dfs.unmount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
+    mountResult := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"unmount()", dfs.SUCCESS)
 
     utils.startTest(@"Operations after unmount should fail")
     freeSpace := dfs.freeSpace(dfs.DEV_SD)
@@ -169,8 +171,8 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
     utils.startTestGroup(@"Remount SD card")
 
     utils.startTest(@"mount() again")
-    result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"mount() second time", dfs.SUCCESS)
+    mountResult := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"mount() second time", dfs.SUCCESS)
 
     ' DIAGNOSTIC: Show CMD13 and CRC state after remount attempt
     debug("  DIAG2: error()=", sdec_(dfs.error()))
@@ -187,28 +189,28 @@ PUB go() | workerCog, result, status, pLabel, freeSpace, handle
     utils.startTestGroup(@"Multiple mount/unmount cycles")
 
     utils.startTest(@"unmount()")
-    result := dfs.unmount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
+    mountResult := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"unmount()", dfs.SUCCESS)
 
     utils.startTest(@"mount() cycle 1")
-    result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"mount()", dfs.SUCCESS)
+    mountResult := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"mount()", dfs.SUCCESS)
 
     utils.startTest(@"unmount()")
-    result := dfs.unmount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
+    mountResult := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"unmount()", dfs.SUCCESS)
 
     utils.startTest(@"mount() cycle 2")
-    result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"mount()", dfs.SUCCESS)
+    mountResult := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"mount()", dfs.SUCCESS)
 
     utils.startTest(@"unmount()")
-    result := dfs.unmount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"unmount()", dfs.SUCCESS)
+    mountResult := dfs.unmount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"unmount()", dfs.SUCCESS)
 
     utils.startTest(@"mount() cycle 3")
-    result := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(result, @"mount()", dfs.SUCCESS)
+    mountResult := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountResult, @"mount()", dfs.SUCCESS)
 
     utils.startTest(@"Card still works after 3 mount/unmount cycles")
     freeSpace := dfs.freeSpace(dfs.DEV_SD)

@@ -1246,7 +1246,8 @@ Six feature flags control optional SD features. Flash features are always compil
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode (50 MHz) |
 | `SD_INCLUDE_DEBUG` | CRC diagnostics, test hooks, hex dump utilities |
 | `SD_INCLUDE_ASYNC` | Non-blocking file I/O (startReadHandle, startWriteHandle, isComplete, getResult, cancelAsync) |
-| `SD_INCLUDE_ALL` | All five flags above |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: fileFragments, compactFile, createFileContiguous, isFileContiguous |
+| `SD_INCLUDE_ALL` | All six flags above |
 
 Enable flags with `#pragma exportdef` **before** the OBJ declaration:
 
@@ -1416,6 +1417,36 @@ if fs.checkCMD6Support()
 | `isComplete()` | Poll async completion (non-blocking) |
 | `getResult()` | Get async result (blocks if needed), releases lock |
 | `cancelAsync()` | Cancel async operation, releases lock |
+
+### Defragmentation (SD_INCLUDE_DEFRAG)
+
+| Method | Description |
+|--------|-------------|
+| `fileFragments(dev, path)` | Count non-contiguous fragments (1 = contiguous, 0 = empty) |
+| `isFileContiguous(dev, path)` | TRUE if file has exactly 1 fragment |
+| `createFileContiguous(dev, path, size)` | Create file with pre-allocated contiguous chain |
+| `compactFile(dev, path)` | Relocate fragmented file to contiguous clusters |
+
+**Check and compact a file:**
+
+```spin2
+  frags := dfs.fileFragments(dfs.DEV_SD, @"DATA.BIN")
+  if frags > 1
+    result := dfs.compactFile(dfs.DEV_SD, @"DATA.BIN")
+    ' File must be CLOSED before compacting — returns E_FILE_OPEN_FOR_COMPACT if open
+```
+
+**Create a pre-allocated contiguous file:**
+
+```spin2
+  ' Pre-allocate 100 KB of contiguous clusters — writes never fragment
+  handle := dfs.createFileContiguous(dfs.DEV_SD, @"STREAM.BIN", 100_000)
+  if handle >= 0
+    repeat 200
+      dfs.writeHandle(handle, @sensorData, 512)
+    dfs.closeFileHandle(handle)
+    ' File is guaranteed contiguous — optimal for multi-block reads
+```
 
 ### Utilities
 

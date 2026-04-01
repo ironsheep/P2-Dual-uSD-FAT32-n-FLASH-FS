@@ -42,7 +42,8 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     BUFFER_SIZE = 512
+     BUFFER_SIZE  = 512
+     GUARD_SIZE   = 16
 
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_SPEED
@@ -76,9 +77,9 @@ spTestFile2     BYTE    "SPTEST2.BIN", 0
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
-readBuffer_guard BYTE   0[16]
+readBuffer_guard BYTE   0[GUARD_SIZE]
 
-PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout
+PUB go() | workerCog, verifyResult, fileHndl, bValidHndl, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout
 '' Main entry point for speed API regression tests
 
     debug(" ")
@@ -90,8 +91,8 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    verifyResult := dfs.mount(dfs.DEV_SD)
+    if verifyResult <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -126,7 +127,7 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         utils.startTest(@"isHighSpeedActive() false at 25 MHz")
         hsActive := dfs.isHighSpeedActive()
         debug("   High-speed active: ", sdec_(hsActive))
-        utils.evaluateBool(hsActive, @"HS active at 25 MHz", false)
+        utils.evaluateBool(hsActive, @"HS active at 25 MHz", FALSE)
 
         ' Test: setSPISpeed() changes frequency
         utils.startTest(@"setSPISpeed() changes frequency")
@@ -144,18 +145,20 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         dfs.setSPISpeed(20_000_000)
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $50)
         dfs.deleteFile(dfs.DEV_SD, @spTestFile)
-        handle := dfs.createFileNew(dfs.DEV_SD, @spTestFile)
-        if handle >= 0
-            bytesWritten := dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-            dfs.closeFileHandle(handle)
-        handle := dfs.openFileRead(dfs.DEV_SD, @spTestFile)
-        if handle >= 0
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @spTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            bytesWritten := dfs.writeHandle(fileHndl, @writeBuffer, BUFFER_SIZE)
+            dfs.closeFileHandle(fileHndl)
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @spTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            dfs.closeFileHandle(handle)
-        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $50)
-        utils.evaluateBool(result, @"data integrity at 20 MHz", true)
+            dfs.closeFileHandle(fileHndl)
+        verifyResult := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $50)
+        utils.evaluateBool(verifyResult, @"data integrity at 20 MHz", TRUE)
         dfs.setSPISpeed(25_000_000)
 
         ' ======================================================================
@@ -168,13 +171,13 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         cmd6Sup := dfs.checkCMD6Support()
         debug("   CMD6 support: ", sdec_(cmd6Sup))
         ' Test card is SD 2.0+ (confirmed by register tests), so CMD6 must be supported
-        utils.evaluateSingleValue(cmd6Sup, @"checkCMD6Support() returns TRUE", true)
+        utils.evaluateSingleValue(cmd6Sup, @"checkCMD6Support() returns TRUE", TRUE)
 
         ' Test: checkHighSpeedCapability() returns boolean
         utils.startTest(@"checkHighSpeedCapability() returns boolean")
         hsCap := dfs.checkHighSpeedCapability()
         debug("   HS capability: ", sdec_(hsCap))
-        utils.evaluateBool(hsCap == 0 or hsCap == -1, @"HS cap is boolean", true)
+        utils.evaluateBool(hsCap == 0 or hsCap == -1, @"HS cap is boolean", TRUE)
 
         ' Test: attemptHighSpeed() consistency with isHighSpeedActive()
         utils.startTest(@"attemptHighSpeed() consistent with isHighSpeedActive()")
@@ -183,7 +186,7 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         debug("   attemptHighSpeed: ", sdec_(hsResult), " isHSActive: ", sdec_(hsActive))
         ' If attemptHighSpeed succeeded, isHighSpeedActive should be true
         ' If it failed, isHighSpeedActive should be false
-        utils.evaluateSubBool(hsResult == hsActive, @"HS state consistent", true)
+        utils.evaluateSubBool(hsResult == hsActive, @"HS state consistent", TRUE)
 
         ' Test: Read/write integrity after high-speed attempt
         utils.startTest(@"Data integrity after HS attempt")
@@ -192,21 +195,23 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         bytefill(@readBuffer, 0, BUFFER_SIZE)  ' Clear stale data
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $70)
         dfs.deleteFile(dfs.DEV_SD, @spTestFile2)
-        handle := dfs.createFileNew(dfs.DEV_SD, @spTestFile2)
-        if handle >= 0
-            bytesWritten := dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-            dfs.closeFileHandle(handle)
-            handle := dfs.openFileRead(dfs.DEV_SD, @spTestFile2)
-            if handle >= 0
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @spTestFile2)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            bytesWritten := dfs.writeHandle(fileHndl, @writeBuffer, BUFFER_SIZE)
+            dfs.closeFileHandle(fileHndl)
+            fileHndl := dfs.openFileRead(dfs.DEV_SD, @spTestFile2)
+            bValidHndl := (fileHndl >= 0)
+            if bValidHndl == TRUE
                 utils.initGuard(@readBuffer_guard)
-                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
                 utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-                dfs.closeFileHandle(handle)
-            result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $70)
-            utils.evaluateBool(result, @"data integrity post-HS", true)
+                dfs.closeFileHandle(fileHndl)
+            verifyResult := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $70)
+            utils.evaluateBool(verifyResult, @"data integrity post-HS", TRUE)
         else
-            debug("  createFileNew failed after HS: ", sdec_(handle))
-            utils.evaluateBool(false, @"createFileNew after HS", true)
+            debug("  createFileNew failed after HS: ", sdec_(fileHndl))
+            utils.evaluateBool(FALSE, @"createFileNew after HS", TRUE)
 
         ' Test: getSPIFrequency() reflects HS state
         utils.startTest(@"getSPIFrequency() reflects HS state")
@@ -215,10 +220,10 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         debug("   SPI freq: ", udec(spiFreq), " Hz, HS active: ", sdec_(hsActive))
         if hsActive
             ' If HS active, frequency should be > 25 MHz
-            utils.evaluateSubBool(spiFreq > 25_000_000, @"HS freq > 25 MHz", true)
+            utils.evaluateSubBool(spiFreq > 25_000_000, @"HS freq > 25 MHz", TRUE)
         else
             ' If not HS, should be <= 25 MHz
-            utils.evaluateSubBool(spiFreq <= 30_000_000, @"std freq <= 30 MHz", true)
+            utils.evaluateSubBool(spiFreq <= 30_000_000, @"std freq <= 30 MHz", TRUE)
 
         ' ======================================================================
         ' TEST GROUP: Speed Boundaries
@@ -233,19 +238,20 @@ PUB go() | workerCog, result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCa
         dfs.setSPISpeed(400_000)
         spiFreq := dfs.getSPIFrequency()
         debug("   Init speed: ", udec(spiFreq), " Hz")
-        utils.evaluateSubBool(spiFreq >= 300_000 and spiFreq <= 500_000, @"init speed in range", true)
+        utils.evaluateSubBool(spiFreq >= 300_000 and spiFreq <= 500_000, @"init speed in range", TRUE)
 
         ' Verify data still works at low speed (read existing file)
         ' Skip if HS mode was activated -- CMD6 switch changes card timing,
         ' and some cards do not reliably handle 400 kHz SPI in HS mode
         if not hsResult
-            handle := dfs.openFileRead(dfs.DEV_SD, @spTestFile)
-            if handle >= 0
+            fileHndl := dfs.openFileRead(dfs.DEV_SD, @spTestFile)
+            bValidHndl := (fileHndl >= 0)
+            if bValidHndl == TRUE
                 utils.initGuard(@readBuffer_guard)
-                bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+                bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
                 utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-                utils.evaluateSubBool(bytesRead == BUFFER_SIZE, @"read at 400 kHz", true)
-                dfs.closeFileHandle(handle)
+                utils.evaluateSubBool(bytesRead == BUFFER_SIZE, @"read at 400 kHz", TRUE)
+                dfs.closeFileHandle(fileHndl)
 
         ' Test: setSPISpeed(25_000_000) standard speed
         utils.startTest(@"setSPISpeed(25_000_000) standard speed")

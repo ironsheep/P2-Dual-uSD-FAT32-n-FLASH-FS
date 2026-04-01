@@ -6,6 +6,28 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-29
+
+SD sub-driver upgraded to v1.4.3: next-fit allocator, defragmentation API, contiguous file creation.
+
+### Added
+- **Next-fit allocator** (unconditional): `allocateCluster()` now scans from previous allocation point instead of always starting at cluster 2, reducing fragmentation and improving sequential write contiguity
+- **Defragmentation API** (`SD_INCLUDE_DEFRAG`):
+  - `fileFragments()`: Count non-contiguous fragments in a file's cluster chain
+  - `isFileContiguous()`: Check if a file's clusters are stored contiguously
+  - `createFileContiguous()`: Create a file with pre-allocated contiguous cluster chain for guaranteed zero-fragmentation writes
+  - `compactFile()`: Relocate a fragmented file's clusters into a contiguous chain with copy-then-free and mandatory read-back verification
+- **FSCK fragmentation reporting**: Audit and FSCK summaries now report fragmented file count and total fragments
+- **Test hook**: `setTestMaxClusters()` for testing allocation wrap-around with artificially constrained FAT
+- Named FAT32 constants: `ROOT_CLUSTER`, `FAT_EOC_MIN`, `FAT_BAD` (replace inline magic numbers)
+- New error codes: `E_NO_CONTIGUOUS_SPACE`, `E_FILE_OPEN_FOR_COMPACT`, `E_VERIFY_FAILED`
+- `DFS_SD_RT_defrag_tests` -- 12 tests for defrag API, contiguous creation, and next-fit allocation
+
+### Changed
+- `do_delete()` refactored: cluster-freeing loop extracted into reusable `freeClusterChain()`
+- `auditRootDir()` improved: scans all entries in first root directory sector for volume label (not just offset 0)
+- Regression suite expanded to 32 standard suites, 1,344 tests
+
 ## [1.2.0] - 2026-03-18
 
 SD sub-driver upgraded to v1.4.0: live clock, auto-flush, non-blocking I/O, modification timestamps.

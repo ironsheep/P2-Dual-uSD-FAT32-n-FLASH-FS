@@ -18,7 +18,7 @@
 
 CON
 
-  MAX_OPEN_FILES = 6          ' Default (match dual_sd_fat32_flash_fs default); overridable by parent OBJ |
+  RT_MAX_OPEN_FILES = 6       ' Default (match driver default); parent overrides via OBJ | to change handle count
 
   TEST_SIGNATURE = $12345678
 
@@ -47,7 +47,7 @@ CON ' ---- Debug Channel Assignments (DECISION-002) ----
 
 OBJ
 
-  dfs : "dual_sd_fat32_flash_fs"
+  dfs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = RT_MAX_OPEN_FILES
 
 VAR { test stats vars }
 
@@ -169,14 +169,14 @@ PUB setCheckCountPerTest(countTests)
 ' EVALUATION METHODS -- Generic value/bool comparisons
 ' ===============================================================================
 
-PUB evaluateSubValue(result, pMessage, expectedResult) | bPassed, pPassFail
+PUB evaluateSubValue(actualValue, pMessage, expectedValue) | bPassed, pPassFail
 '' Evaluate a sub-test value (for multiple checks within a test)
 ''
-'' @param result - the actual result value
+'' @param actualValue - the actual result value
 '' @param pMessage - pointer to description string
-'' @param expectedResult - the expected value
+'' @param expectedValue - the expected value
 
-    bPassed := result == expectedResult
+    bPassed := actualValue == expectedValue
     pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
     ifnot bPassed
         failCountSub[cogid()]++
@@ -184,13 +184,13 @@ PUB evaluateSubValue(result, pMessage, expectedResult) | bPassed, pPassFail
         passCountSub[cogid()]++
     ifnot bPassed
         debug[CH_EVAL]("  Sub-Test: ", zstr_(pMessage))
-        debug[CH_EVAL]("  Value: ", sdec_long_(result), " (expected ", sdec_long_(expectedResult), ")")
+        debug[CH_EVAL]("  Value: ", sdec_long_(actualValue), " (expected ", sdec_long_(expectedValue), ")")
         debug[CH_EVAL]("   -> ", zstr_(pPassFail))
 
-PUB evaluateSubValueHex(result, pMessage, expectedResult) | bPassed, pPassFail
+PUB evaluateSubValueHex(actualValue, pMessage, expectedValue) | bPassed, pPassFail
 '' Evaluate a sub-test value in hex format
 
-    bPassed := result == expectedResult
+    bPassed := actualValue == expectedValue
     pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
     ifnot bPassed
         failCountSub[cogid()]++
@@ -198,13 +198,13 @@ PUB evaluateSubValueHex(result, pMessage, expectedResult) | bPassed, pPassFail
         passCountSub[cogid()]++
     ifnot bPassed
         debug[CH_EVAL]("  Sub-Test: ", zstr_(pMessage))
-        debug[CH_EVAL]("  Value: $", uhex_long_(result), " (expected $", uhex_long_(expectedResult), ")")
+        debug[CH_EVAL]("  Value: $", uhex_long_(actualValue), " (expected $", uhex_long_(expectedValue), ")")
         debug[CH_EVAL]("   -> ", zstr_(pPassFail))
 
-PUB evaluateSubBool(result, pMessage, expectedResult) | bPassed, pPassFail
+PUB evaluateSubBool(actualBool, pMessage, expectedBool) | bPassed, pPassFail
 '' Evaluate a sub-test boolean value
 
-    bPassed := (result <> 0) == (expectedResult <> 0)
+    bPassed := (actualBool <> 0) == (expectedBool <> 0)
     pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
     ifnot bPassed
         failCountSub[cogid()]++
@@ -212,19 +212,19 @@ PUB evaluateSubBool(result, pMessage, expectedResult) | bPassed, pPassFail
         passCountSub[cogid()]++
     ifnot bPassed
         debug[CH_EVAL]("  Sub-Test: ", zstr_(pMessage))
-        debug[CH_EVAL]("  Value: ", udec_(result <> 0), " (expected ", udec_(expectedResult <> 0), ")")
+        debug[CH_EVAL]("  Value: ", udec_(actualBool <> 0), " (expected ", udec_(expectedBool <> 0), ")")
         debug[CH_EVAL]("   -> ", zstr_(pPassFail))
 
-PUB evaluateBool(result, pMessage, expectedResult) | bPassed, pPassFail
+PUB evaluateBool(actualBool, pMessage, expectedBool) | bPassed, pPassFail
 '' Evaluate a boolean result (true/false)
 
-    bPassed := (result <> 0) == (expectedResult <> 0)
+    bPassed := (actualBool <> 0) == (expectedBool <> 0)
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", udec_(result <> 0), " (expected ", udec_(expectedResult <> 0), ")")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", udec_(actualBool <> 0), " (expected ", udec_(expectedBool <> 0), ")")
         failCount[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", udec_(result <> 0))
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", udec_(actualBool <> 0))
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
@@ -242,81 +242,81 @@ PUB recordFail()
     failCount[cogid()]++
     debug("   -> FAIL")
 
-PUB evaluateSingleValue(result, pMessage, expectedResult) | bPassed, pPassFail
+PUB evaluateSingleValue(actualValue, pMessage, expectedValue) | bPassed, pPassFail
 '' Evaluate a single test result value
 
-    bPassed := result == expectedResult
+    bPassed := actualValue == expectedValue
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(result), " (expected ", sdec_long_(expectedResult), ")")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(actualValue), " (expected ", sdec_long_(expectedValue), ")")
         failCount[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(result))
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(actualValue))
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-PUB evaluateSingleValueHex(result, pMessage, expectedResult) | bPassed, pPassFail
+PUB evaluateSingleValueHex(actualValue, pMessage, expectedValue) | bPassed, pPassFail
 '' Evaluate a single test result value in hex
 
-    bPassed := result == expectedResult
+    bPassed := actualValue == expectedValue
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": $", uhex_long_(result), " (expected $", uhex_long_(expectedResult), ")")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": $", uhex_long_(actualValue), " (expected $", uhex_long_(expectedValue), ")")
         failCount[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": $", uhex_long_(result))
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": $", uhex_long_(actualValue))
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-PUB evaluateRange(result, pMessage, minExpected, maxExpected) | bPassed, pPassFail
+PUB evaluateRange(actualValue, pMessage, minExpected, maxExpected) | bPassed, pPassFail
 '' Evaluate that result is within a range
 
-    bPassed := result >= minExpected and result <= maxExpected
+    bPassed := actualValue >= minExpected and actualValue <= maxExpected
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(result), " (expected ", sdec_long_(minExpected), " to ", sdec_long_(maxExpected), ")")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(actualValue), " (expected ", sdec_long_(minExpected), " to ", sdec_long_(maxExpected), ")")
         failCount[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(result))
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(actualValue))
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-PUB evaluateNotZero(result, pMessage) | bPassed, pPassFail
+PUB evaluateNotZero(actualValue, pMessage) | bPassed, pPassFail
 '' Evaluate that result is not zero
 
-    bPassed := result <> 0
+    bPassed := actualValue <> 0
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(result), " (expected non-zero)")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(actualValue), " (expected non-zero)")
         failCount[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(result))
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": ", sdec_long_(actualValue))
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-PUB evaluateStringMatch(pResult, pMessage, pExpected) | bPassed, pPassFail
+PUB evaluateStringMatch(pActualStr, pMessage, pExpectedStr) | bPassed, pPassFail
 '' Evaluate that two strings match
 
-    bPassed := strcomp(pResult, pExpected)
+    bPassed := strcomp(pActualStr, pExpectedStr)
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": [", zstr_(pResult), "] (expected [", zstr_(pExpected), "])")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": [", zstr_(pActualStr), "] (expected [", zstr_(pExpectedStr), "])")
         failCount[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": [", zstr_(pResult), "]")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": [", zstr_(pActualStr), "]")
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
 
-PUB evaluateSubStringMatch(pResult, pMessage, pExpected) | bPassed
+PUB evaluateSubStringMatch(pActualStr, pMessage, pExpectedStr) | bPassed
 '' Evaluate that two strings match as a sub-test
 
-    bPassed := strcomp(pResult, pExpected)
+    bPassed := strcomp(pActualStr, pExpectedStr)
     ifnot bPassed
-        debug[CH_EVAL]("  Sub-Test: ", zstr_(pMessage), ": [", zstr_(pResult), "] (expected [", zstr_(pExpected), "])")
+        debug[CH_EVAL]("  Sub-Test: ", zstr_(pMessage), ": [", zstr_(pActualStr), "] (expected [", zstr_(pExpectedStr), "])")
         debug[CH_EVAL]("   -> Sub-FAIL")
         failCountSub[cogid()]++
     else
-        debug[CH_EVAL]("  ", zstr_(pMessage), ": [", zstr_(pResult), "]")
+        debug[CH_EVAL]("  ", zstr_(pMessage), ": [", zstr_(pActualStr), "]")
         debug[CH_EVAL]("   -> pass")
         passCountSub[cogid()]++
 
@@ -344,47 +344,47 @@ PUB evaluateBufferMatch(pBuffer1, pBuffer2, length, pMessage) | bPassed, pPassFa
 ' FLASH-SPECIFIC EVALUATION METHODS -- Error status and filesystem stats
 ' ===============================================================================
 
-PUB evaluateSubStatus(result, pMessage, expectedResult) | ecGot, ecExpected, bPassed, pPassFail
+PUB evaluateSubStatus(actualCode, pMessage, expectedCode) | ecGot, ecExpected, bPassed, pPassFail
 '' Evaluate a sub-test error status with human-readable error names
 ''
-'' @param result - the actual error code
+'' @param actualCode - the actual error code
 '' @param pMessage - pointer to description string
-'' @param expectedResult - the expected error code
+'' @param expectedCode - the expected error code
 
-    ecGot := dfs.string_for_error(result)
-    ecExpected := dfs.string_for_error(expectedResult)
-    bPassed := result == expectedResult
+    ecGot := dfs.string_for_error(actualCode)
+    ecExpected := dfs.string_for_error(expectedCode)
+    bPassed := actualCode == expectedCode
     pPassFail := !bPassed ? @"Sub-FAIL" : @"pass"
     ifnot bPassed
         failCountSub[cogid()]++
     else
         passCountSub[cogid()]++
     ifnot bPassed
-        debug[CH_EVAL]("  Status: ", zstr_(ecGot), "(", sdec_(result), "),  (expected ", zstr_(ecExpected), "(", sdec_(expectedResult), "))")
+        debug[CH_EVAL]("  Status: ", zstr_(ecGot), "(", sdec_(actualCode), "),  (expected ", zstr_(ecExpected), "(", sdec_(expectedCode), "))")
         debug[CH_EVAL]("   -> ", zstr_(pPassFail))
 
-PUB evaluateResultNegError(result, expectedResult) | ecGot, ecExpected, bPassed, pPassFail
+PUB evaluateResultNegError(actualValue, expectedValue) | ecGot, ecExpected, bPassed, pPassFail
 '' Evaluate a result that may be a value (>=0) or error code (<0)
 ''
-'' @param result - actual result (positive value or negative error)
-'' @param expectedResult - expected result
+'' @param actualValue - actual result (positive value or negative error)
+'' @param expectedValue - expected result
 
-    bPassed := result == expectedResult
+    bPassed := actualValue == expectedValue
     pPassFail := !bPassed ? @"FAIL" : @"pass"
-    if result > 0
+    if actualValue > 0
         ifnot bPassed
-            if expectedResult < 0
-                ecExpected := dfs.string_for_error(expectedResult)
-                debug[CH_EVAL]("  Result: ", sdec_(result), " (expected ", zstr_(ecExpected), ")")
+            if expectedValue < 0
+                ecExpected := dfs.string_for_error(expectedValue)
+                debug[CH_EVAL]("  Result: ", sdec_(actualValue), " (expected ", zstr_(ecExpected), ")")
             else
-                debug[CH_EVAL]("  Result: ", udec_(result), " (expected ", udec_(expectedResult), ")")
+                debug[CH_EVAL]("  Result: ", udec_(actualValue), " (expected ", udec_(expectedValue), ")")
             failCount[cogid()]++
         else
-            debug[CH_EVAL]("  Result: ", udec_(result))
+            debug[CH_EVAL]("  Result: ", udec_(actualValue))
             passCount[cogid()]++
     else
-        ecGot := dfs.string_for_error(result)
-        ecExpected := dfs.string_for_error(expectedResult)
+        ecGot := dfs.string_for_error(actualValue)
+        ecExpected := dfs.string_for_error(expectedValue)
         ifnot bPassed
             debug[CH_EVAL]("   ECode: ", zstr_(ecGot), " (expected ", zstr_(ecExpected), ")")
             failCount[cogid()]++
@@ -559,7 +559,7 @@ PUB showFileDetails(pFilename) | bytesUsed, bytes_free, block_count
     else
         debug[CH_STATE]("  File: [", zstr_(pFilename), "], ", udec(bytesUsed, bytes_free, block_count))
 
-PUB showFiles() | blockID, byteCount, byte Buff[30], BlocksUsed
+PUB showFiles() | blockID, byteCount, byte contentBuf[30], BlocksUsed
 '' Display all files on Flash device
 
     debug[CH_STATE](" ")
@@ -569,11 +569,11 @@ PUB showFiles() | blockID, byteCount, byte Buff[30], BlocksUsed
         dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
         BlocksUsed := blockCountForFileSize(byteCount)
         if filename[0]
-            ReadFile(@filename, @Buff, 30)
-            if isZstr(@Buff, 30)
-                debug[CH_STATE](zstr_(@filename), udec(byteCount, blockID, BlocksUsed), zstr(@Buff))
+            ReadFile(@filename, @contentBuf, 30)
+            if isZstr(@contentBuf, 30)
+                debug[CH_STATE](zstr_(@filename), udec(byteCount, blockID, BlocksUsed), zstr(@contentBuf))
             else
-                debug[CH_STATE](zstr_(@filename), udec(byteCount, blockID, BlocksUsed), ", @Buff={binary data}")
+                debug[CH_STATE](zstr_(@filename), udec(byteCount, blockID, BlocksUsed), ", @contentBuf={binary data}")
         else
             quit
 
@@ -744,7 +744,7 @@ PUB isZstr(pBffr, count) : bIsStringStatus | bytIdx
         if pBffr[bytIdx] < ASCII_PRINTABLE_MIN or pBffr[bytIdx] > ASCII_PRINTABLE_MAX
             quit
 
-PUB ReadFile(pFilename, pStr, maxlen) | handle, byteCount
+PUB ReadFile(pFilename, pStr, maxlen) | fileHndl, byteCount, bValidHndl
 '' Read a string file into buffer
 ''
 '' @param pFilename - pointer to filename
@@ -752,12 +752,13 @@ PUB ReadFile(pFilename, pStr, maxlen) | handle, byteCount
 '' @param maxlen - max bytes to read
 
     if isStringsFile(pFilename)
-        handle := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
-        if handle >= 0
-            byteCount := dfs.rd_str(handle, pStr, maxlen)
+        fileHndl := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            byteCount := dfs.rd_str(fileHndl, pStr, maxlen)
             if byteCount < 0
                 showErrorCode(@"rd_str()", byteCount)
-            dfs.close(handle)
+            dfs.close(fileHndl)
     else
         bytefill(pStr, $ff, maxlen)
 
@@ -822,10 +823,10 @@ PUB fillBufferWithPattern(pBuffer, length, startValue) | idx
     repeat idx from 0 to length - 1
         BYTE[pBuffer][idx] := (startValue + idx) & $FF
 
-PUB fillBufferWithValue(pBuffer, length, value) | idx
+PUB fillBufferWithValue(pBuffer, length, fillByte) | idx
 '' Fill buffer with constant value
 
-    bytefill(pBuffer, value, length)
+    bytefill(pBuffer, fillByte, length)
 
 PUB fillBufferWithRandom(pBuffer, length) | idx
 '' Fill buffer with random values
@@ -844,14 +845,14 @@ PUB verifyBufferPattern(pBuffer, length, startValue) : bMatch | idx, expected
             debug[CH_DUMP]("  Pattern mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(expected))
             quit
 
-PUB verifyBufferValue(pBuffer, length, value) : bMatch | idx
+PUB verifyBufferValue(pBuffer, length, expectedByte) : bMatch | idx
 '' Verify buffer contains constant value
 
-    bMatch := true
+    bMatch := TRUE
     repeat idx from 0 to length - 1
-        if BYTE[pBuffer][idx] <> value
-            bMatch := false
-            debug[CH_DUMP]("  Value mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(value))
+        if BYTE[pBuffer][idx] <> expectedByte
+            bMatch := FALSE
+            debug[CH_DUMP]("  Value mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(expectedByte))
             quit
 
 ' ===============================================================================

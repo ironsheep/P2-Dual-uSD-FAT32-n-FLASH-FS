@@ -76,7 +76,7 @@ dotPath        BYTE    ".", 0
 dotdotPath     BYTE    "..", 0
 testContent1   BYTE    "Hello from subdir", 0
 
-PUB go() | workerCog, result, status, handle, dh, count, pEntry
+PUB go() | workerCog, opStatus, status, handle, dirHndl, count, pEntry, bValidHndl, bValidDirHndl
 '' Main entry point for subdirectory operations regression tests
 
     debug(" ")
@@ -89,8 +89,8 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    opStatus := dfs.mount(dfs.DEV_SD)
+    if opStatus <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -100,8 +100,8 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
 
         ' Clear root directory for clean slate
         debug("  CLEARING ROOT DIRECTORY...")
-        result := dfs.debugClearRootDir()
-        debug("  Clear result: ", sdec_(result))
+        opStatus := dfs.debugClearRootDir()
+        debug("  Clear result: ", sdec_(opStatus))
 
         ' ======================================================================
         ' TEST GROUP: Empty file operations in root directory
@@ -111,17 +111,19 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         ' Test #1: Create empty file (0 bytes, like touch)
         utils.startTest(@"createFileNew() empty file returns valid handle")
         handle := dfs.createFileNew(dfs.DEV_SD, @emptyFile)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() empty", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() empty", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)                                                 ' Close immediately - no data written
         utils.showSubTestResults()
 
         ' Test #2: Verify empty file size is 0
         utils.startTest(@"Empty file has size 0")
         handle := dfs.openFileRead(dfs.DEV_SD, @emptyFile)
-        if handle >= 0
-            result := dfs.fileSizeHandle(handle)
-            utils.evaluateSingleValue(result, @"fileSizeHandle()", 0)
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
+            opStatus := dfs.fileSizeHandle(handle)
+            utils.evaluateSingleValue(opStatus, @"fileSizeHandle()", 0)
             dfs.closeFileHandle(handle)
         else
             utils.evaluateSingleValue(handle, @"openFileRead() empty", 0)
@@ -144,19 +146,21 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         ' Test #5: Create file then immediately enumerate directory
         utils.startTest(@"Dir sees file immediately after createFileNew")
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         ' Now enumerate root directory and count entries
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
-        utils.evaluateSubBool(count >= 1, @"dir sees created file", true)
+            dfs.closeDirectoryHandle(dirHndl)
+        utils.evaluateSubBool(count >= 1, @"dir sees created file", TRUE)
         utils.showSubTestResults()
 
         ' Clean up
@@ -166,34 +170,38 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         utils.startTest(@"Second create visible in dir without re-mount")
         utils.setCheckCountPerTest(2)
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         ' Dir - should see testfile1
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
-        utils.evaluateSubBool(count >= 1, @"first file in dir", true)
+            dfs.closeDirectoryHandle(dirHndl)
+        utils.evaluateSubBool(count >= 1, @"first file in dir", TRUE)
         ' Create second file
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile2)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         ' Dir again - should see both
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
-        utils.evaluateSubBool(count >= 2, @"both files in dir", true)
+            dfs.closeDirectoryHandle(dirHndl)
+        utils.evaluateSubBool(count >= 2, @"both files in dir", TRUE)
         utils.showSubTestResults()
 
         ' Clean up
@@ -217,8 +225,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         ' Test #8: Create file in subdirectory
         utils.startTest(@"createFileNew() in subdirectory")
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() in subdir", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() in subdir", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         utils.showSubTestResults()
 
@@ -228,40 +237,43 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         '   - readDirectoryHandle reads directory entries via BUF_DATA
         '   - If writeSector doesn't cross-invalidate BUF_DATA cache, dir misses the file
         utils.startTest(@"Dir sees file in subdirectory after create")
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         debug("  dir count in subdir: ", udec_(count))
         ' Expected: at least 3 entries (., .., testfile1)
-        utils.evaluateSubBool(count >= 3, @"subdir has . + .. + file", true)
+        utils.evaluateSubBool(count >= 3, @"subdir has . + .. + file", TRUE)
         utils.showSubTestResults()
 
         ' Test #10: Create second file and verify both visible
         utils.startTest(@"Second file visible in subdirectory dir")
         utils.setCheckCountPerTest(2)
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile2)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() #2 in subdir", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() #2 in subdir", TRUE)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @testContent1, strsize(@testContent1))
             dfs.closeFileHandle(handle)
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         debug("  dir count after 2nd file: ", udec_(count))
         ' Expected: at least 4 entries (., .., testfile1, testfile2)
-        utils.evaluateSubBool(count >= 4, @"subdir has . + .. + 2 files", true)
+        utils.evaluateSubBool(count >= 4, @"subdir has . + .. + 2 files", TRUE)
         utils.showSubTestResults()
 
         ' Test #11: Dir then create then dir again (cache pollution scenario)
@@ -271,32 +283,35 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         '   3. Dir again - BUF_DATA cache must not return stale data
         utils.startTest(@"Dir-Create-Dir shows new file (cache invalidation)")
         ' First dir - loads BUF_DATA cache with current subdir sector
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         debug("  before create: ", udec_(count), " entries")
         ' Now create a third file (writes via BUF_DIR, BUF_DATA has stale data)
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile3)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         ' Dir again - must see the new file despite BUF_DATA cache
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
-        result := 0
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        opStatus := 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
-                result++
-            dfs.closeDirectoryHandle(dh)
-        debug("  after create: ", udec_(result), " entries")
-        utils.evaluateSubBool(result > count, @"new file visible after cache", true)
+                opStatus++
+            dfs.closeDirectoryHandle(dirHndl)
+        debug("  after create: ", udec_(opStatus), " entries")
+        utils.evaluateSubBool(opStatus > count, @"new file visible after cache", TRUE)
         utils.showSubTestResults()
 
         ' ======================================================================
@@ -321,18 +336,19 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
 
         ' Test #15: Dir after delete shows fewer entries
         utils.startTest(@"Dir after delete shows correct count")
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         debug("  entries after deletes: ", udec_(count))
         ' Expected: 3 entries (., .., testfile3) - two files deleted
-        utils.evaluateSubBool(count == 3, @"correct count after deletes", true)
+        utils.evaluateSubBool(count == 3, @"correct count after deletes", TRUE)
         utils.showSubTestResults()
 
         ' ======================================================================
@@ -344,8 +360,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         utils.startTest(@"Create empty file then rename in subdir")
         utils.setCheckCountPerTest(2)
         handle := dfs.createFileNew(dfs.DEV_SD, @emptyFile)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() empty", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() empty", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         status := dfs.rename(dfs.DEV_SD, @emptyFile, @renamedEmpty)
         utils.evaluateSubValue(status, @"rename() empty file", dfs.SUCCESS)
@@ -357,8 +374,9 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         handle := dfs.openFileRead(dfs.DEV_SD, @emptyFile)
         utils.evaluateSubValue(handle, @"old name gone", dfs.E_FILE_NOT_FOUND)
         handle := dfs.openFileRead(dfs.DEV_SD, @renamedEmpty)
-        utils.evaluateSubBool(handle >= 0, @"new name accessible", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"new name accessible", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
         utils.showSubTestResults()
 
@@ -375,17 +393,18 @@ PUB go() | workerCog, result, status, handle, dh, count, pEntry
         status := dfs.changeDirectory(dfs.DEV_SD, @testdir)
         utils.evaluateSubValue(status, @"cd back", dfs.SUCCESS)
         ' Dir should still show files
-        dh := dfs.openDirectory(dfs.DEV_SD, @dotPath)
+        dirHndl := dfs.openDirectory(dfs.DEV_SD, @dotPath)
         count := 0
-        if dh >= 0
+        bValidDirHndl := (dirHndl >= 0)
+        if bValidDirHndl == TRUE
             repeat
-                pEntry := dfs.readDirectoryHandle(dh)
+                pEntry := dfs.readDirectoryHandle(dirHndl)
                 if pEntry == 0
                     quit
                 count++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         debug("  entries after cd round-trip: ", udec_(count))
-        utils.evaluateSubBool(count >= 3, @"files survived cd round-trip", true)
+        utils.evaluateSubBool(count >= 3, @"files survived cd round-trip", TRUE)
         utils.showSubTestResults()
 
         ' ======================================================================

@@ -215,6 +215,8 @@ VAR
   LONG    v_fileCount
   LONG    scanDepth
   LONG    v_lostCount           ' running count of lost clusters freed
+  LONG    v_fragmentedFileCount ' files with fragment_count > 1
+  LONG    v_totalFragments      ' sum of all fragment counts
   LONG    windowStart           ' first cluster in current bitmap window
   LONG    windowEnd             ' last cluster+1 in current window (exclusive)
   LONG    currentWindow         ' current window index (0-based)
@@ -372,7 +374,7 @@ PRI run() | result, cardSectors
 ' Audit orchestration
 ' =========================================================================
 
-PRI runAudit(cardSectors) | result, idx, failsToPrint
+PRI runAudit(cardSectors) | idx, failsToPrint
 ' Run all audit checks and display summary with pass/fail counts.
 '
 ' @param cardSectors - Total number of sectors on the card
@@ -382,6 +384,8 @@ PRI runAudit(cardSectors) | result, idx, failsToPrint
 
     v_passCount := 0
     v_failCount := 0
+    v_fragmentedFileCount := 0
+    v_totalFragments := 0
     longfill(@v_failNames, 0, MAX_FAIL_NAMES)
 
     fifo.put(@"=== FAT32 Filesystem Audit (read-only) ===")
@@ -406,6 +410,8 @@ PRI runAudit(cardSectors) | result, idx, failsToPrint
         fifo.put(@"=== AUDIT COMPLETE ===")
         fifo.putFmt2(@"Tests: %d  Pass: %d", v_passCount + v_failCount, v_passCount)
         fifo.putFmt1(@"Fail: %d", v_failCount)
+        if v_fragmentedFileCount > 0
+            fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
         if v_failCount == 0
             fifo.put(@"FILESYSTEM INTEGRITY: OK")
         else
@@ -434,6 +440,8 @@ PRI runFsck(cardSectors)
     v_dirCount := 0
     v_fileCount := 0
     v_lostCount := 0
+    v_fragmentedFileCount := 0
+    v_totalFragments := 0
     scanDepth := 0
     fatBufSector := -1
     fatBufDirty := false
@@ -463,6 +471,8 @@ PRI runFsck(cardSectors)
         fifo.putFmt2(@"Errors: %d  Repairs: %d", v_errorCount, v_repairCount)
         fifo.putFmt1(@"Warnings: %d", v_warningCount)
         fifo.putFmt2(@"Directories: %d  Files: %d", v_dirCount, v_fileCount)
+        if v_fragmentedFileCount > 0
+            fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
         if v_errorCount == 0
             if v_repairCount == 0
                 fifo.put(@"STATUS: CLEAN")
@@ -748,21 +758,33 @@ PRI auditFAT() | result, idx, mismatch
     fifo.put(@" ")
 
 
-PRI auditRootDir() | result
-' Verify root directory structure
+PRI auditRootDir() | entryByte, idx, p_entry, found_label
+' Verify root directory structure.
+' FAT32 spec: volume label entry can be anywhere in root directory.
 
     fifo.put(@"Checking Root Directory...")
 
     dfs.readSectorRaw(dataStart, @buf)
 
-    result := buf[DIR_ATTR]
-    auditRunTest(@"Volume label entry (attr=$08)", result == ATTR_VOLUME_LABEL)
+    ' Scan all entries in first root dir sector for volume label
+    found_label := FALSE
+    repeat idx from 0 to ENTRIES_PER_SECTOR - 1
+      p_entry := @buf + (idx * DIR_ENTRY_SIZE)
+      if byte[p_entry] == DIR_ENTRY_END
+        quit
+      if byte[p_entry] <> DIR_ENTRY_DELETED and byte[p_entry + DIR_ATTR] == ATTR_VOLUME_LABEL
+        found_label := TRUE
+        entryByte := byte[p_entry]
+        quit
+    auditRunTest(@"Volume label entry (attr=$08)", found_label)
 
-    result := buf[0]
-    auditRunTest(@"Valid volume label chars", result >= DIR_ENTRY_PRINTABLE_MIN AND result <= DIR_ENTRY_PRINTABLE_MAX)
+    if found_label == TRUE
+      auditRunTest(@"Valid volume label chars", entryByte >= DIR_ENTRY_PRINTABLE_MIN AND entryByte <= DIR_ENTRY_PRINTABLE_MAX)
+    else
+      auditRunTest(@"Valid volume label chars", TRUE)  ' VBR-only label is acceptable
 
-    result := buf[NEXT_DIR_ENTRY]
-    auditRunTest(@"Second entry valid or end", result == DIR_ENTRY_END OR result == DIR_ENTRY_DELETED OR (result >= DIR_ENTRY_PRINTABLE_MIN AND result <= DIR_ENTRY_PRINTABLE_MAX))
+    entryByte := buf[NEXT_DIR_ENTRY]
+    auditRunTest(@"Second entry valid or end", entryByte == DIR_ENTRY_END OR entryByte == DIR_ENTRY_DELETED OR (entryByte >= DIR_ENTRY_PRINTABLE_MIN AND entryByte <= DIR_ENTRY_PRINTABLE_MAX))
     fifo.put(@" ")
 
 
@@ -1057,7 +1079,7 @@ PRI fsckScanDir(dirCluster) | sector, entSector, entIdx, pEntry, attr, startClus
     scanDepth--
 
 
-PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen, chainOk
+PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen, chainOk, fragCount
 ' Follow a cluster chain and validate integrity.
 ' Marks each visited cluster in the bitmap to detect cross-links.
 ' On window 0: repairs bad refs and reports errors.
@@ -1070,6 +1092,7 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
     chainLen := 0
     clus := startClus
     chainOk := true
+    fragCount := 1
 
     repeat while clus >= FIRST_DATA_CLUSTER
         if clus >= (totalClusters + FIRST_DATA_CLUSTER)
@@ -1124,7 +1147,18 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
         if nextClus == FAT_BAD
             quit
 
+        ' Detect fragment transitions (non-contiguous cluster)
+        if nextClus <> clus + 1
+            fragCount++
+
         clus := nextClus
+
+    ' Track fragmentation statistics (window 0 only, files only)
+    if currentWindow == 0
+        if not isDir
+            if chainLen > 0 and fragCount > 1
+                v_fragmentedFileCount++
+                v_totalFragments += fragCount
 
     ' For files, check chain length vs expected (skip if chain had errors)
     if chainOk

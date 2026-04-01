@@ -40,7 +40,8 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     BUFFER_SIZE = 512
+     BUFFER_SIZE  = 512
+     GUARD_SIZE   = 16
 
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_DEBUG
@@ -70,9 +71,9 @@ crcTestFile2    BYTE    "CRCTEST2.BIN", 0
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
-readBuffer_guard BYTE   0[16]
+readBuffer_guard BYTE   0[GUARD_SIZE]
 
-PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
+PUB go() | workerCog, verifyResult, fileHndl, bValidHndl, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
 '' Main entry point for CRC diagnostic regression tests
 
     debug(" ")
@@ -84,8 +85,8 @@ PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retr
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    verifyResult := dfs.mount(dfs.DEV_SD)
+    if verifyResult <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -107,7 +108,7 @@ PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retr
         utils.startTest(@"CRC match count > 0 after mount")
         matchCount := dfs.getCRCMatchCount()
         debug("   CRC match count: ", udec(matchCount))
-        utils.evaluateSubBool(matchCount > 0, @"match count > 0", true)
+        utils.evaluateSubBool(matchCount > 0, @"match count > 0", TRUE)
 
         ' Test: Mismatch count == 0 on healthy card
         utils.startTest(@"CRC mismatch count == 0 on healthy card")
@@ -139,20 +140,22 @@ PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retr
         ' Perform a read operation to generate CRC activity
         utils.startTest(@"CRC match count increases after reads")
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $30)
-        handle := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
-            dfs.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
-            dfs.closeFileHandle(handle)
-        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.createFileNew(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(fileHndl, @writeBuffer, BUFFER_SIZE)
+            dfs.closeFileHandle(fileHndl)
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            dfs.closeFileHandle(handle)
+            dfs.closeFileHandle(fileHndl)
 
         matchAfter := dfs.getCRCMatchCount()
         debug("   Match before: ", udec(matchBefore), " after: ", udec(matchAfter))
-        utils.evaluateSubBool(matchAfter > matchBefore, @"match count increased", true)
+        utils.evaluateSubBool(matchAfter > matchBefore, @"match count increased", TRUE)
 
         ' Test: lastCalculatedCRC != 0 after reads
         utils.startTest(@"lastCalculatedCRC != 0 after reads")
@@ -169,12 +172,12 @@ PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retr
         ' Test: Counters after unmount/remount
         utils.startTest(@"CRC counters reset after unmount/remount")
         dfs.unmount(dfs.DEV_SD)
-        result := dfs.mount(dfs.DEV_SD)
-        utils.evaluateSubValue(result, @"remount succeeds", dfs.SUCCESS)
+        verifyResult := dfs.mount(dfs.DEV_SD)
+        utils.evaluateSubValue(verifyResult, @"remount succeeds", dfs.SUCCESS)
         matchCount := dfs.getCRCMatchCount()
         debug("   Match count after remount: ", udec(matchCount))
         ' After remount, count should be > 0 (mount reads sectors) but less than before
-        utils.evaluateSubBool(matchCount > 0, @"match count > 0 after remount", true)
+        utils.evaluateSubBool(matchCount > 0, @"match count > 0 after remount", TRUE)
 
         ' ======================================================================
         ' TEST GROUP: setCRCValidation Toggle
@@ -186,52 +189,56 @@ PUB go() | workerCog, result, handle, bytesRead, matchCount, mismatchCount, retr
 
         dfs.setCRCValidation(true)
         matchBefore := dfs.getCRCMatchCount()
-        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            dfs.closeFileHandle(handle)
+            dfs.closeFileHandle(fileHndl)
         matchAfter := dfs.getCRCMatchCount()
         debug("   CRC enabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
-        utils.evaluateSubBool(matchAfter > matchBefore, @"enabled: count increased", true)
+        utils.evaluateSubBool(matchAfter > matchBefore, @"enabled: count increased", TRUE)
 
         ' Test: Disable CRC validation, count unchanged on read
         utils.startTest(@"CRC disabled: count unchanged on read")
         dfs.setCRCValidation(false)
         matchBefore := dfs.getCRCMatchCount()
-        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            dfs.closeFileHandle(handle)
+            dfs.closeFileHandle(fileHndl)
         matchAfter := dfs.getCRCMatchCount()
         debug("   CRC disabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
         utils.evaluateSingleValue(matchAfter, @"disabled: count unchanged", matchBefore)
 
         ' Test: Reads work correctly with CRC disabled
         utils.startTest(@"Reads work with CRC disabled")
-        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            dfs.closeFileHandle(handle)
-        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
-        utils.evaluateBool(result, @"data correct with CRC off", true)
+            dfs.closeFileHandle(fileHndl)
+        verifyResult := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
+        utils.evaluateBool(verifyResult, @"data correct with CRC off", TRUE)
 
         ' Test: Reads work after re-enabling CRC
         utils.startTest(@"Reads work after CRC re-enabled")
         dfs.setCRCValidation(true)
-        handle := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
-        if handle >= 0
+        fileHndl := dfs.openFileRead(dfs.DEV_SD, @crcTestFile)
+        bValidHndl := (fileHndl >= 0)
+        if bValidHndl == TRUE
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            dfs.closeFileHandle(handle)
-        result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
-        utils.evaluateBool(result, @"data correct with CRC on", true)
+            dfs.closeFileHandle(fileHndl)
+        verifyResult := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
+        utils.evaluateBool(verifyResult, @"data correct with CRC on", TRUE)
 
         ' ======================================================================
         ' TEST GROUP: CMD13 Diagnostic

@@ -79,14 +79,14 @@ cwdRoot         BYTE    "/", 0
 ' Test data
 dhContent       BYTE    "DirHandle test content", 0
 
-PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsize, entryCount, foundFiles, foundDirs
+PUB go() | workerCog, status, dirHndl, dirHndl2, fileHndl1, fileHndl2, fileHndl3, p_entry, p_name, attrib, fsize, entryCount, foundFiles, foundDirs, bValidHndl
 '' Run Flash directory handle regression tests.
 ''
 ' @local workerCog - Driver worker cog ID
 ' @local status - Operation status
-' @local dh - Directory handle
-' @local dh2 - Second directory handle
-' @local h1..h5 - File handles for pool tests
+' @local dirHndl - Directory handle
+' @local dirHndl2 - Second directory handle
+' @local fileHndl1..fileHndl3 - File handles for pool tests
 ' @local p_entry - Pointer to entry buffer
 ' @local p_name - Pointer to filename string
 ' @local attrib - Entry attribute byte
@@ -125,69 +125,75 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
         ' Test: openDirectory("") enumerates root
         utils.startTest(@"openDirectory('') enumerates root")
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhEmpty)
-        utils.evaluateSubBool(dh >= 0, @"openDirectory('') succeeds", true)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhEmpty)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openDirectory('') succeeds", TRUE)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
             ' Root has: dhrootfl.dat + dhtdir/ pseudo-entry = at least 2
-            utils.evaluateSubBool(entryCount >= 2, @"root has >= 2 entries", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(entryCount >= 2, @"root has >= 2 entries", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: openDirectory(".") enumerates root
         utils.startTest(@"openDirectory(.) enumerates root")
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
-        utils.evaluateSubBool(dh >= 0, @"openDirectory(.) succeeds", true)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openDirectory(.) succeeds", TRUE)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
-            utils.evaluateSubBool(entryCount >= 2, @"root via . has >= 2 entries", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(entryCount >= 2, @"root via . has >= 2 entries", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: openDirectory("dhtdir") enumerates subdir
         utils.startTest(@"openDirectory(dhtdir) enumerates subdir")
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        utils.evaluateSubBool(dh >= 0, @"openDirectory(dhtdir) succeeds", true)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openDirectory(dhtdir) succeeds", TRUE)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
             ' dhtdir has: dh1.dat, dh2.dat, dh3.dat + dhsub/ = 4 entries
-            utils.evaluateSubBool(entryCount >= 4, @"dhtdir has >= 4 entries", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(entryCount >= 4, @"dhtdir has >= 4 entries", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: closeDirectoryHandle releases handle
         utils.startTest(@"closeDirectoryHandle releases handle slot")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
-        utils.evaluateSubBool(dh >= 0, @"first open succeeds", true)
-        dfs.closeDirectoryHandle(dh)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
-        utils.evaluateSubBool(dh >= 0, @"reopen after close succeeds", true)
-        if dh >= 0
-            dfs.closeDirectoryHandle(dh)
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"first open succeeds", TRUE)
+        dfs.closeDirectoryHandle(dirHndl)
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"reopen after close succeeds", TRUE)
+        if bValidHndl == TRUE
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: Enumerate dhtdir finds 3 files and 1 subdir
         utils.startTest(@"Enumerate dhtdir finds 3 files and 1 subdir")
         utils.setCheckCountPerTest(4)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundFiles := 0
             foundDirs := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 attrib := dfs.attributes()
@@ -195,12 +201,12 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
                     foundDirs++
                 else
                     foundFiles++
-            utils.evaluateSubBool(foundFiles >= 3, @"found >= 3 files", true)
-            utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(foundFiles >= 3, @"found >= 3 files", TRUE)
+            utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
         else
-            utils.evaluateSubBool(false, @"found >= 3 files", true)
-            utils.evaluateSubBool(false, @"found >= 1 subdir", true)
+            utils.evaluateSubBool(false, @"found >= 3 files", TRUE)
+            utils.evaluateSubBool(false, @"found >= 1 subdir", TRUE)
         utils.setCheckCountPerTest(1)
 
         ' ======================================================================
@@ -210,26 +216,28 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
 
         ' Test: fileName() returns valid names
         utils.startTest(@"fileName() returns valid names during enumeration")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 p_name := dfs.fileName()
-                utils.evaluateSubBool(strsize(p_name) > 0, @"filename non-empty", true)
+                utils.evaluateSubBool(strsize(p_name) > 0, @"filename non-empty", TRUE)
                 entryCount++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: attributes() distinguishes file vs directory
         utils.startTest(@"attributes() distinguishes file vs directory")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundFiles := 0
             foundDirs := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 attrib := dfs.attributes()
@@ -237,34 +245,36 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
                     foundDirs++
                 else
                     foundFiles++
-            utils.evaluateSubBool(foundFiles > 0, @"has file entries", true)
-            utils.evaluateSubBool(foundDirs > 0, @"has dir entries", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(foundFiles > 0, @"has file entries", TRUE)
+            utils.evaluateSubBool(foundDirs > 0, @"has dir entries", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: Nested subdirectory enumeration
         utils.startTest(@"Nested subdirectory enumeration finds file")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhSubDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhSubDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundFiles := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 attrib := dfs.attributes()
                 if (attrib & ATTR_DIRECTORY) == 0
                     foundFiles++
-            utils.evaluateSubBool(foundFiles >= 1, @"nested subdir has file", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(foundFiles >= 1, @"nested subdir has file", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
         else
-            utils.evaluateSubBool(false, @"nested subdir has file", true)
+            utils.evaluateSubBool(false, @"nested subdir has file", TRUE)
 
         ' Test: fileSize() returns correct size for files
         utils.startTest(@"fileSize() returns correct size for files")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundFiles := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 attrib := dfs.attributes()
@@ -272,8 +282,8 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
                     fsize := dfs.fileSize()
                     if fsize > 0
                         foundFiles++
-            utils.evaluateSubBool(foundFiles >= 1, @"file has size > 0", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(foundFiles >= 1, @"file has size > 0", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' ======================================================================
         ' TEST GROUP 3: Error Conditions (3 tests)
@@ -303,11 +313,12 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
         ' Test: Multiple files in subdir produce single dir pseudo-entry
         utils.startTest(@"Multiple files produce single dir entry")
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundDirs := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 attrib := dfs.attributes()
@@ -315,45 +326,48 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
                     foundDirs++
             ' dhtdir has 1 subdir (dhsub) with 1 file, should produce exactly 1 dir entry
             utils.evaluateSingleValue(foundDirs, @"exactly 1 subdir entry", 1)
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' Test: Dedup survives full enumeration (re-enumerate gives same count)
         utils.startTest(@"Re-enumerate gives same count")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         ' Second enumeration
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundFiles := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 foundFiles++
-            dfs.closeDirectoryHandle(dh)
+            dfs.closeDirectoryHandle(dirHndl)
         utils.evaluateSingleValue(foundFiles, @"second enum matches first", entryCount)
 
         ' Test: Root shows subdirectory pseudo-entry
         utils.startTest(@"Root shows subdirectory pseudo-entry")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhAbsRoot)
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhAbsRoot)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             foundDirs := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 attrib := dfs.attributes()
                 if attrib & ATTR_DIRECTORY
                     foundDirs++
-            utils.evaluateSubBool(foundDirs >= 1, @"root has dir entry", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(foundDirs >= 1, @"root has dir entry", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
 
         ' ======================================================================
         ' TEST GROUP 5: CWD Independence (3 tests)
@@ -363,66 +377,73 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
         ' Test: Handle prefix independent of CWD changes
         utils.startTest(@"Handle prefix independent of CWD change")
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)  ' Opens root
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)  ' Opens root
         ' Now change CWD to dhtdir
         dfs.changeDirectory(dfs.DEV_FLASH, @dhDirName)
         ' readDirectoryHandle should still return root entries
-        if dh >= 0
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
             ' Root has fewer entries than dhtdir (root: 2, dhtdir: 4)
             ' This verifies the handle used root prefix, not current CWD
-            utils.evaluateSubBool(entryCount >= 1, @"root entries from handle", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(entryCount >= 1, @"root entries from handle", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
 
         ' Test: Absolute path ignores CWD
         utils.startTest(@"Absolute path ignores CWD")
         dfs.changeDirectory(dfs.DEV_FLASH, @dhDirName)  ' CWD = dhtdir
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhAbsRoot)  ' Should open root
-        if dh >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhAbsRoot)  ' Should open root
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
-            utils.evaluateSubBool(entryCount >= 1, @"abs / returns root entries", true)
-            dfs.closeDirectoryHandle(dh)
+            utils.evaluateSubBool(entryCount >= 1, @"abs / returns root entries", TRUE)
+            dfs.closeDirectoryHandle(dirHndl)
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
 
         ' Test: Two handles enumerate different directories
         utils.startTest(@"Two handles enumerate different dirs")
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)       ' root
-        dh2 := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)  ' dhtdir
-        utils.evaluateSubBool(dh >= 0, @"root handle OK", true)
-        utils.evaluateSubBool(dh2 >= 0, @"dhtdir handle OK", true)
-        if dh >= 0 and dh2 >= 0
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)       ' root
+        dirHndl2 := dfs.openDirectory(dfs.DEV_FLASH, @dhDirName)  ' dhtdir
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"root handle OK", TRUE)
+        bValidHndl := (dirHndl2 >= 0)
+        utils.evaluateSubBool(bValidHndl, @"dhtdir handle OK", TRUE)
+        bValidHndl := (dirHndl >= 0 and dirHndl2 >= 0)
+        if bValidHndl == TRUE
             ' Count root entries
             entryCount := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh)
+                p_entry := dfs.readDirectoryHandle(dirHndl)
                 if p_entry == 0
                     quit
                 entryCount++
             ' Count dhtdir entries
             foundFiles := 0
             repeat
-                p_entry := dfs.readDirectoryHandle(dh2)
+                p_entry := dfs.readDirectoryHandle(dirHndl2)
                 if p_entry == 0
                     quit
                 foundFiles++
             ' Root (2 entries) and dhtdir (4 entries) should differ
-            utils.evaluateSubBool(entryCount <> foundFiles, @"different entry counts", true)
-        if dh >= 0
-            dfs.closeDirectoryHandle(dh)
-        if dh2 >= 0
-            dfs.closeDirectoryHandle(dh2)
+            utils.evaluateSubBool(entryCount <> foundFiles, @"different entry counts", TRUE)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
+            dfs.closeDirectoryHandle(dirHndl)
+        bValidHndl := (dirHndl2 >= 0)
+        if bValidHndl == TRUE
+            dfs.closeDirectoryHandle(dirHndl2)
 
         ' ======================================================================
         ' TEST GROUP 6: Handle Pool Interaction (2 tests)
@@ -437,35 +458,45 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
         utils.setCheckCountPerTest(2)
         dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
         ' Open 3 file handles (MAX_FLASH_BUFFERS=3, must be distinct files)
-        h1 := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_READ)
-        h2 := dfs.open(dfs.DEV_FLASH, @dhPoolFile2, dfs.FILEMODE_READ)
-        h3 := dfs.open(dfs.DEV_FLASH, @dhPoolFile3, dfs.FILEMODE_READ)
-        utils.evaluateSubBool(h1 >= 0 and h2 >= 0 and h3 >= 0, @"3 file handles OK", true)
+        fileHndl1 := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_READ)
+        fileHndl2 := dfs.open(dfs.DEV_FLASH, @dhPoolFile2, dfs.FILEMODE_READ)
+        fileHndl3 := dfs.open(dfs.DEV_FLASH, @dhPoolFile3, dfs.FILEMODE_READ)
+        bValidHndl := (fileHndl1 >= 0 and fileHndl2 >= 0 and fileHndl3 >= 0)
+        utils.evaluateSubBool(bValidHndl, @"3 file handles OK", TRUE)
         ' Dir handle should still work (no Flash buffer needed)
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
-        utils.evaluateSubBool(dh >= 0, @"dir handle with files open", true)
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"dir handle with files open", TRUE)
         ' Clean up
-        if h1 >= 0
-            dfs.close(h1)
-        if h2 >= 0
-            dfs.close(h2)
-        if h3 >= 0
-            dfs.close(h3)
-        if dh >= 0
-            dfs.closeDirectoryHandle(dh)
+        bValidHndl := (fileHndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.close(fileHndl1)
+        bValidHndl := (fileHndl2 >= 0)
+        if bValidHndl == TRUE
+            dfs.close(fileHndl2)
+        bValidHndl := (fileHndl3 >= 0)
+        if bValidHndl == TRUE
+            dfs.close(fileHndl3)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
+            dfs.closeDirectoryHandle(dirHndl)
         utils.setCheckCountPerTest(1)
 
         ' Test: Close dir handle frees slot for file open
         utils.startTest(@"Close dir handle frees slot for file open")
-        dh := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
-        utils.evaluateSubBool(dh >= 0, @"dir handle allocated", true)
-        if dh >= 0
-            dfs.closeDirectoryHandle(dh)
+        dirHndl := dfs.openDirectory(dfs.DEV_FLASH, @dhDot)
+        bValidHndl := (dirHndl >= 0)
+        utils.evaluateSubBool(bValidHndl, @"dir handle allocated", TRUE)
+        bValidHndl := (dirHndl >= 0)
+        if bValidHndl == TRUE
+            dfs.closeDirectoryHandle(dirHndl)
         ' Now open a file - should succeed (slot freed)
-        h1 := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_READ)
-        utils.evaluateSubBool(h1 >= 0, @"file handle after dir close", true)
-        if h1 >= 0
-            dfs.close(h1)
+        fileHndl1 := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_READ)
+        bValidHndl := (fileHndl1 >= 0)
+        utils.evaluateSubBool(bValidHndl, @"file handle after dir close", TRUE)
+        bValidHndl := (fileHndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.close(fileHndl1)
 
         ' ======================================================================
         ' Cleanup and Summary
@@ -489,7 +520,7 @@ PUB go() | workerCog, status, dh, dh2, h1, h2, h3, p_entry, p_name, attrib, fsiz
     debug(" ")
     debug("END_SESSION")
 
-PRI createTestFiles() | h
+PRI createTestFiles() | fileHndl, bValidHndl
 ' Create test file structure on Flash:
 '   dhrootfl.dat          (root level)
 '   dhtdir/dh1.dat        (subdir file)
@@ -503,55 +534,64 @@ PRI createTestFiles() | h
     dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
 
     ' Root file
-    h := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhRootFile, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
     ' dhtdir/dh1.dat - using full paths from root
-    h := dfs.open(dfs.DEV_FLASH, @dhDirFile1, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhDirFile1, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
     ' dhtdir/dh2.dat
-    h := dfs.open(dfs.DEV_FLASH, @dhDirFile2, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhDirFile2, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
     ' dhtdir/dh3.dat
-    h := dfs.open(dfs.DEV_FLASH, @dhDirFile3, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhDirFile3, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
     ' dhtdir/dhsub/sub1.dat
-    h := dfs.open(dfs.DEV_FLASH, @dhSubFile, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhSubFile, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
     ' Pool test files (distinct files needed since Flash can't open same file twice)
-    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile2, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhPoolFile2, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
-    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile3, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhPoolFile3, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
-    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile4, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhPoolFile4, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
-    h := dfs.open(dfs.DEV_FLASH, @dhPoolFile5, dfs.FILEMODE_WRITE)
-    if h >= 0
-        dfs.wr_str(h, @dhContent)
-        dfs.close(h)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @dhPoolFile5, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+        dfs.wr_str(fileHndl, @dhContent)
+        dfs.close(fileHndl)
 
     dfs.changeDirectory(dfs.DEV_FLASH, @cwdRoot)
 

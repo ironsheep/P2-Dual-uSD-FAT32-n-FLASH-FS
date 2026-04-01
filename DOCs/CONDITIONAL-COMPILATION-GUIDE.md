@@ -24,8 +24,9 @@ All feature flags control **SD card** capabilities only. The Flash filesystem is
 | `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status |
 | `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) |
 | `SD_INCLUDE_DEBUG` | Debug/diagnostic methods, CRC error getters, test hooks |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
 | `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (diagnostic) |
-| `SD_INCLUDE_ALL` | Convenience: enables RAW + REGISTERS + SPEED + DEBUG |
+| `SD_INCLUDE_ALL` | Convenience: enables RAW + REGISTERS + SPEED + DEBUG + DEFRAG |
 
 All optional features combined add approximately 3 KB to the binary (57 additional methods).
 
@@ -255,7 +256,7 @@ Inside the driver (`dual_sd_fat32_flash_fs.spin2`), each optional feature is com
 
 ### SD_INCLUDE_ALL Expansion
 
-The driver expands `SD_INCLUDE_ALL` into the four individual flags:
+The driver expands `SD_INCLUDE_ALL` into the five individual flags:
 
 ```spin2
 #ifdef SD_INCLUDE_ALL
@@ -270,6 +271,9 @@ The driver expands `SD_INCLUDE_ALL` into the four individual flags:
 #endif
 #ifndef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_DEBUG
+#endif
+#ifndef SD_INCLUDE_DEFRAG
+#define SD_INCLUDE_DEFRAG
 #endif
 #endif
 ```
@@ -511,6 +515,50 @@ PUB go() | workerCog, matchCount, mismatchCount
     mismatchCount := dfs.getCRCMismatchCount()
     debug("CRC match=", udec_(matchCount), " mismatch=", udec_(mismatchCount))
 ```
+
+### Application with defragmentation
+
+```spin2
+#pragma exportdef SD_INCLUDE_DEFRAG
+
+OBJ
+    dfs : "dual_sd_fat32_flash_fs"
+
+PUB go() | workerCog, handle, frags, result
+    workerCog := dfs.init()
+    dfs.mount(dfs.DEV_SD)
+
+    ' Check fragmentation
+    frags := dfs.fileFragments(dfs.DEV_SD, @"BIGFILE.DAT")
+    if frags > 1
+        ' Compact the file (file must be closed)
+        result := dfs.compactFile(dfs.DEV_SD, @"BIGFILE.DAT")
+
+    ' Or create a file pre-allocated for contiguous writes
+    handle := dfs.createFileContiguous(dfs.DEV_SD, @"STREAM.BIN", 1_000_000)
+    ' ... write up to 1 MB of data — guaranteed contiguous ...
+    dfs.closeFileHandle(handle)
+
+    dfs.unmount(dfs.DEV_SD)
+    dfs.stop()
+```
+
+**SD_INCLUDE_DEFRAG methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `fileFragments(dev, path)` | Count non-contiguous fragments (1 = contiguous, 0 = empty) |
+| `isFileContiguous(dev, path)` | TRUE if file has exactly 1 fragment |
+| `createFileContiguous(dev, path, size)` | Create file with pre-allocated contiguous cluster chain |
+| `compactFile(dev, path)` | Relocate fragmented file to contiguous clusters |
+
+**SD_INCLUDE_DEFRAG error codes:**
+
+| Error Code | Value | Meaning |
+|-----------|-------|---------|
+| `E_NO_CONTIGUOUS_SPACE` | -131 | No contiguous run of sufficient length exists |
+| `E_FILE_OPEN_FOR_COMPACT` | -132 | File is open (cannot compact while open) |
+| `E_VERIFY_FAILED` | -133 | Read-back verification failed after compact |
 
 ---
 

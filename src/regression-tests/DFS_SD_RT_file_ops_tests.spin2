@@ -111,7 +111,7 @@ readBuffer_guard BYTE   0[GUARD_SIZE]
 sectorBuffer    BYTE    0[BYTES_PER_SECTOR]        ' For reading raw sectors during diagnostics
 sectorBuffer_guard BYTE 0[GUARD_SIZE]
 
-PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_sec, i, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
+PUB go() | workerCog, opStatus, status, handle, hndl1, hndl2, hndl3, fileSize, bytesWritten, bytesRead, root_sec, idx, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi, bValidHndl
 '' Main entry point for file operations regression tests
 ''
 '' Tests file create, open, close, delete, rename using V3 handle API
@@ -126,8 +126,8 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    opStatus := dfs.mount(dfs.DEV_SD)
+    if opStatus <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -143,14 +143,14 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
 
         ' WORKAROUND: Clear corrupted root directory if detected
         debug("  CLEARING ROOT DIRECTORY...")
-        result := dfs.debugClearRootDir()
-        debug("  Clear result: ", sdec_(result))
+        opStatus := dfs.debugClearRootDir()
+        debug("  Clear result: ", sdec_(opStatus))
 
         ' EARLY DIAGNOSTIC: Test multiple sectors to find pattern
         debug("  EARLY-DIAG: Testing sector reads...")
         ' Test sectors: 0, 1, 10, 100, 1000, then root_sec
-        repeat i from 0 to 5
-            case i
+        repeat idx from 0 to 5
+            case idx
                 0: root_sec := 0
                 1: root_sec := 1
                 2: root_sec := 10
@@ -159,7 +159,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
                 5: root_sec := dfs.debugGetRootSec()
             bytefill(@sectorBuffer, DIAG_FILL_EE, BYTES_PER_SECTOR)
             utils.initGuard(@sectorBuffer_guard)
-            result := dfs.readSectorRaw(root_sec, @sectorBuffer)
+            opStatus := dfs.readSectorRaw(root_sec, @sectorBuffer)
             utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
             debug("  Sector ", udec_(root_sec), ": $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]))
             ' For high sectors, also show internal diagnostic data
@@ -171,8 +171,8 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
                 debug("    DIAG: STREAMER: $", uhex_byte_(d_b0), " $", uhex_byte_(d_b1), " $", uhex_byte_(d_b2), " $", uhex_byte_(d_b3), " spi_period=", udec_(d_spi))
                 ' Now read same sector using slow byte-by-byte method for comparison
                 bytefill(@sectorBuffer, DIAG_FILL_DD, BYTES_PER_SECTOR)
-                result := dfs.debugReadSectorSlow(root_sec, @sectorBuffer)
-                debug("    DIAG: SLOW READ: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " result=", sdec_(result))
+                opStatus := dfs.debugReadSectorSlow(root_sec, @sectorBuffer)
+                debug("    DIAG: SLOW READ: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " result=", sdec_(opStatus))
                 ' Dump first 64 bytes (2 directory entries) to understand structure
                 debug("    DIAG: Entry0 (0-31): [", lstr_(@sectorBuffer, LABEL_LENGTH), "] attr=$", uhex_byte_(sectorBuffer[DIR_ENTRY_ATTR_OFFSET]))
                 debug("    DIAG: Entry1 (32-63): [", lstr_(@sectorBuffer + DIR_ENTRY_SIZE, LABEL_LENGTH), "] attr=$", uhex_byte_(sectorBuffer[DIR_ENTRY_SIZE + DIR_ENTRY_ATTR_OFFSET]))
@@ -194,14 +194,15 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         debug("  DEBUG: Creating file [", zstr_(@testfile1), "]")
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
         debug("  DEBUG: createFileNew returned handle=", sdec_(handle))
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
 
         ' Write content and close file (setup for other tests)
-        if handle >= 0
+        if bValidHndl == TRUE
             bytesWritten := dfs.writeHandle(handle, @testContent1, strsize(@testContent1))
             debug("  Wrote ", udec_(bytesWritten), " bytes")
-            result := dfs.closeFileHandle(handle)
-            debug("  File closed, result=", sdec_(result))
+            opStatus := dfs.closeFileHandle(handle)
+            debug("  File closed, result=", sdec_(opStatus))
         else
             debug("  SKIP: handle invalid, skipping write/close")
 
@@ -214,9 +215,9 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         debug("  DIAG: Testing basic sector read (MBR)...")
         bytefill(@sectorBuffer, DIAG_FILL_AA, BYTES_PER_SECTOR)
         utils.initGuard(@sectorBuffer_guard)
-        result := dfs.readSectorRaw(0, @sectorBuffer)
+        opStatus := dfs.readSectorRaw(0, @sectorBuffer)
         utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
-        debug("  DIAG: readSectorRaw(0) returned ", sdec_(result))
+        debug("  DIAG: readSectorRaw(0) returned ", sdec_(opStatus))
         debug("  DIAG: MBR bytes 510-511: $", uhex_byte_(sectorBuffer[MBR_SIG_OFFSET_510]), " $", uhex_byte_(sectorBuffer[MBR_SIG_OFFSET_511]))
         if sectorBuffer[MBR_SIG_OFFSET_510] == MBR_SIG_BYTE_55 and sectorBuffer[MBR_SIG_OFFSET_511] == MBR_SIG_BYTE_AA
             debug("  DIAG: MBR signature OK!")
@@ -227,7 +228,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         debug("  DIAG: Reading sector 1...")
         bytefill(@sectorBuffer, DIAG_FILL_CC, BYTES_PER_SECTOR)
         utils.initGuard(@sectorBuffer_guard)
-        result := dfs.readSectorRaw(1, @sectorBuffer)
+        opStatus := dfs.readSectorRaw(1, @sectorBuffer)
         utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
         debug("  DIAG: Sector 1 first bytes: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]))
 
@@ -236,9 +237,9 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         debug("  DIAG: root_sec = ", udec_(root_sec), " ($", uhex_long_(root_sec), ")")
         bytefill(@sectorBuffer, DIAG_FILL_BB, BYTES_PER_SECTOR)
         utils.initGuard(@sectorBuffer_guard)
-        result := dfs.readSectorRaw(root_sec, @sectorBuffer)
+        opStatus := dfs.readSectorRaw(root_sec, @sectorBuffer)
         utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
-        debug("  DIAG: readSectorRaw(root) returned ", sdec_(result))
+        debug("  DIAG: readSectorRaw(root) returned ", sdec_(opStatus))
         debug("  DIAG: First 8 bytes: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " $", uhex_byte_(sectorBuffer[4]), " $", uhex_byte_(sectorBuffer[5]), " $", uhex_byte_(sectorBuffer[6]), " $", uhex_byte_(sectorBuffer[7]))
         ' Check if buffer was written at all
         if sectorBuffer[0] == DIAG_FILL_BB
@@ -251,11 +252,11 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
             debug("  DIAG: First byte is $", uhex_byte_(sectorBuffer[0]))
 
         ' Quick sanity check - verify we can reopen the file we just created
-        result := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-        if result >= 0
-            dfs.closeFileHandle(result)
+        opStatus := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+        if opStatus >= 0
+            dfs.closeFileHandle(opStatus)
         else
-            debug("  WARNING: File not found after close! Error=", sdec_(result))
+            debug("  WARNING: File not found after close! Error=", sdec_(opStatus))
 
         utils.startTest(@"createFileNew() fails if file already exists")
         debug("  DEBUG: Attempting to create same file again...")
@@ -270,26 +271,27 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
 
         utils.startTest(@"openFileRead() opens existing file")
         handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead()", TRUE)
 
         utils.startTest(@"fileSizeHandle() returns correct size")
-        if handle >= 0
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", strsize(@testContent1))
 
         utils.startTest(@"readHandle() returns correct content")
-        if handle >= 0
+        if bValidHndl == TRUE
             bytefill(@readBuffer, 0, READ_BUF_SIZE)
             utils.initGuard(@readBuffer_guard)
             bytesRead := dfs.readHandle(handle, @readBuffer, strsize(@testContent1))
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             utils.evaluateSubValue(bytesRead, @"bytesRead", strsize(@testContent1))
-            utils.evaluateSubBool(strcomp(@readBuffer, @testContent1), @"content matches", true)
+            utils.evaluateSubBool(strcomp(@readBuffer, @testContent1), @"content matches", TRUE)
 
         utils.startTest(@"closeFileHandle() on open handle")
-        if handle >= 0
-            result := dfs.closeFileHandle(handle)
-            utils.evaluateSingleValue(result, @"closeFileHandle()", dfs.SUCCESS)
+        if bValidHndl == TRUE
+            opStatus := dfs.closeFileHandle(handle)
+            utils.evaluateSingleValue(opStatus, @"closeFileHandle()", dfs.SUCCESS)
 
         utils.startTest(@"openFileRead() fails for non-existent file")
         handle := dfs.openFileRead(dfs.DEV_SD, @"NOEXIST.TXT")
@@ -303,8 +305,9 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         ' Create a file to delete
         utils.startTest(@"Create file to delete")
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile2)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew()", TRUE)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @"Delete me", WRITE_SIZE_9)
             dfs.closeFileHandle(handle)
 
@@ -318,7 +321,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
 
         utils.startTest(@"deleteFile() fails for non-existent file")
         status := dfs.deleteFile(dfs.DEV_SD, @testfile2)
-        utils.evaluateBool(status < 0, @"deleteFile() non-existent", true)
+        utils.evaluateBool(status < 0, @"deleteFile() non-existent", TRUE)
 
         ' ----------------------------------
         ' TEST GROUP: File rename
@@ -338,17 +341,18 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
 
         utils.startTest(@"Renamed file is accessible")
         handle := dfs.openFileRead(dfs.DEV_SD, @renamedFile)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead() new name", true)
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead() new name", TRUE)
 
         utils.startTest(@"Content preserved after rename")
-        if handle >= 0
+        if bValidHndl == TRUE
             fileSize := dfs.fileSizeHandle(handle)
             utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", strsize(@testContent1))
             dfs.closeFileHandle(handle)
 
         utils.startTest(@"rename() fails for non-existent source")
         status := dfs.rename(dfs.DEV_SD, @"NOFILE.TXT", @"OTHER.TXT")
-        utils.evaluateBool(status < 0, @"rename() non-existent", true)
+        utils.evaluateBool(status < 0, @"rename() non-existent", TRUE)
 
         ' ----------------------------------
         ' TEST GROUP: Multiple file creation
@@ -363,20 +367,23 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         utils.setCheckCountPerTest(3)
 
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() file1", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() file1", TRUE)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @"File 1 content", WRITE_SIZE_14)
             dfs.closeFileHandle(handle)
 
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile2)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() file2", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() file2", TRUE)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @"File 2 content", WRITE_SIZE_14)
             dfs.closeFileHandle(handle)
 
         handle := dfs.createFileNew(dfs.DEV_SD, @testfile3)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew() file3", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"createFileNew() file3", TRUE)
+        if bValidHndl == TRUE
             dfs.writeHandle(handle, @"File 3 content", WRITE_SIZE_14)
             dfs.closeFileHandle(handle)
 
@@ -384,18 +391,21 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         utils.setCheckCountPerTest(3)
 
         handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead() file1", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead() file1", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
 
         handle := dfs.openFileRead(dfs.DEV_SD, @testfile2)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead() file2", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead() file2", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
 
         handle := dfs.openFileRead(dfs.DEV_SD, @testfile3)
-        utils.evaluateSubBool(handle >= 0, @"openFileRead() file3", true)
-        if handle >= 0
+        bValidHndl := (handle >= 0)
+        utils.evaluateSubBool(bValidHndl, @"openFileRead() file3", TRUE)
+        if bValidHndl == TRUE
             dfs.closeFileHandle(handle)
 
         ' ----------------------------------
@@ -404,46 +414,46 @@ PUB go() | workerCog, result, status, handle, h1, h2, h3, fileSize, bytesWritten
         utils.startTestGroup(@"Multiple Simultaneous Handles")
 
         utils.startTest(@"Open all 3 files simultaneously")
-        h1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-        h2 := dfs.openFileRead(dfs.DEV_SD, @testfile2)
-        h3 := dfs.openFileRead(dfs.DEV_SD, @testfile3)
+        hndl1 := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+        hndl2 := dfs.openFileRead(dfs.DEV_SD, @testfile2)
+        hndl3 := dfs.openFileRead(dfs.DEV_SD, @testfile3)
 
-        utils.evaluateSubBool(h1 >= 0, @"handle 1 valid", true)
-        utils.evaluateSubBool(h2 >= 0, @"handle 2 valid", true)
-        utils.evaluateSubBool(h3 >= 0, @"handle 3 valid", true)
-        utils.evaluateSubBool(h1 <> h2 and h2 <> h3, @"handles unique", true)
+        utils.evaluateSubBool(hndl1 >= 0, @"handle 1 valid", TRUE)
+        utils.evaluateSubBool(hndl2 >= 0, @"handle 2 valid", TRUE)
+        utils.evaluateSubBool(hndl3 >= 0, @"handle 3 valid", TRUE)
+        utils.evaluateSubBool(hndl1 <> hndl2 and hndl2 <> hndl3, @"handles unique", TRUE)
 
         utils.startTest(@"Read from all 3 and verify correct data")
         utils.setCheckCountPerTest(3)
 
-        if h1 >= 0
+        if hndl1 >= 0
             bytefill(@readBuffer, 0, READ_BUF_SIZE)
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(h1, @readBuffer, WRITE_SIZE_14)
+            bytesRead := dfs.readHandle(hndl1, @readBuffer, WRITE_SIZE_14)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            utils.evaluateSubBool(strcomp(@readBuffer, @"File 1 content"), @"file1 content", true)
+            utils.evaluateSubBool(strcomp(@readBuffer, @"File 1 content"), @"file1 content", TRUE)
 
-        if h2 >= 0
+        if hndl2 >= 0
             bytefill(@readBuffer, 0, READ_BUF_SIZE)
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(h2, @readBuffer, WRITE_SIZE_14)
+            bytesRead := dfs.readHandle(hndl2, @readBuffer, WRITE_SIZE_14)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            utils.evaluateSubBool(strcomp(@readBuffer, @"File 2 content"), @"file2 content", true)
+            utils.evaluateSubBool(strcomp(@readBuffer, @"File 2 content"), @"file2 content", TRUE)
 
-        if h3 >= 0
+        if hndl3 >= 0
             bytefill(@readBuffer, 0, READ_BUF_SIZE)
             utils.initGuard(@readBuffer_guard)
-            bytesRead := dfs.readHandle(h3, @readBuffer, WRITE_SIZE_14)
+            bytesRead := dfs.readHandle(hndl3, @readBuffer, WRITE_SIZE_14)
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-            utils.evaluateSubBool(strcomp(@readBuffer, @"File 3 content"), @"file3 content", true)
+            utils.evaluateSubBool(strcomp(@readBuffer, @"File 3 content"), @"file3 content", TRUE)
 
         ' Close all handles
-        if h1 >= 0
-            dfs.closeFileHandle(h1)
-        if h2 >= 0
-            dfs.closeFileHandle(h2)
-        if h3 >= 0
-            dfs.closeFileHandle(h3)
+        if hndl1 >= 0
+            dfs.closeFileHandle(hndl1)
+        if hndl2 >= 0
+            dfs.closeFileHandle(hndl2)
+        if hndl3 >= 0
+            dfs.closeFileHandle(hndl3)
 
         ' ----------------------------------
         ' TEST GROUP: Type Mismatch Errors

@@ -464,8 +464,6 @@ PUB format(p_str, p_args) | idx, chr, asc, fld, digits
 '' @local asc - ASCII value for escape sequences
 '' @local fld - field width
 '' @local digits - precision digits
-debug("FMT: [", zstr_(p_str), "]")
-
   if sLock <> -1
     repeat until locktry(sLock)
 
@@ -523,8 +521,6 @@ debug("FMT: [", zstr_(p_str), "]")
 
   if sLock <> -1
     lockrel(sLock)
-
-  debug("FMT: done")
 
 PRI get_nargs(p_str) : p_str1, val1, val2 | chr, sign
 ' Parse one or two numbers from string in n, -n, n.n, or -n.n format

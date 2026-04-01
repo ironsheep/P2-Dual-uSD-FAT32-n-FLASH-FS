@@ -40,6 +40,7 @@ CON
      FL_READ_COUNT        = 4    ' Bytes to read in Flash round-trip
      FL_TEST_FILE_SIZE    = 100  ' Size for Flash create_file test
      SD_TAG_LENGTH        = 3    ' Length of "SD1", "SD2", "SD3" tags
+     GUARD_SIZE           = 16   ' Guard bytes after each buffer
 
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_DEBUG
@@ -85,9 +86,9 @@ hp_fl_file3     BYTE    "HPFL3", 0
 hp_fl_file4     BYTE    "HPFL4", 0
 
 readBuffer      BYTE    0[512]
-readBuf_guard   BYTE    0[16]
+readBuf_guard   BYTE    0[GUARD_SIZE]
 
-PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo, h1, h2, h3, h4, h5, h6, h7, errorCount
+PUB go() | opStatus, mountStatus, freeSpace, fileHndl, bytesRead, bytesWritten, pLabel, sn_hi, sn_lo, hndl1, hndl2, hndl3, hndl4, hndl5, hndl6, hndl7, errorCount, bValidHndl
 '' Main entry point for dual-device verification tests
 ''
 '' Tests dual_sd_fat32_flash_fs.spin2 Flash mount, serial number, bus switching,
@@ -105,16 +106,16 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.startTestGroup(@"SD regression: init and mount")
 
     utils.startTest(@"init() with valid pins")
-    result := dfs.init()
-    utils.evaluateRange(result, @"init() returns cog ID", 0, dfs.MAX_P2_COGS - 1)
+    opStatus := dfs.init()
+    utils.evaluateRange(opStatus, @"init() returns cog ID", 0, dfs.MAX_P2_COGS - 1)
 
     utils.startTest(@"mount(DEV_SD)")
-    status := dfs.mount(dfs.DEV_SD)
-    utils.evaluateSingleValue(status, @"mount(DEV_SD)", dfs.SUCCESS)
+    mountStatus := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(mountStatus, @"mount(DEV_SD)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_SD) after mount")
-    result := dfs.mounted(dfs.DEV_SD)
-    utils.evaluateBool(result, @"mounted(DEV_SD)", true)
+    opStatus := dfs.mounted(dfs.DEV_SD)
+    utils.evaluateBool(opStatus, @"mounted(DEV_SD)", TRUE)
 
     ' Save SD free space for later regression check
     freeSpace := dfs.freeSpace(dfs.DEV_SD)
@@ -127,20 +128,20 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.startTestGroup(@"Flash mount")
 
     utils.startTest(@"mounted(DEV_FLASH) before mount")
-    result := dfs.mounted(dfs.DEV_FLASH)
-    utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
+    opStatus := dfs.mounted(dfs.DEV_FLASH)
+    utils.evaluateBool(opStatus, @"mounted(DEV_FLASH)", FALSE)
 
     utils.startTest(@"mount(DEV_FLASH)")
-    status := dfs.mount(dfs.DEV_FLASH)
-    utils.evaluateSingleValue(status, @"mount(DEV_FLASH)", dfs.SUCCESS)
+    mountStatus := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(mountStatus, @"mount(DEV_FLASH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_FLASH) after mount")
-    result := dfs.mounted(dfs.DEV_FLASH)
-    utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
+    opStatus := dfs.mounted(dfs.DEV_FLASH)
+    utils.evaluateBool(opStatus, @"mounted(DEV_FLASH)", TRUE)
 
     utils.startTest(@"mounted(DEV_SD) still true after Flash mount")
-    result := dfs.mounted(dfs.DEV_SD)
-    utils.evaluateBool(result, @"mounted(DEV_SD)", true)
+    opStatus := dfs.mounted(dfs.DEV_SD)
+    utils.evaluateBool(opStatus, @"mounted(DEV_SD)", TRUE)
 
     ' ----------------------------------
     ' TEST GROUP: Flash serial number
@@ -149,7 +150,7 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
 
     utils.startTest(@"serial_number(DEV_FLASH) returns non-zero")
     sn_hi, sn_lo := dfs.serial_number(dfs.DEV_FLASH)
-    utils.evaluateBool(sn_hi <> 0 or sn_lo <> 0, @"serial_number non-zero", true)
+    utils.evaluateBool(sn_hi <> 0 or sn_lo <> 0, @"serial_number non-zero", TRUE)
 
     debug(" ")
     debug("  Flash Serial Number: $", uhex_(sn_hi), "_", uhex_(sn_lo))
@@ -160,8 +161,8 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.startTestGroup(@"SD ops after Flash mount (bus switching)")
 
     utils.startTest(@"freeSpace(DEV_SD) still valid")
-    result := dfs.freeSpace(dfs.DEV_SD)
-    utils.evaluateRange(result, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
+    opStatus := dfs.freeSpace(dfs.DEV_SD)
+    utils.evaluateRange(opStatus, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
 
     utils.startTest(@"volumeLabel(DEV_SD) still works")
     pLabel := dfs.volumeLabel(dfs.DEV_SD)
@@ -171,27 +172,29 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     dfs.deleteFile(dfs.DEV_SD, @testfile1)
 
     utils.startTest(@"createFileNew(DEV_SD) after Flash mount")
-    handle := dfs.createFileNew(dfs.DEV_SD, @testfile1)
-    utils.evaluateRange(handle, @"createFileNew() handle", 0, dfs.MAX_OPEN_FILES - 1)
+    fileHndl := dfs.createFileNew(dfs.DEV_SD, @testfile1)
+    utils.evaluateRange(fileHndl, @"createFileNew() handle", 0, dfs.MAX_OPEN_FILES - 1)
 
-    if handle >= 0
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
       utils.startTest(@"writeHandle() test data")
-      bytesWritten := dfs.writeHandle(handle, @testdata, strsize(@testdata))
+      bytesWritten := dfs.writeHandle(fileHndl, @testdata, strsize(@testdata))
       utils.evaluateSingleValue(bytesWritten, @"writeHandle() bytes", strsize(@testdata))
 
       utils.startTest(@"closeFileHandle() after write")
-      result := dfs.closeFileHandle(handle)
-      utils.evaluateSingleValue(result, @"closeFileHandle()", dfs.SUCCESS)
+      opStatus := dfs.closeFileHandle(fileHndl)
+      utils.evaluateSingleValue(opStatus, @"closeFileHandle()", dfs.SUCCESS)
 
     utils.startTest(@"openFileRead(DEV_SD) after Flash mount")
-    handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-    utils.evaluateRange(handle, @"openFileRead() handle", 0, dfs.MAX_OPEN_FILES - 1)
+    fileHndl := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+    utils.evaluateRange(fileHndl, @"openFileRead() handle", 0, dfs.MAX_OPEN_FILES - 1)
 
-    if handle >= 0
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
       utils.startTest(@"readHandle() returns correct data")
       utils.initGuard(@readBuf_guard)
       bytefill(@readBuffer, 0, BUFFER_SIZE)
-      bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+      bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
       utils.checkGuard(@readBuf_guard, @"readBuf guard")
       utils.evaluateSingleValue(bytesRead, @"readHandle() bytes", strsize(@testdata))
 
@@ -199,8 +202,8 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
       utils.evaluateBufferMatch(@readBuffer, @testdata, strsize(@testdata), @"read vs written")
 
       utils.startTest(@"closeFileHandle() after read")
-      result := dfs.closeFileHandle(handle)
-      utils.evaluateSingleValue(result, @"closeFileHandle()", dfs.SUCCESS)
+      opStatus := dfs.closeFileHandle(fileHndl)
+      utils.evaluateSingleValue(opStatus, @"closeFileHandle()", dfs.SUCCESS)
 
     ' Clean up
     dfs.deleteFile(dfs.DEV_SD, @testfile1)
@@ -211,20 +214,20 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.startTestGroup(@"Flash unmount and remount")
 
     utils.startTest(@"unmount(DEV_FLASH)")
-    status := dfs.unmount(dfs.DEV_FLASH)
-    utils.evaluateSingleValue(status, @"unmount(DEV_FLASH)", dfs.SUCCESS)
+    mountStatus := dfs.unmount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(mountStatus, @"unmount(DEV_FLASH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_FLASH) after unmount")
-    result := dfs.mounted(dfs.DEV_FLASH)
-    utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
+    opStatus := dfs.mounted(dfs.DEV_FLASH)
+    utils.evaluateBool(opStatus, @"mounted(DEV_FLASH)", FALSE)
 
     utils.startTest(@"mount(DEV_FLASH) again")
-    status := dfs.mount(dfs.DEV_FLASH)
-    utils.evaluateSingleValue(status, @"mount(DEV_FLASH)", dfs.SUCCESS)
+    mountStatus := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(mountStatus, @"mount(DEV_FLASH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_FLASH) after remount")
-    result := dfs.mounted(dfs.DEV_FLASH)
-    utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
+    opStatus := dfs.mounted(dfs.DEV_FLASH)
+    utils.evaluateBool(opStatus, @"mounted(DEV_FLASH)", TRUE)
 
     ' ----------------------------------
     ' TEST GROUP: mount(DEV_BOTH) in one call
@@ -235,24 +238,24 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     dfs.unmount(dfs.DEV_BOTH)
 
     utils.startTest(@"mounted(DEV_SD) after unmount both")
-    result := dfs.mounted(dfs.DEV_SD)
-    utils.evaluateBool(result, @"mounted(DEV_SD)", false)
+    opStatus := dfs.mounted(dfs.DEV_SD)
+    utils.evaluateBool(opStatus, @"mounted(DEV_SD)", FALSE)
 
     utils.startTest(@"mounted(DEV_FLASH) after unmount both")
-    result := dfs.mounted(dfs.DEV_FLASH)
-    utils.evaluateBool(result, @"mounted(DEV_FLASH)", false)
+    opStatus := dfs.mounted(dfs.DEV_FLASH)
+    utils.evaluateBool(opStatus, @"mounted(DEV_FLASH)", FALSE)
 
     utils.startTest(@"mount(DEV_BOTH)")
-    status := dfs.mount(dfs.DEV_BOTH)
-    utils.evaluateSingleValue(status, @"mount(DEV_BOTH)", dfs.SUCCESS)
+    mountStatus := dfs.mount(dfs.DEV_BOTH)
+    utils.evaluateSingleValue(mountStatus, @"mount(DEV_BOTH)", dfs.SUCCESS)
 
     utils.startTest(@"mounted(DEV_SD) after mount both")
-    result := dfs.mounted(dfs.DEV_SD)
-    utils.evaluateBool(result, @"mounted(DEV_SD)", true)
+    opStatus := dfs.mounted(dfs.DEV_SD)
+    utils.evaluateBool(opStatus, @"mounted(DEV_SD)", TRUE)
 
     utils.startTest(@"mounted(DEV_FLASH) after mount both")
-    result := dfs.mounted(dfs.DEV_FLASH)
-    utils.evaluateBool(result, @"mounted(DEV_FLASH)", true)
+    opStatus := dfs.mounted(dfs.DEV_FLASH)
+    utils.evaluateBool(opStatus, @"mounted(DEV_FLASH)", TRUE)
 
     ' ----------------------------------
     ' TEST GROUP: SD integrity after Flash file operations
@@ -261,49 +264,52 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
 
     ' Setup: write an SD file, then do heavy Flash I/O
     dfs.deleteFile(dfs.DEV_SD, @sd_regfile)
-    handle := dfs.createFileNew(dfs.DEV_SD, @sd_regfile)
-    if handle < 0
-      debug("SETUP ERROR: createFileNew(SD) failed: ", sdec_(handle))
+    fileHndl := dfs.createFileNew(dfs.DEV_SD, @sd_regfile)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl <> TRUE
+      debug("SETUP ERROR: createFileNew(SD) failed: ", sdec_(fileHndl))
       errorCount++
     else
-      bytesWritten := dfs.writeHandle(handle, @sd_regdata, strsize(@sd_regdata))
+      bytesWritten := dfs.writeHandle(fileHndl, @sd_regdata, strsize(@sd_regdata))
       if bytesWritten <> strsize(@sd_regdata)
         debug("SETUP ERROR: writeHandle(SD) wrote ", sdec_(bytesWritten), " expected ", udec_(strsize(@sd_regdata)))
         errorCount++
-      dfs.closeFileHandle(handle)
+      dfs.closeFileHandle(fileHndl)
 
     ' Setup: create Flash file, write data, seek, delete, rename
     dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile)
     dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile2)
     dfs.deleteFile(dfs.DEV_FLASH, @fl_renamed)
 
-    handle := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_WRITE)
-    if handle < 0
-      debug("SETUP ERROR: open(Flash, WRITE) failed: ", sdec_(handle))
+    fileHndl := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl <> TRUE
+      debug("SETUP ERROR: open(Flash, WRITE) failed: ", sdec_(fileHndl))
       errorCount++
     else
-      dfs.writeHandle(handle, @fl_testdata, strsize(@fl_testdata))
-      dfs.closeFileHandle(handle)
+      dfs.writeHandle(fileHndl, @fl_testdata, strsize(@fl_testdata))
+      dfs.closeFileHandle(fileHndl)
 
-    handle := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_READ)
-    if handle < 0
-      debug("SETUP ERROR: open(Flash, READ) failed: ", sdec_(handle))
+    fileHndl := dfs.open(dfs.DEV_FLASH, @fl_testfile, dfs.FILEMODE_READ)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl <> TRUE
+      debug("SETUP ERROR: open(Flash, READ) failed: ", sdec_(fileHndl))
       errorCount++
     else
-      dfs.seekHandle(handle, 6)
+      dfs.seekHandle(fileHndl, 6)
       bytefill(@readBuffer, 0, FL_READ_BUF_SIZE)
-      dfs.readHandle(handle, @readBuffer, FL_READ_COUNT)
-      dfs.closeFileHandle(handle)
+      dfs.readHandle(fileHndl, @readBuffer, FL_READ_COUNT)
+      dfs.closeFileHandle(fileHndl)
 
     dfs.deleteFile(dfs.DEV_FLASH, @fl_testfile)
 
-    status := dfs.create_file(dfs.DEV_FLASH, @fl_testfile2, $00, FL_TEST_FILE_SIZE)
-    if status < 0
-      debug("SETUP ERROR: create_file(Flash) failed: ", sdec_(status))
+    opStatus := dfs.create_file(dfs.DEV_FLASH, @fl_testfile2, $00, FL_TEST_FILE_SIZE)
+    if opStatus < 0
+      debug("SETUP ERROR: create_file(Flash) failed: ", sdec_(opStatus))
       errorCount++
-    status := dfs.rename(dfs.DEV_FLASH, @fl_testfile2, @fl_renamed)
-    if status < 0
-      debug("SETUP ERROR: rename(Flash) failed: ", sdec_(status))
+    opStatus := dfs.rename(dfs.DEV_FLASH, @fl_testfile2, @fl_renamed)
+    if opStatus < 0
+      debug("SETUP ERROR: rename(Flash) failed: ", sdec_(opStatus))
       errorCount++
     dfs.deleteFile(dfs.DEV_FLASH, @fl_renamed)
 
@@ -313,19 +319,20 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     utils.evaluateRange(freeSpace, @"freeSpace(DEV_SD)", 1, $7FFF_FFFF)
 
     utils.startTest(@"openFileRead(SD) still works")
-    handle := dfs.openFileRead(dfs.DEV_SD, @sd_regfile)
-    utils.evaluateRange(handle, @"openFileRead(SD) handle", 0, dfs.MAX_OPEN_FILES - 1)
+    fileHndl := dfs.openFileRead(dfs.DEV_SD, @sd_regfile)
+    utils.evaluateRange(fileHndl, @"openFileRead(SD) handle", 0, dfs.MAX_OPEN_FILES - 1)
 
-    if handle >= 0
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
       utils.startTest(@"readHandle(SD) after Flash ops")
       bytefill(@readBuffer, 0, BUFFER_SIZE)
-      bytesRead := dfs.readHandle(handle, @readBuffer, BUFFER_SIZE)
+      bytesRead := dfs.readHandle(fileHndl, @readBuffer, BUFFER_SIZE)
       utils.evaluateSingleValue(bytesRead, @"readHandle(SD) bytes", strsize(@sd_regdata))
 
       utils.startTest(@"SD data matches after Flash ops")
       utils.evaluateBufferMatch(@readBuffer, @sd_regdata, strsize(@sd_regdata), @"SD read vs written")
 
-      dfs.closeFileHandle(handle)
+      dfs.closeFileHandle(fileHndl)
 
     ' Clean up
     dfs.deleteFile(dfs.DEV_SD, @sd_regfile)
@@ -339,102 +346,110 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     dfs.deleteFile(dfs.DEV_SD, @hp_sd_file1)
     dfs.deleteFile(dfs.DEV_SD, @hp_sd_file2)
     dfs.deleteFile(dfs.DEV_SD, @hp_sd_file3)
-    handle := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file1)
-    if handle >= 0
-      dfs.writeHandle(handle, @"SD1", SD_TAG_LENGTH)
-      dfs.closeFileHandle(handle)
-    handle := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file2)
-    if handle >= 0
-      dfs.writeHandle(handle, @"SD2", SD_TAG_LENGTH)
-      dfs.closeFileHandle(handle)
-    handle := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file3)
-    if handle >= 0
-      dfs.writeHandle(handle, @"SD3", SD_TAG_LENGTH)
-      dfs.closeFileHandle(handle)
+    fileHndl := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file1)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.writeHandle(fileHndl, @"SD1", SD_TAG_LENGTH)
+      dfs.closeFileHandle(fileHndl)
+    fileHndl := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file2)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.writeHandle(fileHndl, @"SD2", SD_TAG_LENGTH)
+      dfs.closeFileHandle(fileHndl)
+    fileHndl := dfs.createFileNew(dfs.DEV_SD, @hp_sd_file3)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.writeHandle(fileHndl, @"SD3", SD_TAG_LENGTH)
+      dfs.closeFileHandle(fileHndl)
 
     dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file1)
     dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file2)
     dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file3)
     dfs.deleteFile(dfs.DEV_FLASH, @hp_fl_file4)
-    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_WRITE)
-    if handle >= 0
-      dfs.wr_str(handle, @"FL1")
-      dfs.close(handle)
-    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_WRITE)
-    if handle >= 0
-      dfs.wr_str(handle, @"FL2")
-      dfs.close(handle)
-    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_WRITE)
-    if handle >= 0
-      dfs.wr_str(handle, @"FL3")
-      dfs.close(handle)
-    handle := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_WRITE)
-    if handle >= 0
-      dfs.wr_str(handle, @"FL4")
-      dfs.close(handle)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.wr_str(fileHndl, @"FL1")
+      dfs.close(fileHndl)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.wr_str(fileHndl, @"FL2")
+      dfs.close(fileHndl)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.wr_str(fileHndl, @"FL3")
+      dfs.close(fileHndl)
+    fileHndl := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_WRITE)
+    bValidHndl := (fileHndl >= 0)
+    if bValidHndl == TRUE
+      dfs.wr_str(fileHndl, @"FL4")
+      dfs.close(fileHndl)
 
     ' Test: Open 3 SD file handles simultaneously
     utils.startTest(@"Open 3 SD handles simultaneously")
-    h1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
-    h2 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
-    h3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file3)
-    utils.evaluateBool(h1 >= 0 and h2 >= 0 and h3 >= 0, @"3 SD handles valid", true)
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
+    hndl2 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
+    hndl3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file3)
+    utils.evaluateBool(hndl1 >= 0 and hndl2 >= 0 and hndl3 >= 0, @"3 SD handles valid", TRUE)
 
     ' Test: Open 3 Flash handles (total 6 = max)
     utils.startTest(@"Open 3 Flash handles (total 6)")
-    h4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
-    h5 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
-    h6 := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_READ)
-    utils.evaluateBool(h4 >= 0 and h5 >= 0 and h6 >= 0, @"3 Flash handles valid", true)
+    hndl4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
+    hndl5 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
+    hndl6 := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_READ)
+    utils.evaluateBool(hndl4 >= 0 and hndl5 >= 0 and hndl6 >= 0, @"3 Flash handles valid", TRUE)
 
     ' Test: 7th handle should fail (pool exhausted)
     utils.startTest(@"7th handle returns error (pool full)")
-    h7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
-    utils.evaluateBool(h7 < 0, @"7th handle fails", true)
+    hndl7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
+    utils.evaluateBool(hndl7 < 0, @"7th handle fails", TRUE)
 
     ' Test: Close one Flash handle, open new Flash handle in freed slot
     ' (Flash open needs both a handle slot AND a flash buffer; closing an SD handle
     '  frees a handle slot but not a flash buffer, so we must close a Flash handle)
     utils.startTest(@"Pool reclaim across devices")
-    dfs.closeFileHandle(h4)
-    h7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
-    utils.evaluateBool(h7 >= 0, @"Flash handle in freed Flash slot", true)
+    dfs.closeFileHandle(hndl4)
+    hndl7 := dfs.open(dfs.DEV_FLASH, @hp_fl_file4, dfs.FILEMODE_READ)
+    utils.evaluateBool(hndl7 >= 0, @"Flash handle in freed Flash slot", TRUE)
 
     ' Test: Close all, verify all 6 slots available again
     utils.startTest(@"All 6 slots available after close all")
-    dfs.closeFileHandle(h1)
-    dfs.closeFileHandle(h2)
-    dfs.closeFileHandle(h3)
-    dfs.closeFileHandle(h5)
-    dfs.closeFileHandle(h6)
-    if h7 >= 0
-      dfs.closeFileHandle(h7)
+    dfs.closeFileHandle(hndl1)
+    dfs.closeFileHandle(hndl2)
+    dfs.closeFileHandle(hndl3)
+    dfs.closeFileHandle(hndl5)
+    dfs.closeFileHandle(hndl6)
+    bValidHndl := (hndl7 >= 0)
+    if bValidHndl == TRUE
+      dfs.closeFileHandle(hndl7)
     ' Open 6 fresh handles to confirm all slots free
-    h1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
-    h2 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
-    h3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file3)
-    h4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
-    h5 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
-    h6 := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_READ)
-    utils.evaluateBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0 and h5 >= 0 and h6 >= 0, @"all 6 re-opened", true)
-    dfs.closeFileHandle(h1)
-    dfs.closeFileHandle(h2)
-    dfs.closeFileHandle(h3)
-    dfs.closeFileHandle(h4)
-    dfs.closeFileHandle(h5)
-    dfs.closeFileHandle(h6)
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
+    hndl2 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
+    hndl3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file3)
+    hndl4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
+    hndl5 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
+    hndl6 := dfs.open(dfs.DEV_FLASH, @hp_fl_file3, dfs.FILEMODE_READ)
+    utils.evaluateBool(hndl1 >= 0 and hndl2 >= 0 and hndl3 >= 0 and hndl4 >= 0 and hndl5 >= 0 and hndl6 >= 0, @"all 6 re-opened", TRUE)
+    dfs.closeFileHandle(hndl1)
+    dfs.closeFileHandle(hndl2)
+    dfs.closeFileHandle(hndl3)
+    dfs.closeFileHandle(hndl4)
+    dfs.closeFileHandle(hndl5)
+    dfs.closeFileHandle(hndl6)
 
     ' Test: Interleaved open/close SD and Flash
     utils.startTest(@"Interleaved open/close SD and Flash")
-    h1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
-    h2 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
-    h3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
-    h4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
-    utils.evaluateBool(h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0, @"interleaved 4 handles", true)
-    dfs.closeFileHandle(h1)
-    dfs.closeFileHandle(h2)
-    dfs.closeFileHandle(h3)
-    dfs.closeFileHandle(h4)
+    hndl1 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file1)
+    hndl2 := dfs.open(dfs.DEV_FLASH, @hp_fl_file1, dfs.FILEMODE_READ)
+    hndl3 := dfs.openFileRead(dfs.DEV_SD, @hp_sd_file2)
+    hndl4 := dfs.open(dfs.DEV_FLASH, @hp_fl_file2, dfs.FILEMODE_READ)
+    utils.evaluateBool(hndl1 >= 0 and hndl2 >= 0 and hndl3 >= 0 and hndl4 >= 0, @"interleaved 4 handles", TRUE)
+    dfs.closeFileHandle(hndl1)
+    dfs.closeFileHandle(hndl2)
+    dfs.closeFileHandle(hndl3)
+    dfs.closeFileHandle(hndl4)
 
     ' Cleanup
     dfs.deleteFile(dfs.DEV_SD, @hp_sd_file1)
@@ -456,8 +471,8 @@ PUB go() | result, status, freeSpace, handle, bytesRead, bytesWritten, pLabel, s
     ' The stack check utility has its own overflow detection via reportStackDepth().
 #ifndef SD_INCLUDE_STACK_CHECK
     utils.startTest(@"checkStackGuard() intact")
-    result := dfs.checkStackGuard()
-    utils.evaluateBool(result, @"stack guard intact", true)
+    opStatus := dfs.checkStackGuard()
+    utils.evaluateBool(opStatus, @"stack guard intact", TRUE)
 #endif
 
     ' Final cleanup

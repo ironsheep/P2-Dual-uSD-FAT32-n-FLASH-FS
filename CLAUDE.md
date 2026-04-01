@@ -6,6 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Unified dual filesystem driver for the Parallax Propeller 2 (P2) microcontroller combining a Flash filesystem (onboard 16MB FLASH chip) and a microSD FAT32 filesystem for simultaneous use on a P2 Edge Module. The driver source lives in `src/dual_sd_fat32_flash_fs.spin2`. Reference (read-only) standalone drivers are preserved under `REF-FLASH-uSD/`.
 
+## CRITICAL: No Guessing — Use P2KB
+
+**You were NOT trained on the Propeller 2 processor or the Spin2/PASM2 languages.** Your intuition about how this hardware and language work is unreliable and will nearly always be wrong. Do NOT guess at language semantics, compiler behavior, instruction effects, or hardware architecture. Instead:
+
+1. **Always consult P2KB first** (`mcp__p2kb-mcp__p2kb_find` and `mcp__p2kb-mcp__p2kb_get`) before making assumptions about how any Spin2 or PASM2 feature works.
+2. **If P2KB doesn't cover it**, ask the user — do not infer from other languages.
+3. **Spin2 is not C, Python, or any language you know.** Operator precedence, scoping, OBJ instantiation, pointer semantics, and compilation model are all different. Assumptions from other languages produce silent bugs.
+4. **The OBJ pipe `|` override is scoped to one level** — it overrides a CON in the direct child only, it does NOT cascade to grandchildren. Each OBJ declaration is an independent compilation unit.
+5. **When debugging a compile error**, read the error message and reason from the language specification, not from intuition about what "should" work.
+
 ## Language and Toolchain
 
 All source is **Spin2** (`.spin2`), the Propeller 2's native language combining high-level Spin code with inline PASM2 assembly.

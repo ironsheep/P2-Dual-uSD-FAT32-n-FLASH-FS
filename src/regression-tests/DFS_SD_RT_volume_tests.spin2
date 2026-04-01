@@ -132,7 +132,7 @@ origLabel       BYTE    0[LABEL_BUF_SIZE]
 ' Auto-flush read buffer
 flushReadBuf    BYTE    0[BYTES_PER_SECTOR]
 
-PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, fsize, loopIdx
+PUB go() | workerCog, opResult, status, handle, hndl1, hndl2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, fsize, loopIdx, bValidHndl
 '' Main entry point for volume operation regression tests
 
     debug(" ")
@@ -144,8 +144,8 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
     workerCog := dfs.init()
 
     ' Mount the card first
-    result := dfs.mount(dfs.DEV_SD)
-    if result <> dfs.SUCCESS
+    opResult := dfs.mount(dfs.DEV_SD)
+    if opResult <> dfs.SUCCESS
         debug("ERROR: Could not mount SD card!")
     else
         ' Show card info
@@ -177,8 +177,8 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         utils.startTest(@"volumeLabel() returns new label after set")
         pLabel := dfs.volumeLabel(dfs.DEV_SD)
         debug("   New label: [", zstr_(pLabel), "]")
-        result := strncmp(pLabel, @"TESTLABEL", 9)
-        utils.evaluateBool(result, @"label matches TESTLABEL", true)
+        opResult := strncmp(pLabel, @"TESTLABEL", 9)
+        utils.evaluateBool(opResult, @"label matches TESTLABEL", TRUE)
 
         ' Test: Max length label (11 chars)
         utils.startTest(@"setVolumeLabel() accepts 11-char label")
@@ -188,12 +188,12 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         ' Test: Label persists through unmount/remount
         utils.startTest(@"Label persists through unmount/remount")
         dfs.unmount(dfs.DEV_SD)
-        result := dfs.mount(dfs.DEV_SD)
-        utils.evaluateSubValue(result, @"remount succeeds", dfs.SUCCESS)
+        opResult := dfs.mount(dfs.DEV_SD)
+        utils.evaluateSubValue(opResult, @"remount succeeds", dfs.SUCCESS)
         pLabel := dfs.volumeLabel(dfs.DEV_SD)
         debug("   Label after remount: [", zstr_(pLabel), "]")
-        result := strncmp(pLabel, @"12345678901", 11)
-        utils.evaluateSubBool(result, @"label persisted", true)
+        opResult := strncmp(pLabel, @"12345678901", 11)
+        utils.evaluateSubBool(opResult, @"label persisted", TRUE)
 
         ' Test: Restore original label
         utils.startTest(@"Restore original volume label")
@@ -214,8 +214,8 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
 
         ' Test: volumeLabel(DEV_FLASH) returns 0
         utils.startTest(@"volumeLabel(DEV_FLASH) returns 0")
-        result := dfs.volumeLabel(dfs.DEV_FLASH)
-        utils.evaluateSingleValue(result, @"volumeLabel(FLASH)", 0)
+        opResult := dfs.volumeLabel(dfs.DEV_FLASH)
+        utils.evaluateSingleValue(opResult, @"volumeLabel(FLASH)", 0)
 
         ' ======================================================================
         ' TEST GROUP: syncAllHandles
@@ -224,53 +224,61 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
 
         ' Test: syncAllHandles with no handles open
         utils.startTest(@"syncAllHandles() with no handles open")
-        result := dfs.syncAllHandles()
-        utils.evaluateSingleValue(result, @"syncAllHandles() no handles", dfs.SUCCESS)
+        opResult := dfs.syncAllHandles()
+        utils.evaluateSingleValue(opResult, @"syncAllHandles() no handles", dfs.SUCCESS)
 
         ' Test: syncAllHandles flushes single write handle
         utils.startTest(@"syncAllHandles() flushes single write handle")
         dfs.deleteFile(dfs.DEV_SD, @vlSyncFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlSyncFile)
-        utils.evaluateSubBool(h1 >= 0, @"create file", true)
-        if h1 >= 0
-            bytesWritten := dfs.writeHandle(h1, @syncContent, strsize(@syncContent))
-            result := dfs.syncAllHandles()
-            utils.evaluateSubValue(result, @"syncAllHandles()", dfs.SUCCESS)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlSyncFile)
+        utils.evaluateSubBool(hndl1 >= 0, @"create file", TRUE)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            bytesWritten := dfs.writeHandle(hndl1, @syncContent, strsize(@syncContent))
+            opResult := dfs.syncAllHandles()
+            utils.evaluateSubValue(opResult, @"syncAllHandles()", dfs.SUCCESS)
             ' File should still be writable
-            bytesWritten := dfs.writeHandle(h1, @syncContent, strsize(@syncContent))
-            utils.evaluateSubBool(bytesWritten > 0, @"write after sync", true)
-            dfs.closeFileHandle(h1)
+            bytesWritten := dfs.writeHandle(hndl1, @syncContent, strsize(@syncContent))
+            utils.evaluateSubBool(bytesWritten > 0, @"write after sync", TRUE)
+            dfs.closeFileHandle(hndl1)
 
         ' Test: syncAllHandles flushes multiple write handles
         utils.startTest(@"syncAllHandles() flushes multiple write handles")
         dfs.deleteFile(dfs.DEV_SD, @vlTestFile1)
         dfs.deleteFile(dfs.DEV_SD, @vlTestFile2)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlTestFile1)
-        h2 := dfs.createFileNew(dfs.DEV_SD, @vlTestFile2)
-        if h1 >= 0
-            dfs.writeHandle(h1, @testContent, strsize(@testContent))
-        if h2 >= 0
-            dfs.writeHandle(h2, @testContent, strsize(@testContent))
-        result := dfs.syncAllHandles()
-        utils.evaluateSingleValue(result, @"syncAllHandles() multi", dfs.SUCCESS)
-        if h1 >= 0
-            dfs.closeFileHandle(h1)
-        if h2 >= 0
-            dfs.closeFileHandle(h2)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlTestFile1)
+        hndl2 := dfs.createFileNew(dfs.DEV_SD, @vlTestFile2)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl1, @testContent, strsize(@testContent))
+        bValidHndl := (hndl2 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl2, @testContent, strsize(@testContent))
+        opResult := dfs.syncAllHandles()
+        utils.evaluateSingleValue(opResult, @"syncAllHandles() multi", dfs.SUCCESS)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.closeFileHandle(hndl1)
+        bValidHndl := (hndl2 >= 0)
+        if bValidHndl == TRUE
+            dfs.closeFileHandle(hndl2)
 
         ' Test: syncAllHandles with mixed read+write handles
         utils.startTest(@"syncAllHandles() with read+write mix")
-        h1 := dfs.openFileRead(dfs.DEV_SD, @vlTestFile1)
+        hndl1 := dfs.openFileRead(dfs.DEV_SD, @vlTestFile1)
         dfs.deleteFile(dfs.DEV_SD, @vlTestFile3)
-        h2 := dfs.createFileNew(dfs.DEV_SD, @vlTestFile3)
-        if h2 >= 0
-            dfs.writeHandle(h2, @testContent, strsize(@testContent))
-        result := dfs.syncAllHandles()
-        utils.evaluateSingleValue(result, @"syncAllHandles() mix", dfs.SUCCESS)
-        if h1 >= 0
-            dfs.closeFileHandle(h1)
-        if h2 >= 0
-            dfs.closeFileHandle(h2)
+        hndl2 := dfs.createFileNew(dfs.DEV_SD, @vlTestFile3)
+        bValidHndl := (hndl2 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl2, @testContent, strsize(@testContent))
+        opResult := dfs.syncAllHandles()
+        utils.evaluateSingleValue(opResult, @"syncAllHandles() mix", dfs.SUCCESS)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.closeFileHandle(hndl1)
+        bValidHndl := (hndl2 >= 0)
+        if bValidHndl == TRUE
+            dfs.closeFileHandle(hndl2)
 
         ' ======================================================================
         ' TEST GROUP: sync (legacy)
@@ -281,10 +289,10 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         utils.startTest(@"sync() flushes handle write")
         dfs.deleteFile(dfs.DEV_SD, @vlLegacyFile)
         handle := dfs.createFileNew(dfs.DEV_SD, @vlLegacyFile)
-        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        utils.evaluateSubBool(handle >= 0, @"createFileNew()", TRUE)
         dfs.writeHandle(handle, @testContent, strsize(@testContent))
-        result := dfs.syncHandle(handle)
-        utils.evaluateSubValue(result, @"syncHandle()", dfs.SUCCESS)
+        opResult := dfs.syncHandle(handle)
+        utils.evaluateSubValue(opResult, @"syncHandle()", dfs.SUCCESS)
         dfs.closeFileHandle(handle)
 
         ' Test: sync with no file open
@@ -301,10 +309,11 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         utils.startTest(@"setDate() sets timestamp on new file")
         dfs.setDate(2026, 2, 18, 14, 30, 0)
         dfs.deleteFile(dfs.DEV_SD, @vlDateFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile)
-        if h1 >= 0
-            dfs.writeHandle(h1, @testContent, strsize(@testContent))
-            dfs.closeFileHandle(h1)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl1, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(hndl1)
         ' Verify timestamp via directory entry
         wrtDate := 0
         wrtTime := 0
@@ -324,21 +333,22 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
                 quit
             idx++
         debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate), " wrtTime=$", uhex_(wrtTime))
-        utils.evaluateSubBool(found, @"file found in dir", true)
-        utils.evaluateSubBool(wrtDate <> 0, @"date stamp non-zero", true)
-        utils.evaluateSubBool(wrtTime <> 0, @"time stamp non-zero", true)
+        utils.evaluateSubBool(found, @"file found in dir", TRUE)
+        utils.evaluateSubBool(wrtDate <> 0, @"date stamp non-zero", TRUE)
+        utils.evaluateSubBool(wrtTime <> 0, @"time stamp non-zero", TRUE)
         ' Verify year field (bits 15-9) = 46 (2026-1980)
-        result := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
-        utils.evaluateSubValue(result, @"year field (2026-1980)", YEAR_2026_FIELD)
+        opResult := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
+        utils.evaluateSubValue(opResult, @"year field (2026-1980)", YEAR_2026_FIELD)
 
         ' Test: Midnight Jan 1, 2000
         utils.startTest(@"setDate() midnight Jan 1 2000")
         dfs.setDate(2000, 1, 1, 0, 0, 0)
         dfs.deleteFile(dfs.DEV_SD, @vlDateFile2)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile2)
-        if h1 >= 0
-            dfs.writeHandle(h1, @testContent, strsize(@testContent))
-            dfs.closeFileHandle(h1)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile2)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl1, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(hndl1)
         found := false
         idx := 0
         repeat
@@ -353,10 +363,10 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
                 quit
             idx++
         debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate))
-        utils.evaluateSubBool(found, @"file found in dir", true)
+        utils.evaluateSubBool(found, @"file found in dir", TRUE)
         ' Year=2000-1980=20, month=1, day=1
-        result := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
-        utils.evaluateSubValue(result, @"year field (2000-1980)", YEAR_2000_FIELD)
+        opResult := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
+        utils.evaluateSubValue(opResult, @"year field (2000-1980)", YEAR_2000_FIELD)
         ' Time at midnight should be 0
         utils.evaluateSubValue(wrtTime, @"midnight time", 0)
 
@@ -364,10 +374,11 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         utils.startTest(@"setDate() end-of-day Dec 31")
         dfs.setDate(2025, 12, 31, 23, 59, 58)
         dfs.deleteFile(dfs.DEV_SD, @vlDateFile2)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile2)
-        if h1 >= 0
-            dfs.writeHandle(h1, @testContent, strsize(@testContent))
-            dfs.closeFileHandle(h1)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile2)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl1, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(hndl1)
         found := false
         idx := 0
         repeat
@@ -382,25 +393,26 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
                 quit
             idx++
         debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate), " wrtTime=$", uhex_(wrtTime))
-        utils.evaluateSubBool(found, @"file found in dir", true)
+        utils.evaluateSubBool(found, @"file found in dir", TRUE)
         ' Year=2025-1980=45
-        result := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
-        utils.evaluateSubValue(result, @"year field (2025-1980)", YEAR_2025_FIELD)
+        opResult := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
+        utils.evaluateSubValue(opResult, @"year field (2025-1980)", YEAR_2025_FIELD)
         ' Month=12
-        result := (wrtDate >> FAT_DATE_MONTH_SHIFT) & FAT_DATE_MONTH_MASK
-        utils.evaluateSubValue(result, @"month field (12)", 12)
+        opResult := (wrtDate >> FAT_DATE_MONTH_SHIFT) & FAT_DATE_MONTH_MASK
+        utils.evaluateSubValue(opResult, @"month field (12)", 12)
         ' Hour=23, minute=59, second/2=29
-        result := (wrtTime >> FAT_TIME_HOUR_SHIFT) & FAT_TIME_HOUR_MASK
-        utils.evaluateSubValue(result, @"hour field (23)", 23)  ' 23 is the expected hour value, not a magic number
+        opResult := (wrtTime >> FAT_TIME_HOUR_SHIFT) & FAT_TIME_HOUR_MASK
+        utils.evaluateSubValue(opResult, @"hour field (23)", 23)  ' 23 is the expected hour value, not a magic number
 
         ' Test: setDate via V3 createFileNew
         utils.startTest(@"setDate() timestamp on V3 createFileNew")
         dfs.setDate(2026, 6, 15, 10, 0, 0)
         dfs.deleteFile(dfs.DEV_SD, @vlDateFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile)
-        if h1 >= 0
-            dfs.writeHandle(h1, @testContent, strsize(@testContent))
-            dfs.closeFileHandle(h1)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlDateFile)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl1, @testContent, strsize(@testContent))
+            dfs.closeFileHandle(hndl1)
         found := false
         idx := 0
         repeat
@@ -414,12 +426,12 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
                 quit
             idx++
         debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate))
-        utils.evaluateSubBool(found, @"file found in dir", true)
+        utils.evaluateSubBool(found, @"file found in dir", TRUE)
         ' Year=2026-1980=46, month=6
-        result := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
-        utils.evaluateSubValue(result, @"V3 year field", YEAR_2026_FIELD)
-        result := (wrtDate >> FAT_DATE_MONTH_SHIFT) & FAT_DATE_MONTH_MASK
-        utils.evaluateSubValue(result, @"V3 month field", 6)
+        opResult := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
+        utils.evaluateSubValue(opResult, @"V3 year field", YEAR_2026_FIELD)
+        opResult := (wrtDate >> FAT_DATE_MONTH_SHIFT) & FAT_DATE_MONTH_MASK
+        utils.evaluateSubValue(opResult, @"V3 month field", 6)
 
         ' Test: setDate on new directory
         utils.startTest(@"setDate() timestamp on new directory")
@@ -438,12 +450,12 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
                 quit
             idx++
         debug("   found=", sdec_(found), " wrtDate=$", uhex_(wrtDate))
-        utils.evaluateSubBool(found, @"dir found in listing", true)
+        utils.evaluateSubBool(found, @"dir found in listing", TRUE)
         ' Year=2026-1980=46, month=3
-        result := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
-        utils.evaluateSubValue(result, @"dir year field", YEAR_2026_FIELD)
-        result := (wrtDate >> FAT_DATE_MONTH_SHIFT) & FAT_DATE_MONTH_MASK
-        utils.evaluateSubValue(result, @"dir month field", 3)
+        opResult := (wrtDate >> FAT_DATE_YEAR_SHIFT) & FAT_DATE_YEAR_MASK
+        utils.evaluateSubValue(opResult, @"dir year field", YEAR_2026_FIELD)
+        opResult := (wrtDate >> FAT_DATE_MONTH_SHIFT) & FAT_DATE_MONTH_MASK
+        utils.evaluateSubValue(opResult, @"dir month field", 3)
 
         ' ======================================================================
         ' TEST GROUP: Auto-Flush on Idle
@@ -453,62 +465,65 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         ' Test: Write data, don't close, wait 300ms, verify size via second read handle
         utils.startTest(@"Auto-flush persists unclosed write after 300ms")
         dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
-        utils.evaluateSubBool(h1 >= 0, @"create file", true)
-        if h1 >= 0
-            bytesWritten := dfs.writeHandle(h1, @flushContent, strsize(@flushContent))
-            utils.evaluateSubBool(bytesWritten > 0, @"write data", true)
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
+        utils.evaluateSubBool(hndl1 >= 0, @"create file", TRUE)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            bytesWritten := dfs.writeHandle(hndl1, @flushContent, strsize(@flushContent))
+            utils.evaluateSubBool(bytesWritten > 0, @"write data", TRUE)
             ' Wait for auto-flush (200ms threshold + margin)
             waitms(300)
             ' Open second read handle to verify data was flushed
-            h2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
-            if h2 >= 0
-                fsize := dfs.fileSizeHandle(h2)
+            hndl2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
+            if hndl2 >= 0
+                fsize := dfs.fileSizeHandle(hndl2)
                 debug("   flushed size=", udec_(fsize), " expected=", udec_(strsize(@flushContent)))
                 utils.evaluateSubValue(fsize, @"flushed file size", strsize(@flushContent))
-                dfs.closeFileHandle(h2)
+                dfs.closeFileHandle(hndl2)
             else
-                utils.evaluateSubBool(false, @"open read handle", true)
-            dfs.closeFileHandle(h1)
+                utils.evaluateSubBool(false, @"open read handle", TRUE)
+            dfs.closeFileHandle(hndl1)
 
         ' Test: Two writes, wait 300ms, verify combined size
         utils.startTest(@"Auto-flush persists two writes after 300ms")
         dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
-        if h1 >= 0
-            dfs.writeHandle(h1, @flushContent, strsize(@flushContent))
-            dfs.writeHandle(h1, @flushContent, strsize(@flushContent))
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
+            dfs.writeHandle(hndl1, @flushContent, strsize(@flushContent))
+            dfs.writeHandle(hndl1, @flushContent, strsize(@flushContent))
             waitms(300)
-            h2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
-            if h2 >= 0
-                fsize := dfs.fileSizeHandle(h2)
+            hndl2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
+            if hndl2 >= 0
+                fsize := dfs.fileSizeHandle(hndl2)
                 debug("   flushed size=", udec_(fsize), " expected=", udec_(strsize(@flushContent) * 2))
                 utils.evaluateSubValue(fsize, @"combined flushed size", strsize(@flushContent) * 2)
-                dfs.closeFileHandle(h2)
+                dfs.closeFileHandle(hndl2)
             else
-                utils.evaluateSubBool(false, @"open read handle", true)
-            dfs.closeFileHandle(h1)
+                utils.evaluateSubBool(false, @"open read handle", TRUE)
+            dfs.closeFileHandle(hndl1)
         else
-            utils.evaluateSubBool(false, @"create file", true)
+            utils.evaluateSubBool(false, @"create file", TRUE)
 
         ' Test: 50 rapid writes don't lose data (flush doesn't interfere)
         utils.startTest(@"50 rapid writes preserve all data")
         dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
-        h1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
-        if h1 >= 0
+        hndl1 := dfs.createFileNew(dfs.DEV_SD, @vlFlushFile)
+        bValidHndl := (hndl1 >= 0)
+        if bValidHndl == TRUE
             repeat loopIdx from 0 to 49
-                dfs.writeHandle(h1, @"X", 1)
-            dfs.closeFileHandle(h1)
-            h2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
-            if h2 >= 0
-                fsize := dfs.fileSizeHandle(h2)
+                dfs.writeHandle(hndl1, @"X", 1)
+            dfs.closeFileHandle(hndl1)
+            hndl2 := dfs.openFileRead(dfs.DEV_SD, @vlFlushFile)
+            if hndl2 >= 0
+                fsize := dfs.fileSizeHandle(hndl2)
                 debug("   total size=", udec_(fsize), " expected=50")
                 utils.evaluateSingleValue(fsize, @"50 writes total size", 50)
-                dfs.closeFileHandle(h2)
+                dfs.closeFileHandle(hndl2)
             else
-                utils.evaluateSubBool(false, @"open read handle", true)
+                utils.evaluateSubBool(false, @"open read handle", TRUE)
         else
-            utils.evaluateBool(false, @"create file", true)
+            utils.evaluateBool(false, @"create file", TRUE)
         dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
 
         ' ======================================================================
@@ -528,8 +543,8 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         utils.startTest(@"MBR partition table has valid VBR sector")
         vbrSector := LONG[@vbrBuf + MBR_PART_LBA_OFFSET]
         debug("   VBR sector: ", udec_(vbrSector))
-        utils.evaluateSubBool(vbrSector > 0, @"VBR sector > 0", true)
-        utils.evaluateSubBool(vbrSector < VBR_SECTOR_MAX, @"VBR sector reasonable", true)
+        utils.evaluateSubBool(vbrSector > 0, @"VBR sector > 0", TRUE)
+        utils.evaluateSubBool(vbrSector < VBR_SECTOR_MAX, @"VBR sector reasonable", TRUE)
 
         ' Read VBR sector
         utils.startTest(@"VBR has boot signature $AA55")
@@ -538,26 +553,26 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
         status := dfs.readSectorRaw(vbrSector, @vbrBuf)
         utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
         if status == dfs.SUCCESS
-            result := WORD[@vbrBuf + MBR_SIG_OFFSET]
-            utils.evaluateSingleValueHex(result, @"boot signature", MBR_SIGNATURE)
+            opResult := WORD[@vbrBuf + MBR_SIG_OFFSET]
+            utils.evaluateSingleValueHex(opResult, @"boot signature", MBR_SIGNATURE)
         else
-            utils.evaluateBool(false, @"VBR read failed", true)
+            utils.evaluateBool(false, @"VBR read failed", TRUE)
 
         ' Test: Bytes per sector == 512
         utils.startTest(@"VBR bytes-per-sector == 512")
-        result := WORD[@vbrBuf + VBR_BPS_OFFSET]
-        utils.evaluateSingleValue(result, @"bytes per sector", BYTES_PER_SECTOR)
+        opResult := WORD[@vbrBuf + VBR_BPS_OFFSET]
+        utils.evaluateSingleValue(opResult, @"bytes per sector", BYTES_PER_SECTOR)
 
         ' Test: OEM name is readable (8 bytes at offset 3)
         utils.startTest(@"VBR OEM name is readable")
         ' OEM name is 8 bytes at offset 3, should be printable ASCII
-        result := true
+        opResult := true
         repeat idx from 0 to OEM_NAME_LENGTH - 1
             if vbrBuf[VBR_OEM_OFFSET + idx] < ASCII_SPACE or vbrBuf[VBR_OEM_OFFSET + idx] > ASCII_TILDE
-                result := false
+                opResult := false
                 quit
         debug("   OEM: ", lstr_(@vbrBuf + VBR_OEM_OFFSET, OEM_NAME_LENGTH))
-        utils.evaluateBool(result, @"OEM name printable", true)
+        utils.evaluateBool(opResult, @"OEM name printable", TRUE)
 
         ' Test: readVBRRaw() succeeds after mount
         utils.startTest(@"readVBRRaw() returns VBR data")
@@ -575,7 +590,7 @@ PUB go() | workerCog, result, status, handle, h1, h2, bytesWritten, bytesRead, p
                 debug("   Mismatch at offset ", udec_(idx), ": $", uhex_byte_(vbrBuf[idx]), " vs $", uhex_byte_(vbrBuf2[idx]))
                 found := false
                 quit
-        utils.evaluateBool(found, @"readVBRRaw matches readSectorRaw", true)
+        utils.evaluateBool(found, @"readVBRRaw matches readSectorRaw", TRUE)
 
         ' ======================================================================
         ' Cleanup and Summary
