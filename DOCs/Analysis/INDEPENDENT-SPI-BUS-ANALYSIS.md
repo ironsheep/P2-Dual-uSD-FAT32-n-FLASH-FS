@@ -3,7 +3,7 @@
 Analysis of changes required to support **separate Flash and SD SPI pin groups** as a conditionally compiled option. The current driver is designed for the P2 Edge Module, where Flash and SD share MOSI/MISO with an efficient cross-wired CS/SCK layout. This document details what must change to also support independent 4-wire SPI buses on custom hardware where Flash and SD have their own dedicated pin groups.
 
 **Date**: 2026-03-24
-**Driver version**: 1.2.0 (SD sub-driver v1.4.0, Flash sub-driver v2.0.0)
+**Driver version**: 1.3.0 (SD sub-driver v1.5.0, Flash sub-driver v2.0.0)
 
 ---
 

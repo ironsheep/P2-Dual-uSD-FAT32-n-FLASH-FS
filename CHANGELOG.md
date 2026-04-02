@@ -6,36 +6,28 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
-### Fixed
-- **BUGFIX**: Stale directory cluster in subdirectory operations — `do_changeDirectory()` and `do_delete()` now update the cached first-cluster after cross-sector directory scans that trigger a fresh sector read
-- 6 new tests in `DFS_SD_RT_directory_tests` covering the stale-cluster bug scenario
+## [1.3.0] - 2026-04-02
 
-### Changed
-- SD sub-driver version bumped to v1.5.0 (aligned with standalone P2-uSD-FAT32-FS release)
-- Apply authoring guide standards: named constants replace magic numbers, boolean comparisons use `TRUE`/`FALSE`, OBJ override parameter renamed `RT_MAX_OPEN_FILES`
-- Regression suite expanded to 32 standard suites, 1,350 tests
-
-## [1.3.0] - 2026-03-29
-
-SD sub-driver upgraded to v1.4.3: next-fit allocator, defragmentation API, contiguous file creation.
+SD sub-driver upgraded to v1.5.0: next-fit allocator, defragmentation API, contiguous file creation.
 
 ### Added
-- **Next-fit allocator** (unconditional): `allocateCluster()` now scans from previous allocation point instead of always starting at cluster 2, reducing fragmentation and improving sequential write contiguity
+- **Next-fit allocator**: Sequential writes produce more contiguous files, reducing fragmentation
 - **Defragmentation API** (`SD_INCLUDE_DEFRAG`):
   - `fileFragments()`: Count non-contiguous fragments in a file's cluster chain
-  - `isFileContiguous()`: Check if a file's clusters are stored contiguously
-  - `createFileContiguous()`: Create a file with pre-allocated contiguous cluster chain for guaranteed zero-fragmentation writes
-  - `compactFile()`: Relocate a fragmented file's clusters into a contiguous chain with copy-then-free and mandatory read-back verification
+  - `isFileContiguous()`: Check if file clusters are stored contiguously
+  - `createFileContiguous()`: Create a file with pre-allocated contiguous cluster chain
+  - `compactFile()`: Relocate a fragmented file's clusters into a contiguous chain
 - **FSCK fragmentation reporting**: Audit and FSCK summaries now report fragmented file count and total fragments
-- **Test hook**: `setTestMaxClusters()` for testing allocation wrap-around with artificially constrained FAT
-- Named FAT32 constants: `ROOT_CLUSTER`, `FAT_EOC_MIN`, `FAT_BAD` (replace inline magic numbers)
 - New error codes: `E_NO_CONTIGUOUS_SPACE`, `E_FILE_OPEN_FOR_COMPACT`, `E_VERIFY_FAILED`
 - `DFS_SD_RT_defrag_tests` -- 12 tests for defrag API, contiguous creation, and next-fit allocation
+- 6 new tests in `DFS_SD_RT_directory_tests` for subdirectory navigation edge cases
 
 ### Changed
-- `do_delete()` refactored: cluster-freeing loop extracted into reusable `freeClusterChain()`
-- `auditRootDir()` improved: scans all entries in first root directory sector for volume label (not just offset 0)
+- Volume label detection improved for cards with metadata before the label entry
 - Regression suite expanded to 32 standard suites, 1,350 tests
+
+### Fixed
+- Fixed stale directory cluster when navigating or deleting in large subdirectories
 
 ## [1.2.0] - 2026-03-18
 
@@ -68,8 +60,8 @@ SD sub-driver upgraded to v1.4.0: live clock, auto-flush, non-blocking I/O, modi
 ### Changed
 - Version directive upgraded from `{Spin2_v45}` to `{Spin2_v46}` (required for `debug[N]()` syntax)
 - `DEBUG_DISABLE = 1` replaced by `DEBUG_MASK = 0` for production builds (finer control, same zero overhead)
-- Unused variables removed across all 43 compiled files 
-- Converted to lowercase preprocessor directives (`#ifdef`, `#pragma exportdef`) 
+- Unused variables removed across all 43 compiled files
+- Converted to lowercase preprocessor directives (`#ifdef`, `#pragma exportdef`)
 
 ### Removed
 - Manufacturer-specific SPI speed limiting -- all cards now use full reported speed

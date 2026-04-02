@@ -863,8 +863,8 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `mount(dev)` | Mount one or both filesystems |
 | `unmount(dev)` | Flush and unmount one or both filesystems |
 | `mounted(dev)` | Check if device is mounted (lock-free) |
-| `version(dev)` | Driver version as integer (e.g., DEV_BOTH → 1_02_00, DEV_SD → 1_05_00, DEV_FLASH → 2_00_00) |
-| `versionStr(dev)` | Driver version as string (e.g., "1.2.0", "1.5.0", "2.0.0") |
+| `version(dev)` | Driver version as integer (e.g., DEV_BOTH → 1_03_00, DEV_SD → 1_05_00, DEV_FLASH → 2_00_00) |
+| `versionStr(dev)` | Driver version as string (e.g., "1.3.0", "1.5.0", "2.0.0") |
 | `checkStackGuard()` | Verify worker cog stack guard is intact |
 | `error()` | Last error code for calling cog |
 
