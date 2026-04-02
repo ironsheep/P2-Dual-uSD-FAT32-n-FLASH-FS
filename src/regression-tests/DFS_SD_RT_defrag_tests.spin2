@@ -38,7 +38,6 @@ CON
 
      ' Contiguous allocation test constraint
      TEST_CLUSTER_LIMIT = 20
-     LARGE_ALLOC_SIZE   = 1_000_000    ' Must exceed TEST_CLUSTER_LIMIT clusters to force E_NO_CONTIGUOUS_SPACE
 
      ' Fragment count constants (intent-communicating)
      CONTIGUOUS_FRAGMENTS = 1        ' a file with 1 fragment is contiguous
@@ -82,7 +81,7 @@ seqFile3        BYTE    "DFSEQ3.BIN", 0
 writeBuf        BYTE    0[WRITE_BUF_SIZE]
 readBuf         BYTE    0[READ_BUF_SIZE]
 
-PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead, byteIdx, bContig, compactStatus, dataIntact, allContig, bValidHndl
+PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead, byteIdx, bContig, compactStatus, dataIntact, allContig, bValidHndl, allocSize
 '' Main entry point for defrag regression tests
 ''
 '' @local workerCog - Cog ID returned by dfs.init()
@@ -260,10 +259,16 @@ PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead
             debug("  SKIP: createFileContiguous failed: ", sdec_(handle))
 
         ' Test 11: Returns E_NO_CONTIGUOUS_SPACE when constrained
-        ' With cluster limit artificially constrained to TEST_CLUSTER_LIMIT, large contiguous allocation should fail
+        ' Clean up all test files first so constrained range starts empty,
+        ' then compute allocation size dynamically to exceed the constraint
+        ' regardless of cluster size.
+        cleanup()
         utils.startTest(@"createFileContiguous() E_NO_CONTIGUOUS_SPACE when constrained")
+        ' Compute size that exceeds all usable clusters in the constrained range:
+        ' (limit - 2 reserved + 1 margin) * sectors_per_cluster * 512 bytes/sector
+        allocSize := (TEST_CLUSTER_LIMIT - 2 + 1) * dfs.sectorsPerCluster() * 512
         dfs.setTestMaxClusters(TEST_CLUSTER_LIMIT)
-        handle := dfs.createFileContiguous(dfs.DEV_SD, @fragFileB, LARGE_ALLOC_SIZE)
+        handle := dfs.createFileContiguous(dfs.DEV_SD, @fragFileB, allocSize)
         dfs.setTestMaxClusters(0)  ' Reset constraint
         utils.evaluateSingleValue(handle, @"no space with constraint", dfs.E_NO_CONTIGUOUS_SPACE)
 

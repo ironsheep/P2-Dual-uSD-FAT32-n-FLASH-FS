@@ -1,0 +1,1058 @@
+ =================================================================================================
+   File....... dual_sd_fat32_flash_fs.spin2
+   Purpose.... Unified dual filesystem driver -- SD FAT32 + onboard Flash for P2 Edge Module
+   Author..... Stephen M Moraco
+               Based on: Chris Gadd SD V3, Chip Gracey flash_fs
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 2023
+   Updated.... 18 MAR 2026
+ =================================================================================================
+
+Object "dual_sd_fat32_flash_fs" Interface:
+  (Requires Spin2 Language v47)
+
+── Public Constants ────────────────────────────────────────────
+
+  DEV_SD, DEV_FLASH, DEV_BOTH, FILEMODE_READ, FILEMODE_WRITE, FILEMODE_APPEND,
+  FILEMODE_READ_EXTENDED, FILEMODE_WRITE_EXTENDED, SUCCESS, E_TIMEOUT, E_NO_RESPONSE,
+  E_BAD_RESPONSE, E_CRC_ERROR, E_WRITE_REJECTED, E_CARD_BUSY, E_IO_ERROR, E_NO_CARD, E_NOT_MOUNTED,
+  E_INIT_FAILED, E_NOT_FAT32, E_BAD_SECTOR_SIZE, E_FILE_NOT_FOUND, E_FILE_EXISTS, E_NOT_A_FILE,
+  E_NOT_A_DIR, E_FILE_NOT_OPEN, E_END_OF_FILE, E_DISK_FULL, E_NO_LOCK, E_TOO_MANY_FILES,
+  E_INVALID_HANDLE, E_FILE_ALREADY_OPEN, E_NOT_A_DIR_HANDLE, E_INVALID_PARAM, E_ASYNC_BUSY,
+  E_NO_ASYNC_OP, E_FLASH_BAD_HANDLE, E_FLASH_NO_HANDLE, E_FLASH_DRIVE_FULL, E_FLASH_FILE_WRITING,
+  E_FLASH_FILE_READING, E_FLASH_FILE_OPEN, E_FLASH_FILE_MODE, E_FLASH_FILE_SEEK, E_FLASH_BAD_BLOCKS,
+  E_FLASH_TRUNCATED_STR, E_FLASH_INCOMPLETE_STR, E_FLASH_BAD_FILE_LENGTH, E_FLASH_BAD_SEEK_ARG,
+  E_FLASH_FILE_EXISTS, E_FLASH_NO_BUFFER, E_BAD_DEVICE, E_DEVICE_NOT_MOUNTED, E_NOT_SUPPORTED,
+  E_STACK_OVERFLOW, E_NO_CONTIGUOUS_SPACE, E_FILE_OPEN_FOR_COMPACT, E_VERIFY_FAILED,
+  CONTIGUOUS_FRAGMENTS, MAX_OPEN_FILES, MAX_FLASH_BUFFERS, STACK_SIZE, SECTOR_SIZE, MAX_P2_COGS,
+  PENDING, BLOCK_SIZE, FL_FILENAME_SIZE, BYTES_IN_HEAD_BLOCK, BYTES_IN_BODY_BLOCK,
+  LONGS_IN_HEAD_BLOCK, LONGS_IN_BODY_BLOCK
+
+── Public Structures ───────────────────────────────────────────
+
+  STRUCT cid_t(BYTE mid, BYTE oid[2], BYTE pnm[5], BYTE prv, BYTE psn[4], BYTE mdt[2], BYTE crc)
+  STRUCT scr_t(BYTE sdSpec, BYTE sdSecurity, BYTE sdSpec3Ext, BYTE sdSpecXLo, BYTE reserved[4])
+
+── Public Methods ──────────────────────────────────────────────
+
+PUB null()
+PUB init() : workerCog
+PUB stop()
+PUB mount(dev) : status
+PUB unmount(dev) : status
+PUB mounted(dev) : is_mounted
+PUB canMount(dev) : is_mountable
+PUB cardWarnings() : warning_flags
+PUB version(dev) : ver
+PUB versionStr(dev) : p_str
+PUB format(dev) : status
+PUB sync() : status
+PUB open(dev, p_filename, mode) : handle
+PUB open_circular(dev, p_filename, mode, max_file_length) : handle
+PUB create_file(dev, p_filename, fill_value, byte_count) : status
+PUB close(handle) : status
+PUB flush(handle) : status
+PUB openFileRead(dev, p_path) : handle
+PUB openFileWrite(dev, p_path) : handle
+PUB createFileNew(dev, p_path) : handle
+PUB closeFileHandle(handle) : status
+PUB readHandle(handle, p_buffer, count) : bytes_read
+PUB writeHandle(handle, p_buffer, count) : bytes_written
+PUB startReadHandle(handle, p_buffer, count) : status
+PUB startWriteHandle(handle, p_buffer, count) : status
+PUB isComplete() : done
+PUB getResult() : status
+PUB cancelAsync() : status
+PUB seekHandle(handle, position) : status
+PUB seek(handle, position, whence) : end_position
+PUB flashSeek(handle, position, whence) : end_position
+PUB tellHandle(handle) : position
+PUB eofHandle(handle) : is_eof
+PUB fileSizeHandle(handle) : size
+PUB syncHandle(handle) : status
+PUB syncAllHandles() : status
+PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status
+PUB getFlashCwd() : p_cwd
+PUB openDirectory(dev, p_path) : handle
+PUB readDirectoryHandle(handle) : p_entry
+PUB closeDirectoryHandle(handle)
+PUB readDirectory(ENTRY) : p_entry
+PUB newDirectory(dev, name_ptr) : status
+PUB changeDirectory(dev, name_ptr) : status
+PUB directory(dev, p_block_id, p_filename, p_file_size) : status
+PUB exists(dev, p_filename) : found
+PUB file_size(dev, p_filename) : size
+PUB file_size_unused(dev, p_filename) : size_unused
+PUB rename(dev, old_name, new_name) : status
+PUB deleteFile(dev, name_ptr) : status
+PUB moveFile(dev, name_ptr, dest_folder) : status
+PUB freeSpace(dev) : free_count
+PUB stats(dev) : used, free_ct, file_count
+PUB setDate(year, month, day, hour, minute, second) : status
+PUB getDate() : year, month, day, hour, minute, second
+PUB serial_number(dev) : sn_hi, sn_lo
+PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count
+PUB wr_byte(handle, byte_value) : status
+PUB rd_byte(handle) : byte_value
+PUB wr_word(handle, word_value) : status
+PUB rd_word(handle) : word_value
+PUB wr_long(handle, long_value) : status
+PUB rd_long(handle) : long_value
+PUB wr_str(handle, p_str) : status
+PUB rd_str(handle, p_str, count) : bytes_read
+PUB fileName() : p_filename
+PUB fileSize() : size_in_bytes
+PUB attributes() : attr_byte
+PUB wrtDate() : date_word
+PUB wrtTime() : time_word
+PUB volumeLabel(dev) : p_label
+PUB setVolumeLabel(dev, p_label) : status
+PUB fileFragments(dev, p_path) : fragment_count
+PUB isFileContiguous(dev, p_path) : bContig
+PUB createFileContiguous(dev, p_path, expected_size) : handle
+PUB compactFile(dev, p_path) : status
+PUB syncDirCache()
+PUB error() : status
+PUB string_for_error(code) : p_str
+PUB checkStackGuard() : bIntact
+PUB sectorsPerCluster() : count
+PUB getSPIFrequency() : hz
+PUB getCardMaxSpeed() : hz
+PUB getManufacturerID() : mid
+PUB getReadTimeout() : ms
+PUB getWriteTimeout() : ms
+PUB isHighSpeedActive() : active
+
+
+
+── Constant Details ────────────────────────────────────────────
+
+---- Device Constants ----
+__________________________
+  DEV_SD    = 0    microSD card (FAT32)
+  DEV_FLASH = 1    Onboard 16MB Flash chip
+  DEV_BOTH  = 2    Both devices (for mount/unmount)
+
+---- Flash File Open Mode Constants ----
+________________________________________
+  FILEMODE_READ           =   $72    "r"
+  FILEMODE_WRITE          =   $77    "w"
+  FILEMODE_APPEND         =   $61    "a"
+  FILEMODE_READ_EXTENDED  = $2B72    "r+"
+  FILEMODE_WRITE_EXTENDED = $2B77    "w+"
+
+---- Error Codes ----
+_____________________
+  SUCCESS                 =    0
+  E_TIMEOUT               =   -1    Card didn't respond in time
+  E_NO_RESPONSE           =   -2    Card not responding
+  E_BAD_RESPONSE          =   -3    Unexpected response from card
+  E_CRC_ERROR             =   -4    Data CRC mismatch
+  E_WRITE_REJECTED        =   -5    Card rejected write operation
+  E_CARD_BUSY             =   -6    Card busy
+  E_IO_ERROR              =   -7    General I/O error during read/write
+  E_NO_CARD               =   -8    No card detected in slot (MISO idle during CMD0 probe)
+  E_NOT_MOUNTED           =  -20    Filesystem not mounted
+  E_INIT_FAILED           =  -21    Card initialization failed
+  E_NOT_FAT32             =  -22    Card not formatted as FAT32
+  E_BAD_SECTOR_SIZE       =  -23    Sector size not 512 bytes
+  E_FILE_NOT_FOUND        =  -40    File doesn't exist
+  E_FILE_EXISTS           =  -41    File already exists
+  E_NOT_A_FILE            =  -42    Expected file, found directory
+  E_NOT_A_DIR             =  -43    Expected directory, found file
+  E_FILE_NOT_OPEN         =  -45    File not open
+  E_END_OF_FILE           =  -46    Read past end of file
+  E_DISK_FULL             =  -60    No free clusters
+  E_NO_LOCK               =  -64    Couldn't allocate hardware lock
+  ===========================================================================
+  V3 Multi-File Handle Error Codes
+  ===========================================================================
+  E_TOO_MANY_FILES        =  -90    All file handles are in use
+  E_INVALID_HANDLE        =  -91    Handle out of range or not open
+  E_FILE_ALREADY_OPEN     =  -92    File is already open for writing (single-writer policy)
+  E_NOT_A_DIR_HANDLE      =  -93    Handle is not a directory handle (or vice versa)
+  E_INVALID_PARAM         =  -94    Parameter value out of valid range
+  E_ASYNC_BUSY            =  -95    An async operation is already in flight
+  E_NO_ASYNC_OP           =  -96    No async operation to get result from
+  ===========================================================================
+  Unified Flash Error Codes (ADR-7: single unified error code table)
+  Mapped from flash_fs.spin2 error codes into non-overlapping range
+  ===========================================================================
+  E_FLASH_BAD_HANDLE      = -100    Flash handle is invalid
+  E_FLASH_NO_HANDLE       = -101    Out of available Flash handles
+  E_FLASH_DRIVE_FULL      = -102    Out of space on Flash chip
+  E_FLASH_FILE_WRITING    = -103    Flash file is open for writing
+  E_FLASH_FILE_READING    = -104    Flash file is open for reading
+  E_FLASH_FILE_OPEN       = -105    Flash file is open
+  E_FLASH_FILE_MODE       = -106    Flash file not opened in desired mode
+  E_FLASH_FILE_SEEK       = -107    Attempted seek past either end of Flash file
+  E_FLASH_BAD_BLOCKS      = -108    Block bit failure detected, bad blocks removed
+  E_FLASH_TRUNCATED_STR   = -109    Buffer full before reaching string terminator
+  E_FLASH_INCOMPLETE_STR  = -110    End of file reached before string terminator
+  E_FLASH_BAD_FILE_LENGTH = -112    File length given is negative or zero
+  E_FLASH_BAD_SEEK_ARG    = -113    Invalid seek argument
+  E_FLASH_FILE_EXISTS     = -114    Flash file already exists (rename/create_file target)
+  E_FLASH_NO_BUFFER       = -115    No Flash buffer available (all in use)
+  ===========================================================================
+  Unified Device Error Codes
+  ===========================================================================
+  E_BAD_DEVICE            = -120    Invalid device parameter (not DEV_SD or DEV_FLASH)
+  E_DEVICE_NOT_MOUNTED    = -121    Requested device not mounted
+  E_NOT_SUPPORTED         = -122    Operation not supported on this device
+  E_STACK_OVERFLOW        = -130    Worker cog stack overflow detected
+  E_NO_CONTIGUOUS_SPACE   = -131    No contiguous run of sufficient length
+  E_FILE_OPEN_FOR_COMPACT = -132    File is open (cannot compact while open)
+  E_VERIFY_FAILED         = -133    Read-back verification failed after compact
+  CONTIGUOUS_FRAGMENTS    =    1    A file with 1 fragment is contiguous (named constant for intent)
+
+---- Handle And Buffer Configuration ----
+_________________________________________
+  ===========================================================================
+  FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
+  User can override MAX_OPEN_FILES and MAX_FLASH_BUFFERS in OBJ declaration:
+  fs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 4, MAX_FLASH_BUFFERS = 2
+  ===========================================================================
+  MAX_OPEN_FILES    = 6    Default number of handles (user-overridable)
+  MAX_FLASH_BUFFERS = 3    Default Flash buffer pool size (user-overridable)
+
+---- Worker Cog Stack Size ----
+_______________________________
+  STACK_SIZE = 160    160 longs = 640 bytes (sized from audit: peak 127 + 25% headroom)
+
+---- Sector And Hardware Constants ----
+_______________________________________
+  SECTOR_SIZE = 512    SD sector size in bytes
+  MAX_P2_COGS =   8    P2 hardware maximum cog count
+
+---- Async Constants ----
+_________________________
+  PENDING = 1    Returned by start*() to indicate async operation launched
+
+---- Flash Filesystem Public Constants ----
+___________________________________________
+  BLOCK_SIZE          =                   $1000    4KB Flash block size
+  FL_FILENAME_SIZE    =             $088 - $008    128 bytes (127 chars + null)
+  Data capacity per block type
+  BYTES_IN_HEAD_BLOCK =                    3956    Head block: 4096 - 140 bytes overhead
+  BYTES_IN_BODY_BLOCK =                    4088    Body block: 4096 - 8 bytes overhead
+  LONGS_IN_HEAD_BLOCK = BYTES_IN_HEAD_BLOCK / 4    989 longs per head block
+  LONGS_IN_BODY_BLOCK = BYTES_IN_BODY_BLOCK / 4    1022 longs per body block
+
+
+
+── Structure Details ───────────────────────────────────────────
+
+STRUCT cid_t (16 bytes)
+_______________________
+  STRUCT cid_t Members:
+    BYTE  mid
+    BYTE  oid[2]
+    BYTE  pnm[5]
+    BYTE  prv
+    BYTE  psn[4]
+    BYTE  mdt[2]
+    BYTE  crc
+
+STRUCT scr_t (8 bytes)
+______________________
+  STRUCT scr_t Members:
+    BYTE  sdSpec
+    BYTE  sdSecurity
+    BYTE  sdSpec3Ext
+    BYTE  sdSpecXLo
+    BYTE  reserved[4]
+
+
+
+── Method Details ──────────────────────────────────────────────
+
+__________
+PUB null()
+
+ This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
+
+______________________
+PUB init() : workerCog
+
+ Initialize the unified filesystem driver (singleton).
+ Allocates hardware lock and starts the worker cog.
+ Pin assignments are fixed CON constants for the P2 Edge Module.
+ Does NOT mount any filesystem -- call mount() after init().
+ @returns workerCog - Cog ID (0-7) on success, -1 on failure
+
+__________
+PUB stop()
+
+ Stop worker cog - cleanly shut down the worker cog and release resources.
+ Safe to call even if not started.
+
+_______________________
+PUB mount(dev) : status
+
+ Mount one or both filesystems (multi-cog safe).
+ Requires init() to have been called first (worker cog must be running).
+ Use DEV_SD to mount SD card, DEV_FLASH to mount Flash chip, DEV_BOTH for both.
+ @param dev - Target device (DEV_SD, DEV_FLASH, or DEV_BOTH)
+ @returns status - SUCCESS or negative error code
+
+_________________________
+PUB unmount(dev) : status
+
+ Unmount one or both filesystems (multi-cog safe).
+ Flushes pending data and updates filesystem metadata.
+ @param dev - Target device (DEV_SD, DEV_FLASH, or DEV_BOTH)
+ @returns status - SUCCESS or negative error code
+
+_____________________________
+PUB mounted(dev) : is_mounted
+
+ Check if a device is currently mounted.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @returns is_mounted - TRUE if device is mounted, FALSE otherwise
+
+________________________________
+PUB canMount(dev) : is_mountable
+
+ Non-destructive check if a device can be mounted (requires init, not mount).
+ For SD: checks card presence and FAT32 validity.
+ For Flash: scans blocks non-destructively (Phase 2+).
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @returns is_mountable - TRUE if device appears mountable, FALSE otherwise
+
+__________________________________
+PUB cardWarnings() : warning_flags
+
+ Get card capability and advisory flags discovered during mount.
+ Returns bitmask of conditions probed at init time.
+ Check after mount() to learn what the card actually supports in SPI mode.
+   CW_CMD13_UNRELIABLE ($01) - CMD13 status checks disabled (broken SPI implementation)
+   CW_CMD23_SUPPORTED  ($02) - CMD23 SET_BLOCK_COUNT confirmed working in SPI mode
+ @returns warning_flags - Bitmask of CW_* constants (CW_NONE if no flags set)
+
+______________________
+PUB version(dev) : ver
+
+ Get driver version for a device as encoded integer.
+ Format: major * 10000 + minor * 100 + patch (e.g., 1_03_00 = v1.3.0).
+ @param dev - Target device (DEV_SD, DEV_FLASH, or DEV_BOTH)
+ @returns ver - Encoded version integer
+
+___________________________
+PUB versionStr(dev) : p_str
+
+ Get driver version as a formatted "X.Y.Z" string pointer.
+ @param dev - Target device (DEV_SD, DEV_FLASH, or DEV_BOTH)
+ @returns p_str - Pointer to null-terminated version string (e.g., "1.3.0")
+
+________________________
+PUB format(dev) : status
+
+ Format one device (destructive!).
+ SD: full FAT32 format. Flash: cancel all active blocks.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @returns status - SUCCESS or negative error code
+
+___________________
+PUB sync() : status
+
+ Flush buffers (multi-cog safe) - flushes pending writes without closing file.
+ Use to checkpoint data during long operations.
+ @returns status - SUCCESS or negative error code
+
+________________________________________
+PUB open(dev, p_filename, mode) : handle
+
+ Open file with mode (Flash-style). Modes: FILEMODE_READ, FILEMODE_WRITE,
+ FILEMODE_APPEND, FILEMODE_READ_EXTENDED, FILEMODE_WRITE_EXTENDED.
+ Flash: CWD prefix is automatically prepended to the filename.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_filename - Pointer to filename string
+ @param mode - File open mode constant
+ @returns handle - Handle on success, negative error code on failure
+
+__________________________________________________________________
+PUB open_circular(dev, p_filename, mode, max_file_length) : handle
+
+ Open circular file (Flash-specific, Phase 2+).
+ Flash: CWD prefix is automatically prepended to the filename.
+ @param dev - Target device (DEV_FLASH only)
+ @param p_filename - Pointer to filename string
+ @param mode - File open mode
+ @param max_file_length - Maximum file size in bytes
+ @returns handle - Handle on success, negative error code on failure
+
+_________________________________________________________________
+PUB create_file(dev, p_filename, fill_value, byte_count) : status
+
+ Pre-allocate Flash file (Flash-specific, Phase 2+).
+ Flash: CWD prefix is automatically prepended to the filename.
+ @param dev - Target device (DEV_FLASH only)
+ @param p_filename - Pointer to filename string
+ @param fill_value - Fill byte value
+ @param byte_count - File size to pre-allocate
+ @returns status - SUCCESS or negative error code
+
+__________________________
+PUB close(handle) : status
+
+ Close file handle (Flash API compatibility).
+ @param handle - Valid file handle
+ @returns status - SUCCESS or negative error code
+
+__________________________
+PUB flush(handle) : status
+
+ Flush handle without closing (Flash API compatibility).
+ @param handle - Valid file handle
+ @returns status - SUCCESS or negative error code
+
+______________________________________
+PUB openFileRead(dev, p_path) : handle
+
+ Open file for reading (V3 multi-file) - opens existing file and returns handle.
+ Multiple files can be open simultaneously with independent positions.
+ Flash: CWD prefix is automatically prepended to the filename.
+ Use closeFileHandle() when done.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+_______________________________________
+PUB openFileWrite(dev, p_path) : handle
+
+ Open file for writing/append (V3 multi-file) - opens for appending.
+ SD: opens for append. Flash: opens for write (overwrites).
+ Flash: CWD prefix is automatically prepended to the filename.
+ Use closeFileHandle() when done to flush data.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+_______________________________________
+PUB createFileNew(dev, p_path) : handle
+
+ Create new file for writing (V3 multi-file) - creates and opens for writing.
+ SD: returns error if file exists. Flash: opens for write (overwrites if exists).
+ Flash: CWD prefix is automatically prepended to the filename.
+ Use closeFileHandle() when done to flush data and finalize size.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+____________________________________
+PUB closeFileHandle(handle) : status
+
+ Close file handle (V3 multi-file) - closes handle, flushing pending writes.
+ For write handles, updates directory with final file size.
+ After close, handle is invalid and slot is available for reuse.
+ @param handle - Valid file handle
+ @returns status - SUCCESS or negative error code
+
+____________________________________________________
+PUB readHandle(handle, p_buffer, count) : bytes_read
+
+ Read from file handle (V3 multi-file) - reads up to count bytes into buffer.
+ Returns actual bytes read (may be less at EOF). Returns 0 at EOF.
+ Position advances by the number of bytes read.
+ @param handle - Valid file handle open for read
+ @param p_buffer - Pointer to destination buffer
+ @param count - Maximum bytes to read
+ @returns bytes_read - Bytes actually read (0 at EOF), negative on error
+
+________________________________________________________
+PUB writeHandle(handle, p_buffer, count) : bytes_written
+
+ Write to file handle (V3 multi-file) - writes count bytes from buffer.
+ File grows as needed with automatic cluster allocation.
+ Position advances by the number of bytes written.
+ @param handle - Valid file handle open for write
+ @param p_buffer - Pointer to source data
+ @param count - Bytes to write
+ @returns bytes_written - Bytes actually written, negative on error
+
+_____________________________________________________
+PUB startReadHandle(handle, p_buffer, count) : status
+
+ Begin an asynchronous read. Returns immediately with PENDING (1).
+ The api_lock is held until getResult() or cancelAsync() is called.
+ @param handle - Valid file handle open for read
+ @param p_buffer - Pointer to destination buffer
+ @param count - Bytes to read
+ @returns status - PENDING, E_ASYNC_BUSY, or E_NOT_MOUNTED
+
+______________________________________________________
+PUB startWriteHandle(handle, p_buffer, count) : status
+
+ Begin an asynchronous write. Returns immediately with PENDING (1).
+ The api_lock is held until getResult() or cancelAsync() is called.
+ @param handle - Valid file handle open for write
+ @param p_buffer - Pointer to source data
+ @param count - Bytes to write
+ @returns status - PENDING, E_ASYNC_BUSY, or E_NOT_MOUNTED
+
+_______________________
+PUB isComplete() : done
+
+ Non-blocking poll for async operation completion. Safe to call repeatedly.
+ @returns done - TRUE if async operation has completed, FALSE otherwise
+
+________________________
+PUB getResult() : status
+
+ Get the result of an async operation and release the lock. If the operation
+ hasn't finished yet, blocks until it does.
+ CRITICAL: Drains stale COGATN before releasing lock to prevent silent
+ data corruption in subsequent blocking calls.
+ @returns status - Bytes read/written on success, or negative error code
+
+__________________________
+PUB cancelAsync() : status
+
+ Wait for async operation to finish, discard result, release lock.
+ Use when the caller no longer needs the result.
+ @returns status - SUCCESS, or E_NO_ASYNC_OP
+
+_________________________________________
+PUB seekHandle(handle, position) : status
+
+ Seek to position in file (V3 multi-file) - seeks to absolute byte position.
+ Position must be <= file size (cannot seek past EOF).
+ @param handle - Valid file handle
+ @param position - Absolute byte position to seek to
+ @returns status - SUCCESS or negative error code
+
+_________________________________________________
+PUB seek(handle, position, whence) : end_position
+
+ Seek within a file with whence parameter (SD or Flash).
+ SK_FILE_START: absolute seek to position.
+ SK_CURRENT_POSN: relative seek by offset from current position.
+ @param handle - Valid file handle
+ @param position - Byte position (absolute) or offset (relative)
+ @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
+ @returns end_position - Resulting position, or negative error code
+
+______________________________________________________
+PUB flashSeek(handle, position, whence) : end_position
+
+ Seek within a Flash file with whence parameter (SK_FILE_START or SK_CURRENT_POSN).
+ Deprecated -- use seek(handle, position, whence) instead (works for both devices).
+ @param handle - Valid file handle
+ @param position - Byte position (absolute) or offset (relative)
+ @param whence - SK_FILE_START (1) or SK_CURRENT_POSN (2)
+ @returns end_position - Resulting position, or negative error code
+
+_________________________________
+PUB tellHandle(handle) : position
+
+ Get current position (V3 multi-file) - returns current byte position in file.
+ @param handle - Valid file handle
+ @returns position - Current position (0-based), negative on error
+
+______________________________
+PUB eofHandle(handle) : is_eof
+
+ Check if at end of file (V3 multi-file) - returns TRUE if at or past EOF.
+ @param handle - Valid file handle
+ @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
+
+_________________________________
+PUB fileSizeHandle(handle) : size
+
+ Get file size (V3 multi-file) - returns total size in bytes.
+ For write handles, reflects current size including pending writes.
+ @param handle - Valid file handle
+ @returns size - File size in bytes, negative on error
+
+_______________________________
+PUB syncHandle(handle) : status
+
+ Flush handle to disk (V3 multi-file) - flushes pending writes and updates directory.
+ File remains open for further operations.
+ @param handle - Valid file handle
+ @returns status - SUCCESS or negative error code
+
+_____________________________
+PUB syncAllHandles() : status
+
+ Flush all handles to disk (V3 multi-file) - flushes all open write handles.
+ Useful before risky operations or for periodic safety.
+ @returns status - SUCCESS or negative error code
+
+_____________________________________________________________
+PUB copyFile(srcDev, p_src_path, dstDev, p_dst_path) : status
+
+ Copy file between devices.
+ Opens source for read, creates destination for write, copies data in 512-byte
+ chunks, then closes both handles. Works for SD-to-Flash, Flash-to-SD, or
+ same-device copies.
+ @param srcDev - Source device (DEV_SD or DEV_FLASH)
+ @param p_src_path - Source filename
+ @param dstDev - Destination device (DEV_SD or DEV_FLASH)
+ @param p_dst_path - Destination filename
+ @returns status - SUCCESS or negative error code
+
+_________________________
+PUB getFlashCwd() : p_cwd
+
+ Return pointer to calling cog's Flash CWD prefix string.
+ Empty string means root directory. Example: "dir1" or "dir1/dir2".
+ @returns p_cwd - Pointer to null-terminated CWD string
+
+_______________________________________
+PUB openDirectory(dev, p_path) : handle
+
+ Open directory for enumeration (multi-cog safe) - returns handle for iterating entries.
+ Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
+ Pass "" or "." to enumerate calling cog's current working directory.
+ Handles share the existing file handle pool (MAX_OPEN_FILES total).
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - Handle on success, negative error code on failure
+
+_________________________________________
+PUB readDirectoryHandle(handle) : p_entry
+
+ Read next entry from directory handle (multi-cog safe) - returns pointer to entry data.
+ Skips deleted, LFN, and hidden/system entries automatically.
+ After each call, use fileName() and attributes() to inspect the returned entry.
+ @param handle - Valid directory handle
+ @returns p_entry - Pointer to entry_buffer on success, 0 at end of directory
+
+________________________________
+PUB closeDirectoryHandle(handle)
+
+ Close directory handle (multi-cog safe) - releases handle back to pool.
+ @param handle - Valid directory handle
+
+__________________________________
+PUB readDirectory(ENTRY) : p_entry
+
+ Read directory entry (multi-cog safe) - iterates through directory entries.
+ @param entry - Entry index to read (0-based)
+ @returns p_entry - Pointer to entry_buffer on success, 0 if entry doesn't exist
+
+________________________________________
+PUB newDirectory(dev, name_ptr) : status
+
+ Create a new directory (multi-cog safe) in current directory.
+ SD: creates a FAT32 directory entry.
+ Flash: no-op success (directories are implicit from path-segmented filenames).
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param name_ptr - Pointer to null-terminated directory name string
+ @returns status - SUCCESS or negative error code
+
+___________________________________________
+PUB changeDirectory(dev, name_ptr) : status
+
+ Change directory (multi-cog safe) - changes current directory.
+ SD: navigates FAT32 directory tree via worker cog.
+ Flash: updates per-cog CWD prefix string (caller-side, no worker command).
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param name_ptr - Pointer to null-terminated directory name string
+ @returns status - SUCCESS or negative error code
+
+________________________________________________________________
+PUB directory(dev, p_block_id, p_filename, p_file_size) : status
+
+ Get next Flash directory entry (iterates files), filtered by CWD.
+ Flash only -- caller sets LONG[p_block_id] to 0 before first call, auto-incremented.
+ When no more files, p_filename[0] will be 0.
+ Only returns files that are direct children of the current working directory.
+ The CWD prefix is stripped -- p_filename receives the bare filename only.
+ @param dev - Target device (DEV_FLASH only)
+ @param p_block_id - Pointer to LONG block ID counter (auto-advanced)
+ @param p_filename - Pointer to 128-byte buffer for filename (receives bare name)
+ @param p_file_size - Pointer to LONG receiving file size
+ @returns status - SUCCESS or negative error code
+
+___________________________________
+PUB exists(dev, p_filename) : found
+
+ Check if file exists on device.
+ Flash: CWD prefix is automatically prepended to the filename.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_filename - Pointer to filename string
+ @returns found - TRUE if file exists
+
+_____________________________________
+PUB file_size(dev, p_filename) : size
+
+ Get file size by name (without opening).
+ Flash: CWD prefix is automatically prepended to the filename.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_filename - Pointer to filename string
+ @returns size - File size in bytes, negative on error
+
+___________________________________________________
+PUB file_size_unused(dev, p_filename) : size_unused
+
+ Get unused (slack) bytes for a file.
+ SD: allocated cluster space minus actual file size.
+ Flash: unused bytes in last block. CWD prefix is automatically prepended.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param p_filename - Pointer to filename string
+ @returns size_unused - Unused byte count, or negative error code
+
+____________________________________________
+PUB rename(dev, old_name, new_name) : status
+
+ Rename file or directory (multi-cog safe).
+ Flash: CWD prefix is automatically prepended to both names. Renaming a file
+ to a different path prefix effectively moves it between directories. If this
+ was the last file under the old prefix, that directory vanishes (Flash directories
+ are not stored on disk -- they exist only as filename path prefixes).
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param old_name - Pointer to current name string
+ @param new_name - Pointer to new name string
+ @returns status - SUCCESS or negative error code
+
+______________________________________
+PUB deleteFile(dev, name_ptr) : status
+
+ Delete file (multi-cog safe) - deletes file from current directory.
+ Flash: CWD prefix is automatically prepended to the filename.
+ NOTE: Flash directories are not stored on disk -- they exist only because files
+ with matching path prefixes exist. Deleting the last file in a Flash directory
+ causes that directory to vanish. This is an inherent property of the path-prefix
+ emulation model, not an explicit step performed by this method.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param name_ptr - Pointer to null-terminated filename string
+ @returns status - SUCCESS or negative error code
+
+_________________________________________________
+PUB moveFile(dev, name_ptr, dest_folder) : status
+
+ Move file to another directory (multi-cog safe).
+ SD: moves file via FAT32 directory manipulation.
+ Flash: constructs new path from dest_folder + bare filename, then renames.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @param name_ptr - Pointer to filename to move
+ @param dest_folder - Pointer to destination folder name (empty string for root)
+ @returns status - SUCCESS or negative error code
+
+_______________________________
+PUB freeSpace(dev) : free_count
+
+ Get free space (multi-cog safe).
+ SD: returns free sectors. Flash: returns free blocks.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @returns free_count - Number of free sectors/blocks, 0 on error
+
+__________________________________________
+PUB stats(dev) : used, free_ct, file_count
+
+ Get device statistics.
+ SD: used/free sectors, file count in CWD.
+ Flash: used/free blocks, file count.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @returns used - Used blocks/sectors
+ @returns free_ct - Free blocks/sectors
+ @returns file_count - Number of files in CWD
+
+____________________________________________________________
+PUB setDate(year, month, day, hour, minute, second) : status
+
+ Set the current date and time for new files/folders. Activates the live
+ 2-second clock so timestamps advance automatically.
+ @param year - Year (1980-2107)
+ @param month - Month (1-12)
+ @param day - Day (1-31, validated against month/year)
+ @param hour - Hour (0-23)
+ @param minute - Minute (0-59)
+ @param second - Second (0-59)
+ @returns status - SUCCESS or E_INVALID_PARAM
+
+______________________________________________________
+PUB getDate() : year, month, day, hour, minute, second
+
+ Get the current date and time from the live clock.
+ Returns unpacked date/time values read directly from hub RAM.
+ @returns year - Year (1980-2107)
+ @returns month - Month (1-12)
+ @returns day - Day (1-31)
+ @returns hour - Hour (0-23)
+ @returns minute - Minute (0-59)
+ @returns second - Second (0-58, even values only due to FAT32 2-second resolution)
+
+_____________________________________
+PUB serial_number(dev) : sn_hi, sn_lo
+
+ Get device serial number.
+ SD: returns 32-bit CID serial (sn_hi=0, sn_lo=serial). Requires SD_INCLUDE_REGISTERS.
+ Flash: returns 64-bit JEDEC unique ID.
+ @param dev - Target device (DEV_SD or DEV_FLASH)
+ @returns sn_hi - High 32 bits (Flash only; 0 for SD)
+ @returns sn_lo - Low 32 bits
+
+___________________________________________________________________________
+PUB TEST_count_file_bytes(p_filename) : bytes_used, bytes_free, block_count
+
+ Diagnostic: count bytes in Flash file by filename.
+ Used by test utilities for file statistics validation.
+ Flash: CWD prefix is automatically prepended to the filename.
+ @param p_filename - Pointer to filename string
+ @returns bytes_used - Bytes written to file (or E_FILE_NOT_FOUND)
+ @returns bytes_free - Unused bytes in last block
+ @returns block_count - Total blocks allocated
+
+________________________________________
+PUB wr_byte(handle, byte_value) : status
+
+ Write a byte to file handle (SD or Flash).
+ @param handle - Valid file handle open for write
+ @param byte_value - Byte value to write
+ @returns status - SUCCESS or negative error code
+
+________________________________
+PUB rd_byte(handle) : byte_value
+
+ Read next byte from file handle (SD or Flash).
+ @param handle - Valid file handle open for read
+ @returns byte_value - Byte [0-255] or negative error code
+
+________________________________________
+PUB wr_word(handle, word_value) : status
+
+ Write WORD (16-bit, little-endian) to file handle (SD or Flash).
+ @param handle - Valid file handle open for write
+ @param word_value - 16-bit value to write
+ @returns status - SUCCESS or negative error code
+
+________________________________
+PUB rd_word(handle) : word_value
+
+ Read next WORD (16-bit) from file handle (SD or Flash).
+ @param handle - Valid file handle open for read
+ @returns word_value - WORD value or negative error code
+
+________________________________________
+PUB wr_long(handle, long_value) : status
+
+ Write LONG (32-bit, little-endian) to file handle (SD or Flash).
+ @param handle - Valid file handle open for write
+ @param long_value - 32-bit value to write
+ @returns status - SUCCESS or negative error code
+
+________________________________
+PUB rd_long(handle) : long_value
+
+ Read next LONG (32-bit) from file handle (SD or Flash).
+ NOTE: Negative LONGs are valid data. Check error() after call.
+ @param handle - Valid file handle open for read
+ @returns long_value - LONG value read from file
+
+__________________________________
+PUB wr_str(handle, p_str) : status
+
+ Write string including null terminator to file handle (SD or Flash).
+ @param handle - Valid file handle open for write
+ @param p_str - Pointer to zero-terminated string
+ @returns status - SUCCESS or negative error code
+
+_____________________________________________
+PUB rd_str(handle, p_str, count) : bytes_read
+
+ Read zero-terminated string from file handle (SD or Flash).
+ Reads byte by byte until null terminator found or count reached.
+ @param handle - Valid file handle open for read
+ @param p_str - Pointer to destination buffer
+ @param count - Maximum bytes to read (including terminator)
+ @returns bytes_read - String length (not including terminator), or negative on error
+
+___________________________
+PUB fileName() : p_filename
+
+ Return the 8.3 filename of the currently opened file.
+ @returns p_filename - Pointer to filename string
+
+______________________________
+PUB fileSize() : size_in_bytes
+
+ Return the size of the currently opened file in bytes.
+ @returns size_in_bytes - File size from directory entry
+
+____________________________
+PUB attributes() : attr_byte
+
+ Return the attribute byte of the currently opened file.
+ @returns attr_byte - FAT attribute byte
+
+_________________________
+PUB wrtDate() : date_word
+
+ Return the modification date of the current directory entry.
+ FAT16 packed format: bits [15:9]=year-1980, [8:5]=month, [4:0]=day
+ @returns date_word - FAT16 packed date word
+
+_________________________
+PUB wrtTime() : time_word
+
+ Return the modification time of the current directory entry.
+ FAT16 packed format: bits [15:11]=hour, [10:5]=minute, [4:0]=second/2
+ @returns time_word - FAT16 packed time word
+
+______________________________
+PUB volumeLabel(dev) : p_label
+
+ Return pointer to volume label string (SD only).
+ @param dev - Target device (DEV_SD only)
+ @returns p_label - Pointer to volume label (11 chars + null), 0 if not SD
+
+_________________________________________
+PUB setVolumeLabel(dev, p_label) : status
+
+ Set the volume label on the mounted SD card.
+ Updates both the BPB and root directory volume label entry.
+ @param p_label - Pointer to new volume label string (max 11 chars)
+ @returns status - SUCCESS or negative error code
+
+_______________________________________________
+PUB fileFragments(dev, p_path) : fragment_count
+
+ Count the number of non-contiguous fragments in a file's cluster chain.
+ A contiguous file returns 1. An empty file returns 0. SD-only.
+ @param dev - Target device (must be DEV_SD)
+ @param p_path - Pointer to null-terminated filename string
+ @returns fragment_count - Fragment count (1 = contiguous), 0 if empty, or negative error code
+
+___________________________________________
+PUB isFileContiguous(dev, p_path) : bContig
+
+ Check if a file's clusters are stored contiguously on disk.
+ Convenience wrapper around fileFragments(). SD-only.
+ @param dev - Target device (must be DEV_SD)
+ @param p_path - Pointer to null-terminated filename string
+ @returns bContig - TRUE if contiguous, FALSE otherwise, or negative error code
+
+_____________________________________________________________
+PUB createFileContiguous(dev, p_path, expected_size) : handle
+
+ Create a new file with a pre-allocated contiguous cluster chain. SD-only.
+ The file's clusters are allocated upfront so writeHandle() never fragments.
+ If insufficient contiguous space exists, returns E_NO_CONTIGUOUS_SPACE.
+ @param dev - Target device (must be DEV_SD)
+ @param p_path - Pointer to null-terminated filename string
+ @param expected_size - Expected file size in bytes (determines cluster count)
+ @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, or negative error code
+
+_____________________________________
+PUB compactFile(dev, p_path) : status
+
+ Relocate a file's clusters into a contiguous chain on disk. SD-only.
+ The file must not be open (no active handles). If already contiguous, returns SUCCESS (no-op).
+ Uses copy-then-free strategy: file is always readable during compaction.
+ Read-back verification is performed after every copy.
+ @param dev - Target device (must be DEV_SD)
+ @param p_path - Pointer to null-terminated filename string
+ @returns status - SUCCESS, E_FILE_NOT_FOUND, E_FILE_OPEN_FOR_COMPACT, E_NO_CONTIGUOUS_SPACE,
+ E_VERIFY_FAILED, E_IO_ERROR
+
+__________________
+PUB syncDirCache()
+
+ Force directory cache invalidation - invalidates the directory sector cache.
+ The next read will re-fetch from card.
+ Use after file operations to ensure consistency when multiple files are accessed.
+ This is safe to call from any cog (just sets a DAT variable to -1).
+
+____________________
+PUB error() : status
+
+ Get last error for this cog - returns the error code from the most recent operation.
+ Thread-safe: each cog has its own error slot.
+ @returns status - Error code from the most recent operation on this cog
+
+__________________________________
+PUB string_for_error(code) : p_str
+
+ Return human-readable string for any unified error code.
+ @param code - Error code
+ @returns p_str - Pointer to constant string describing the error
+
+_______________________________
+PUB checkStackGuard() : bIntact
+
+ Verify worker cog stack guard is intact.
+ Returns TRUE if all guard bytes are $CC (no overflow detected).
+ Returns FALSE and reports via debug if any guard byte is corrupted.
+ @returns bIntact - TRUE if stack guard is intact, FALSE if overflow detected
+
+_______________________________
+PUB sectorsPerCluster() : count
+
+ Get the number of 512-byte sectors per cluster for the mounted SD card.
+ Must call mount(DEV_SD) first.
+ @returns count - Sectors per cluster (e.g., 8, 16, 32, 64, 128)
+
+__________________________
+PUB getSPIFrequency() : hz
+
+ Get current SPI clock frequency in Hz.
+ @returns hz - Current SPI clock frequency in Hz
+
+__________________________
+PUB getCardMaxSpeed() : hz
+
+ Get card's reported maximum speed from CSD TRAN_SPEED field.
+ @returns hz - Card's maximum speed in Hz
+
+_____________________________
+PUB getManufacturerID() : mid
+
+ Get card manufacturer ID (MID) from CID register.
+ Common IDs: $03=SanDisk, $1D=PNY/AData, $27=Samsung.
+ @returns mid - Manufacturer ID byte
+
+_________________________
+PUB getReadTimeout() : ms
+
+ Get read timeout from CSD register in milliseconds.
+ SDHC/SDXC: Fixed 100ms per spec. SDSC: Calculated from TAAC/NSAC.
+ @returns ms - Read timeout in milliseconds
+
+__________________________
+PUB getWriteTimeout() : ms
+
+ Get write timeout from CSD register in milliseconds.
+ SDHC/SDXC: Fixed 250ms per spec. SDSC: Read timeout * R2W_FACTOR.
+ @returns ms - Write timeout in milliseconds
+
+________________________________
+PUB isHighSpeedActive() : active
+
+ Check if high-speed mode is active (running above standard 25 MHz).
+ Uses 30 MHz threshold to account for P2 SPI clock divider rounding
+ (e.g., 270 MHz P2 clock yields 33.75 MHz max SPI, not 50 MHz).
+ @returns active - TRUE if running above standard speed
+ - Reduced overhead from CS cycling and command processing
+ CRITICAL: Multi-block write uses different tokens than single-block!
+ - Each data block uses $FC (not $FE) as start token
+ - Transmission ends with $FD stop token (not CMD12!)
+ Protocol: CMD25 -> ($FC + 512 bytes + CRC + wait busy) x N -> $FD -> wait busy
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2023-2026 Iron Sheep Productions, LLC
+  Original SD driver Copyright (c) Chris Gadd -- used with permission
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
