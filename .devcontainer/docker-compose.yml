@@ -1,0 +1,8 @@
+services:
+  dev:
+    image: node:23-bookworm
+    volumes:
+      - ..:/workspaces/P2-Dual-uSD-FAT32-n-FLASH-FS:cached
+    command: sleep infinity
+    # Note: features, postCreateCommand, extensions, and settings
+    # are handled in devcontainer.json, not here

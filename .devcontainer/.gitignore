@@ -1,0 +1,8 @@
+# Local overrides (user-specific mounts)
+docker-compose.override.yml
+
+# Large binary artifacts
+*.zip
+
+# macOS
+.DS_Store

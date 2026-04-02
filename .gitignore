@@ -53,3 +53,5 @@ src/DEMO/performance.log
 src/DEMO/pnut-term-settings.json
 src/DEMO/run_demo.sh
 /src/DEMO/tests
+.mcp.json
+xport.tar.gz

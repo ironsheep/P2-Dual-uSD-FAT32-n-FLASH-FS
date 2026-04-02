@@ -1,0 +1,38 @@
+// See https://aka.ms/vscode-remote/devcontainer.json for format details.
+{
+  "name": "P2-Dual-uSD-FAT32-n-FLASH-FS Development",
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.override.yml"],
+  "service": "dev",
+  "workspaceFolder": "/workspaces/P2-Dual-uSD-FAT32-n-FLASH-FS",
+  "initializeCommand": "test -f .devcontainer/docker-compose.override.yml || echo 'services: {}' > .devcontainer/docker-compose.override.yml",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": false,
+      "configureZshAsDefaultShell": false,
+      "installOhMyZsh": false,
+      "installOhMyZshConfig": false,
+      "upgradePackages": false,
+      "username": "vscode",
+      "userUid": "automatic",
+      "userGid": "automatic"
+    }
+  },
+  "remoteUser": "vscode",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y liblept5 libtesseract5 || true; sudo mkdir -p /Users/stephen && sudo ln -sfn /opt/container-tools /Users/stephen/container-tools && cat /workspaces/P2-Dual-uSD-FAT32-n-FLASH-FS/.bashrc >> ~/.bashrc && mkdir -p ~/.ssh && cp /tmp/.ssh/* ~/.ssh/ 2>/dev/null; chmod 700 ~/.ssh && chmod 600 ~/.ssh/id_* 2>/dev/null; chmod 644 ~/.ssh/*.pub 2>/dev/null; cd /tmp && unzip -o /workspaces/P2-Dual-uSD-FAT32-n-FLASH-FS/.devcontainer/pnut-ts-linux-arm64-015302.zip && sudo cp /tmp/pnut-ts-linux-arm64-015302/pnut_ts/pnut-ts /usr/local/bin/pnut-ts && sudo cp /tmp/pnut-ts-linux-arm64-015302/pnut_ts/pnut_ts /usr/local/bin/pnut_ts && sudo chmod +x /usr/local/bin/pnut-ts /usr/local/bin/pnut_ts && rm -rf /tmp/pnut-ts-linux-arm64-015302 || true; claude --update || true; npx -y @modelcontextprotocol/server-filesystem --version || true",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.vscode-pull-request-github",
+        "eamodio.gitlens",
+        "davidanson.vscode-markdownlint",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        "files.eol": "\n",
+        "editor.tabSize": 4,
+        "terminal.integrated.shell.linux": "/bin/bash",
+        "files.trimTrailingWhitespace": true
+      }
+    }
+  }
+}
