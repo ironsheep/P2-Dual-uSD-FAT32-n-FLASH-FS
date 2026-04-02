@@ -252,9 +252,9 @@ PUB go() | workerCog, opStatus, status, handle, hndl1, hndl2, hndl3, fileSize, b
             debug("  DIAG: First byte is $", uhex_byte_(sectorBuffer[0]))
 
         ' Quick sanity check - verify we can reopen the file we just created
-        opStatus := dfs.openFileRead(dfs.DEV_SD, @testfile1)
-        if opStatus >= 0
-            dfs.closeFileHandle(opStatus)
+        handle := dfs.openFileRead(dfs.DEV_SD, @testfile1)
+        if handle >= 0
+            dfs.closeFileHandle(handle)
         else
             debug("  WARNING: File not found after close! Error=", sdec_(opStatus))
 

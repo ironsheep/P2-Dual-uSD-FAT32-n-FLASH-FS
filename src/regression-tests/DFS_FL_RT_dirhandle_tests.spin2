@@ -205,8 +205,8 @@ PUB go() | workerCog, status, dirHndl, dirHndl2, fileHndl1, fileHndl2, fileHndl3
             utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", TRUE)
             dfs.closeDirectoryHandle(dirHndl)
         else
-            utils.evaluateSubBool(false, @"found >= 3 files", TRUE)
-            utils.evaluateSubBool(false, @"found >= 1 subdir", TRUE)
+            utils.evaluateSubBool(FALSE, @"found >= 3 files", TRUE)
+            utils.evaluateSubBool(FALSE, @"found >= 1 subdir", TRUE)
         utils.setCheckCountPerTest(1)
 
         ' ======================================================================
@@ -265,7 +265,7 @@ PUB go() | workerCog, status, dirHndl, dirHndl2, fileHndl1, fileHndl2, fileHndl3
             utils.evaluateSubBool(foundFiles >= 1, @"nested subdir has file", TRUE)
             dfs.closeDirectoryHandle(dirHndl)
         else
-            utils.evaluateSubBool(false, @"nested subdir has file", TRUE)
+            utils.evaluateSubBool(FALSE, @"nested subdir has file", TRUE)
 
         ' Test: fileSize() returns correct size for files
         utils.startTest(@"fileSize() returns correct size for files")

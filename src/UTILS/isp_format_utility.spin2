@@ -20,8 +20,6 @@
 ''
 '' =================================================================================================
 
-CON
-
 CON ' ---- Debug Channel Assignments (DECISION-002) ----
     ' All channels off for committed code. Enable temporarily during format dev/repair.
   CH_VERIFY = 0               ' Write-readback verification: hex dumps, buffer addresses, diagnostics

@@ -481,7 +481,7 @@ PUB go() | workerCog, opResult, status, handle, hndl1, hndl2, bytesWritten, byte
                 utils.evaluateSubValue(fsize, @"flushed file size", strsize(@flushContent))
                 dfs.closeFileHandle(hndl2)
             else
-                utils.evaluateSubBool(false, @"open read handle", TRUE)
+                utils.evaluateSubBool(FALSE, @"open read handle", TRUE)
             dfs.closeFileHandle(hndl1)
 
         ' Test: Two writes, wait 300ms, verify combined size
@@ -500,10 +500,10 @@ PUB go() | workerCog, opResult, status, handle, hndl1, hndl2, bytesWritten, byte
                 utils.evaluateSubValue(fsize, @"combined flushed size", strsize(@flushContent) * 2)
                 dfs.closeFileHandle(hndl2)
             else
-                utils.evaluateSubBool(false, @"open read handle", TRUE)
+                utils.evaluateSubBool(FALSE, @"open read handle", TRUE)
             dfs.closeFileHandle(hndl1)
         else
-            utils.evaluateSubBool(false, @"create file", TRUE)
+            utils.evaluateSubBool(FALSE, @"create file", TRUE)
 
         ' Test: 50 rapid writes don't lose data (flush doesn't interfere)
         utils.startTest(@"50 rapid writes preserve all data")
@@ -521,9 +521,9 @@ PUB go() | workerCog, opResult, status, handle, hndl1, hndl2, bytesWritten, byte
                 utils.evaluateSingleValue(fsize, @"50 writes total size", 50)
                 dfs.closeFileHandle(hndl2)
             else
-                utils.evaluateSubBool(false, @"open read handle", TRUE)
+                utils.evaluateSubBool(FALSE, @"open read handle", TRUE)
         else
-            utils.evaluateBool(false, @"create file", TRUE)
+            utils.evaluateBool(FALSE, @"create file", TRUE)
         dfs.deleteFile(dfs.DEV_SD, @vlFlushFile)
 
         ' ======================================================================
@@ -556,7 +556,7 @@ PUB go() | workerCog, opResult, status, handle, hndl1, hndl2, bytesWritten, byte
             opResult := WORD[@vbrBuf + MBR_SIG_OFFSET]
             utils.evaluateSingleValueHex(opResult, @"boot signature", MBR_SIGNATURE)
         else
-            utils.evaluateBool(false, @"VBR read failed", TRUE)
+            utils.evaluateBool(FALSE, @"VBR read failed", TRUE)
 
         ' Test: Bytes per sector == 512
         utils.startTest(@"VBR bytes-per-sector == 512")

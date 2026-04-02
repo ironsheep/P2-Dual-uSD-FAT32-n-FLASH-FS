@@ -306,9 +306,9 @@ PUB go() | workerCog, fieldValue, dataStart, fat1Start, fat2Start, idx, mismatch
 
         utils.startTest(@"File system type string")
         ' At offset $52, should be "FAT32   " (8 bytes)
-        fieldValue := true
+        fieldValue := TRUE
         if sectorBuf[VBR_FSTYPE_OFFSET] <> "F" OR sectorBuf[VBR_FSTYPE_OFFSET + 1] <> "A" OR sectorBuf[VBR_FSTYPE_OFFSET + 2] <> "T" OR sectorBuf[VBR_FSTYPE_OFFSET + 3] <> "3" OR sectorBuf[VBR_FSTYPE_OFFSET + 4] <> "2"
-            fieldValue := false
+            fieldValue := FALSE
         utils.evaluateBool(fieldValue, @"FAT32 string at $52", TRUE)
         debug("  FS Type: ", lstr_(@sectorBuf + VBR_FSTYPE_OFFSET, OEM_NAME_LENGTH))
 

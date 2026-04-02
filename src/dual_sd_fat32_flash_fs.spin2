@@ -356,6 +356,10 @@ CON ' ---- FAT32 Structure Constants ----
 
   ' Directory attribute bits
   DIR_ATTR_DIRECTORY    = $10
+  DIR_ATTR_ARCHIVE      = $20
+
+  ' FAT chain safety limits
+  MAX_CHAIN_WALK        = 100_000       ' Maximum FAT chain walk iterations (safety limit)
 
   ' FAT chain markers
   ROOT_CLUSTER          = 2             ' First usable cluster in FAT32
@@ -4856,7 +4860,7 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
 
       ' Set up directory entry in entry_buffer
       else
-        dirEntSetAttr(@entry_buffer, $20)                                            ' Archive attribute
+        dirEntSetAttr(@entry_buffer, DIR_ATTR_ARCHIVE)                                            ' Archive attribute
         dirEntSetCreateStamp(@entry_buffer, date_stamp)
         dirEntSetStartClus(@entry_buffer, first_cluster)
         dirEntSetModifyStamp(@entry_buffer, date_stamp)
@@ -4878,7 +4882,7 @@ PRI do_create(p_path) : handle | temp, first_cluster, p_leaf, saved_sec
           else
             h_start_clus[handle] := first_cluster
             h_size[handle] := 0
-            h_attr[handle] := $20
+            h_attr[handle] := DIR_ATTR_ARCHIVE
             h_dir_sector[handle] := entry_address >> SECTOR_BITS
             h_dir_offset[handle] := entry_address & SECTOR_MASK
             h_cluster[handle] := first_cluster
@@ -5504,7 +5508,7 @@ PRI do_newfile(name_ptr) : status | temp
         temp := allocateCluster(byte2clus(entry_address))
         clearCluster(temp)
 
-    dirEntSetAttr(@entry_buffer, $20)
+    dirEntSetAttr(@entry_buffer, DIR_ATTR_ARCHIVE)
     dirEntSetCreateStamp(@entry_buffer, date_stamp)
     dirEntSetStartClus(@entry_buffer, 0)
     dirEntSetModifyStamp(@entry_buffer, date_stamp)
@@ -5667,7 +5671,7 @@ PRI do_sd_file_size_unused(name_ptr) : unused_bytes, status | fsize, cluster, cl
         cluster_count++
         cluster := long[readFAT(cluster)]
         loop_count++
-        if loop_count > 100000
+        if loop_count > MAX_CHAIN_WALK
           unused_bytes := 0
           status := E_IO_ERROR
           quit
@@ -8899,7 +8903,7 @@ PRI allocateCluster(cluster) : cluster_num | fat_idx, buf_idx, high_bits, startF
           quit
         fat_idx := 8                                                             '    wrap to cluster 2
         buf_idx := 8
-        wrapped := true
+        wrapped := TRUE
         if fat_idx >= startFatIdx                                              '    started at cluster 2? nowhere left to scan
           cluster_num := E_DISK_FULL
           quit
@@ -8968,7 +8972,7 @@ PRI freeClusterChain(first_cluster) : status | clstr, nextClstr, lastClstr, fat_
         writeSector(fat_sector + fat2_sec, BUF_FAT)
       clstr := nextClstr
       loop_count++
-      if loop_count > 100000                                                       ' Safety limit
+      if loop_count > MAX_CHAIN_WALK                                                       ' Safety limit
         status := E_IO_ERROR
         quit
     until nextClstr +>= FAT_EOC_MIN
@@ -9005,7 +9009,7 @@ PRI countFileFragments(first_cluster) : count | clstr, nextClstr, loop_count
         count++
       clstr := nextClstr
       loop_count++
-      if loop_count > 100000                                                     ' safety limit
+      if loop_count > MAX_CHAIN_WALK                                                     ' safety limit
         quit
 
 PRI do_file_fragments(p_path) : count | startClstr, p_leaf, saved_sec
@@ -9027,7 +9031,7 @@ PRI do_file_fragments(p_path) : count | startClstr, p_leaf, saved_sec
       count := countFileFragments(startClstr)
   sd_restore_path(saved_sec)
 
-PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, runStart, runLen
+PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, fatEntry, runStart, runLen
 ' Scan FAT for a contiguous run of N free clusters.
 ' Linear scan from cluster 2 through end of FAT.
 '
@@ -9048,8 +9052,8 @@ PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, runStart,
         quit
     if test_max_clusters > 0 and (fat_idx >> FAT_ENTRY_SHIFT) >= test_max_clusters
       quit                                                                       ' test hook: artificial limit
-    entry := long[@fat_buf + (fat_idx & SECTOR_MASK)]
-    if (entry & FAT_EOC_MASK) == 0                                               ' free cluster?
+    fatEntry := long[@fat_buf + (fat_idx & SECTOR_MASK)]
+    if (fatEntry & FAT_EOC_MASK) == 0                                            ' free cluster?
       if runLen == 0
         runStart := fat_idx >> FAT_ENTRY_SHIFT                                   '   start new run
       runLen++
@@ -9155,7 +9159,7 @@ PRI do_create_contiguous(p_path, expected_size) : handle | clstrCnt, newFirstCls
             if handle >= 0
               ' Set up directory entry
               firstClstr := newFirstClstr
-              dirEntSetAttr(@entry_buffer, $20)                                    ' Archive attribute
+              dirEntSetAttr(@entry_buffer, DIR_ATTR_ARCHIVE)                                    ' Archive attribute
               dirEntSetCreateStamp(@entry_buffer, date_stamp)
               dirEntSetStartClus(@entry_buffer, firstClstr)
               dirEntSetModifyStamp(@entry_buffer, date_stamp)
@@ -9176,7 +9180,7 @@ PRI do_create_contiguous(p_path, expected_size) : handle | clstrCnt, newFirstCls
                   ' Populate handle state
                   h_start_clus[handle] := firstClstr
                   h_size[handle] := 0
-                  h_attr[handle] := $20
+                  h_attr[handle] := DIR_ATTR_ARCHIVE
                   h_dir_sector[handle] := entry_address >> SECTOR_BITS
                   h_dir_offset[handle] := entry_address & SECTOR_MASK
                   h_cluster[handle] := firstClstr
