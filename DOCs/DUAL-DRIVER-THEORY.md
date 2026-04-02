@@ -15,7 +15,7 @@ Key architectural features:
 - **Per-cog current working directory** — each P2 cog maintains its own CWD for SD navigation and Flash directory emulation
 - **Device-aware API** — path-based methods take a `dev` parameter (`DEV_SD`, `DEV_FLASH`); handle-based methods auto-route by stored device tag
 - **Cross-device copyFile** — copy files between SD and Flash in a single call
-- **Conditional compilation** — 5 feature flags control optional SD features for minimal or full builds
+- **Conditional compilation** — 7 feature flags control optional SD features for minimal or full builds
 
 ## Architecture
 
@@ -307,6 +307,9 @@ Per-cog snapshots (`saved_data0..2[8]`) are captured before releasing the lock, 
 | `CMD_READ_DIR_H` | 44 | Read next directory entry |
 | `CMD_CLOSE_DIR_H` | 45 | Close directory handle |
 | `CMD_SET_VOL_LABEL` | 46 | Set SD volume label |
+| `CMD_SD_EXISTS` | 47 | Check if SD file exists |
+| `CMD_SD_FILE_SIZE` | 48 | Get SD file size by name |
+| `CMD_SD_FILE_SIZE_UNUSED` | 49 | Get SD file slack space |
 
 **Flash Commands:**
 
@@ -328,21 +331,13 @@ Per-cog snapshots (`saved_data0..2[8]`) are captured before releasing the lock, 
 | `CMD_FLASH_FILE_SIZE` | 63 | Get Flash file size |
 | `CMD_FLASH_STATS` | 64 | Get Flash device stats |
 | `CMD_FLASH_DIRECTORY` | 65 | Iterate Flash directory |
-| `CMD_CAN_MOUNT` | 66 | Non-destructive mount check |
 | `CMD_SERIAL_NUMBER` | 67 | Get device serial number |
-| `CMD_MOUNTED_Q` | 68 | Query device mount status |
 | `CMD_FL_WR_BYTE` | 71 | Write single byte to Flash |
 | `CMD_FL_RD_BYTE` | 72 | Read single byte from Flash |
 | `CMD_FL_RD_STR` | 73 | Read string from Flash |
 | `CMD_FL_FILE_SIZE_UNUSED` | 79 | Unused bytes in last block |
 | `CMD_FL_COUNT_BYTES` | 80 | Diagnostic: count file bytes |
 | `CMD_FL_CAN_MOUNT` | 81 | Flash mount capability check |
-
-**Cross-Device Command:**
-
-| Command | Value | Purpose |
-|---------|-------|---------|
-| `CMD_COPY_FILE` | 70 | Copy file between devices |
 
 **Conditional SD Commands:**
 
@@ -360,6 +355,14 @@ Per-cog snapshots (`saved_data0..2[8]`) are captured before releasing the lock, 
 | `CMD_READ_CID` | 27 | `SD_INCLUDE_REGISTERS` | Read CID register |
 | `CMD_READ_CSD` | 28 | `SD_INCLUDE_REGISTERS` | Read CSD register |
 | `CMD_READ_SD_STATUS` | 29 | `SD_INCLUDE_REGISTERS` | Read SD Status (ACMD13) |
+| `CMD_TEST_CMD13` | 82 | `SD_INCLUDE_RAW` | Test CMD13: returns R2 response |
+| `CMD_ATTEMPT_HIGH_SPEED` | 83 | `SD_INCLUDE_SPEED` | Attempt 50 MHz high-speed mode |
+| `CMD_CHECK_HS_CAPABILITY` | 84 | `SD_INCLUDE_SPEED` | Check CMD6 high-speed support |
+| `CMD_SET_SPI_SPEED` | 85 | `SD_INCLUDE_SPEED` | Set SPI clock frequency |
+| `CMD_STACK_DEPTH` | 86 | `SD_INCLUDE_STACK_CHECK` | Report stack depth high-water mark |
+| `CMD_CREATE_CONTIGUOUS` | 87 | `SD_INCLUDE_DEFRAG` | Create file with contiguous chain |
+| `CMD_COMPACT_FILE` | 88 | `SD_INCLUDE_DEFRAG` | Defragment a single file |
+| `CMD_FILE_FRAGMENTS` | 89 | `SD_INCLUDE_DEFRAG` | Count file fragmentation |
 
 ### Worker Loop Architecture
 
@@ -504,20 +507,21 @@ Operations that **require a handle buffer**: open (read or write), rd_byte/rd_st
 | Shared SD buffers (buf + dir_buf + fat_buf) | 1,536 bytes | 3 x 512 |
 | Entry buffer + volume label | 44 bytes | 32 + 12 |
 | Copy buffer | 512 bytes | For copyFile() |
-| Per-handle SD state (28 bytes x 6) | 168 bytes | Flags, position, cluster, etc. |
+| Per-handle SD state (33 bytes x 6) | 198 bytes | Flags, position, cluster, etc. |
 | Per-handle SD buffers (512 bytes x 6) | 3,072 bytes | Sector cache per handle |
 | Per-handle Flash state (~148 bytes x 6) | 888 bytes | Status, IDs, seek, filename |
 | Flash buffer pool (4096 bytes x 3) | 12,288 bytes | `MAX_FLASH_BUFFERS` block buffers |
 | Flash buffer pool tracking | 9 bytes | `fl_buf_owner[3]` + `fl_hBufIndex[6]` |
 | Flash translation tables | ~7,456 bytes | IDToBlocks + IDValids + BlockStates |
 | Temporary Flash block buffer | 4,096 bytes | Mount scanning |
-| Per-cog CWD (8 LONGs) | 32 bytes | SD only |
+| Per-cog SD CWD (8 LONGs) | 32 bytes | SD directory sector per cog |
+| Per-cog Flash CWD (8 x 128 B) | 1,024 bytes | Flash CWD emulation |
 | Per-cog errors (8 LONGs) | 32 bytes | last_error[8] |
 | Per-cog saved data (3 x 8 LONGs) | 96 bytes | saved_data0..2 |
 | Mailbox registers | 40 bytes | pb_cmd through pb_data2 |
-| Worker cog stack | 1,024 bytes | 256 LONGs |
+| Worker cog stack | 640 bytes | 160 LONGs (peak measured: 127) |
 | Stack guard | 16 bytes | 4 LONGs sentinel |
-| **Total (6 handles, 3 buffers)** | **~31,309 bytes** | ~30.6 KB |
+| **Total (6 handles, 3 buffers)** | **~31,979 bytes** | ~31.2 KB |
 
 Flash buffer pool sizing is independent of handle count. Reducing `MAX_FLASH_BUFFERS` from 6 to 3 (default) saves 12,288 bytes compared to previous releases. SD-only applications can set `MAX_FLASH_BUFFERS = 0` to eliminate Flash buffers entirely.
 
@@ -539,7 +543,7 @@ OBJ
 
 | Resource | Per-Unit Cost | What It Enables |
 |----------|---------------|-----------------|
-| Handle (`MAX_OPEN_FILES`) | ~688 B | 28 B SD state + 512 B SD buffer + 148 B Flash state |
+| Handle (`MAX_OPEN_FILES`) | ~693 B | 33 B SD state + 512 B SD buffer + 148 B Flash state |
 | Flash buffer (`MAX_FLASH_BUFFERS`) | 4,097 B | 4,096 B block buffer + 1 B owner tracking |
 
 **How to choose `MAX_FLASH_BUFFERS`**:
@@ -583,7 +587,9 @@ The pool is reset to all-free on `mount(DEV_FLASH)` and `unmount(DEV_FLASH)`.
 
 ## Conditional Compilation
 
-Six feature flags control optional SD features. Flash features are always compiled.
+Seven feature flags control optional SD features. Flash features are always compiled.
+
+**Hardware Access:**
 
 | Flag | Features Included |
 |------|-------------------|
@@ -591,8 +597,25 @@ Six feature flags control optional SD features. Flash features are always compil
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access, OCR, VBR read |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
 | `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, test error injection hooks |
+
+**User-Selectable Features:**
+
+| Flag | Features Included |
+|------|-------------------|
 | `SD_INCLUDE_ASYNC` | Async (non-blocking) read/write with polling completion |
-| `SD_INCLUDE_ALL` | Enables all five flags above |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
+
+**Diagnostic:**
+
+| Flag | Features Included |
+|------|-------------------|
+| `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (`stackDepth()`) |
+
+**Convenience:**
+
+| Flag | Features Included |
+|------|-------------------|
+| `SD_INCLUDE_ALL` | Enables all six flags above (RAW + REGISTERS + SPEED + DEBUG + ASYNC + DEFRAG; not STACK_CHECK) |
 
 ### Enabling Flags
 
@@ -617,7 +640,7 @@ OBJ
 
 ## Debug Channel Scheme (DEBUG_MASK)
 
-The driver contains ~448 debug statements, which exceeds the P2 compiler's 255 debug record limit. All debug statements use the `debug[CH_xxx]()` selective channel form with a `DEBUG_MASK` constant that controls which channels compile. This replaces the previous `DEBUG_DISABLE` constant.
+The driver contains ~455 debug statements, which exceeds the P2 compiler's 255 debug record limit. All debug statements use the `debug[CH_xxx]()` selective channel form with a `DEBUG_MASK` constant that controls which channels compile. This replaces the previous `DEBUG_DISABLE` constant.
 
 Channels 0-9 use the same names and meanings as the standalone SD driver for cross-project consistency:
 
@@ -840,8 +863,8 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `mount(dev)` | Mount one or both filesystems |
 | `unmount(dev)` | Flush and unmount one or both filesystems |
 | `mounted(dev)` | Check if device is mounted (lock-free) |
-| `version(dev)` | Driver version as integer (100 = v1.0.0) |
-| `versionStr(dev)` | Driver version as string (e.g., "1.0.0") |
+| `version(dev)` | Driver version as integer (e.g., DEV_BOTH → 1_02_00, DEV_SD → 1_05_00, DEV_FLASH → 2_00_00) |
+| `versionStr(dev)` | Driver version as string (e.g., "1.2.0", "1.5.0", "2.0.0") |
 | `checkStackGuard()` | Verify worker cog stack guard is intact |
 | `error()` | Last error code for calling cog |
 
@@ -896,10 +919,10 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 
 | Method | Description |
 |--------|-------------|
-| `changeDirectory(dev, pPath)` | Change calling cog's CWD (SD only) |
-| `newDirectory(dev, pName)` | Create new directory (SD only) |
+| `changeDirectory(dev, pPath)` | Change calling cog's CWD (SD directories, Flash CWD emulation) |
+| `newDirectory(dev, pName)` | Create new directory (SD directories, Flash CWD emulation) |
 | `readDirectory(entry)` | Enumerate CWD by index (SD legacy API) |
-| `openDirectory(dev, pPath)` | Open directory for handle-based enumeration (SD) → handle |
+| `openDirectory(dev, pPath)` | Open directory for handle-based enumeration (SD directories, Flash CWD emulation) → handle |
 | `readDirectoryHandle(handle)` | Read next directory entry → pEntry |
 | `closeDirectoryHandle(handle)` | Close directory handle |
 | `directory(dev, pBlockId, pFilename, pFileSize)` | Iterate Flash directory (set blockId=0 to start) |

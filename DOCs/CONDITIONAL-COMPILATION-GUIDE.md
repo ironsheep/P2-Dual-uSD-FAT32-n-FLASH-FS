@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Dual FS driver (`dual_sd_fat32_flash_fs.spin2`) uses a conditional compilation system to let you include only the SD card features your application needs. The core driver compiles to ~59 KB with all standard filesystem operations for both SD and Flash. Enabling all optional SD features brings it to ~62 KB. Since the Propeller 2 has 512 KB of hub RAM this isn't usually a constraint, but the mechanism keeps the driver well-organized and gives you control over what ships in your binary.
+The Dual FS driver (`dual_sd_fat32_flash_fs.spin2`) uses a conditional compilation system to let you include only the SD card features your application needs. The core driver compiles to ~60 KB with all standard filesystem operations for both SD and Flash. Enabling all optional SD features brings it to ~66 KB. Since the Propeller 2 has 512 KB of hub RAM this isn't usually a constraint, but the mechanism keeps the driver well-organized and gives you control over what ships in your binary.
 
 Feature flags are declared in your **top-level application file** (the file that contains `_CLKFREQ` and the `OBJ` declaration for the driver). The flags propagate down to the driver at compile time using `#pragma exportdef` directives.
 
@@ -18,17 +18,35 @@ All feature flags control **SD card** capabilities only. The Flash filesystem is
 
 ### Available Flags
 
+**Hardware Access Flags** -- expose low-level SD card capabilities:
+
 | Flag | What It Enables |
 |------|-----------------|
 | `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block reads/writes |
-| `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status |
+| `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, OCR, SD Status |
 | `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) |
-| `SD_INCLUDE_DEBUG` | Debug/diagnostic methods, CRC error getters, test hooks |
-| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
-| `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (diagnostic) |
-| `SD_INCLUDE_ALL` | Convenience: enables RAW + REGISTERS + SPEED + DEBUG + DEFRAG |
+| `SD_INCLUDE_DEBUG` | Debug/diagnostic methods, CRC error getters, test hooks (~40 methods) |
 
-All optional features combined add approximately 3 KB to the binary (57 additional methods).
+**User-Selectable Feature Flags** -- add application-level capabilities:
+
+| Flag | What It Enables |
+|------|-----------------|
+| `SD_INCLUDE_ASYNC` | Non-blocking I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `isFileContiguous()`, `compactFile()`, `createFileContiguous()` |
+
+**Diagnostic:**
+
+| Flag | What It Enables |
+|------|-----------------|
+| `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (`reportStackDepth()`) |
+
+**Convenience:**
+
+| Flag | What It Enables |
+|------|-----------------|
+| `SD_INCLUDE_ALL` | Enables RAW + REGISTERS + SPEED + DEBUG + ASYNC + DEFRAG |
+
+All optional features combined add approximately 6 KB to the binary (~67 additional PUB methods).
 
 ### Flag Dependencies
 
@@ -256,7 +274,7 @@ Inside the driver (`dual_sd_fat32_flash_fs.spin2`), each optional feature is com
 
 ### SD_INCLUDE_ALL Expansion
 
-The driver expands `SD_INCLUDE_ALL` into the five individual flags:
+The driver expands `SD_INCLUDE_ALL` into the six individual flags:
 
 ```spin2
 #ifdef SD_INCLUDE_ALL
@@ -271,6 +289,9 @@ The driver expands `SD_INCLUDE_ALL` into the five individual flags:
 #endif
 #ifndef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_DEBUG
+#endif
+#ifndef SD_INCLUDE_ASYNC
+#define SD_INCLUDE_ASYNC
 #endif
 #ifndef SD_INCLUDE_DEFRAG
 #define SD_INCLUDE_DEFRAG
@@ -298,15 +319,29 @@ This means you never need to explicitly enable REGISTERS when using SPEED.
 
 The driver is organized so that optional features occupy their own sections:
 
+**Hardware Access:**
+
+| Feature | Flag | Public Methods |
+|---------|------|----------------|
+| Raw Sector Access | `SD_INCLUDE_RAW` | `initCardOnly()`, `cardSizeSectors()`, `testCMD13()`, `readSectorRaw()`, `writeSectorRaw()`, `readSectorsRaw()`, `writeSectorsRaw()`, `readVBRRaw()` |
+| Card Registers | `SD_INCLUDE_REGISTERS` | `readCIDRaw()`, `readCSDRaw()`, `readSCRRaw()`, `readSDStatusRaw()`, `getOCR()` |
+| Speed Control | `SD_INCLUDE_SPEED` | `attemptHighSpeed()`, `setSPISpeed()`, `checkCMD6Support()`, `checkHighSpeedCapability()` |
+| Debug / Diagnostics | `SD_INCLUDE_DEBUG` | ~40 methods: CRC getters, CMD diagnostic getters, test hooks, display helpers, internal state accessors |
+
+**User-Selectable Features:**
+
+| Feature | Flag | Public Methods |
+|---------|------|----------------|
+| Non-blocking I/O | `SD_INCLUDE_ASYNC` | `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` |
+| Defragmentation | `SD_INCLUDE_DEFRAG` | `fileFragments()`, `isFileContiguous()`, `createFileContiguous()`, `compactFile()` |
+
+**Diagnostic:**
+
 | Feature | Flag | Public Methods |
 |---------|------|----------------|
 | Stack Depth | `SD_INCLUDE_STACK_CHECK` | `reportStackDepth()` |
-| Raw Sector Access | `SD_INCLUDE_RAW` | `initCardOnly()`, `cardSizeSectors()`, `testCMD13()`, `readSectorRaw()`, `writeSectorRaw()`, `readSectorsRaw()`, `writeSectorsRaw()`, `readVBRRaw()` |
-| Card Registers | `SD_INCLUDE_REGISTERS` | `readCIDRaw()`, `readCSDRaw()`, `readSCRRaw()`, `readSDStatus()` |
-| Speed Control | `SD_INCLUDE_SPEED` | `attemptHighSpeed()`, `setSPISpeed()`, `checkCMD6Support()`, `checkHighSpeedCapability()` |
-| Debug / Diagnostics | `SD_INCLUDE_DEBUG` | `getLastCMD13()`, `getLastCalculatedCRC()`, `getCRCMatchCount()`, `setCRCValidation()`, `debugDumpRootDir()`, `displaySector()`, and 10+ more |
 
-Some related methods are **always present** regardless of flags: `getSPIFrequency()`, `getCardMaxSpeed()`, `getManufacturerID()`, `getReadTimeout()`, `getWriteTimeout()`, `isHighSpeedActive()`.
+Some related methods are **always present** regardless of flags: `getSPIFrequency()`, `getCardMaxSpeed()`, `getManufacturerID()`, `getReadTimeout()`, `getWriteTimeout()`, `isHighSpeedActive()`, `checkStackGuard()`.
 
 If a flag is not defined, calling any of its gated methods causes a **linker error** at compile time. There is no silent failure -- you get a clear "method not found" message pointing you to the missing feature flag.
 
@@ -337,10 +372,10 @@ CON ' debug channel assignments for selective debug output
   CH_FL_BLOCK = 10            ' Flash block-level I/O: read/write/erase 4KB blocks
   CH_FL_CIRC  = 11            ' Flash circular files: froncate, wrap, old-format detection
 
-  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT)   ' Default: init + mount channels
+  DEBUG_MASK = 0   ' Default: all channels off (production)
 ```
 
-The driver has ~448 debug statements across 12 channels. The P2 compiler limits debug records to 255 per compilation unit. Enable 2-3 channels at a time to stay under the limit. Any 3 channels combined stay under 255 records.
+The driver has ~455 debug statements across 12 channels. The P2 compiler limits debug records to 255 per compilation unit. Enable 2-3 channels at a time to stay under the limit. Any 3 channels combined stay under 255 records.
 
 ### Production Builds
 
@@ -516,6 +551,39 @@ PUB go() | workerCog, matchCount, mismatchCount
     debug("CRC match=", udec_(matchCount), " mismatch=", udec_(mismatchCount))
 ```
 
+### Application with non-blocking I/O
+
+```spin2
+#pragma exportdef SD_INCLUDE_ASYNC
+
+OBJ
+    dfs : "dual_sd_fat32_flash_fs"
+
+PUB go() | workerCog, handle, status, result
+    workerCog := dfs.init()
+    dfs.mount(dfs.DEV_SD)
+
+    handle := dfs.openFileRead(dfs.DEV_SD, @"BIGFILE.DAT")
+    dfs.startReadHandle(handle, @buffer, 4096)
+    ' ... do other work while read is in progress ...
+    repeat until dfs.isComplete()
+    result := dfs.getResult()
+
+    dfs.closeFileHandle(handle)
+    dfs.unmount(dfs.DEV_SD)
+    dfs.stop()
+```
+
+**SD_INCLUDE_ASYNC methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `startReadHandle(handle, p_buf, count)` | Begin non-blocking read |
+| `startWriteHandle(handle, p_buf, count)` | Begin non-blocking write |
+| `isComplete()` | TRUE when async operation has finished |
+| `getResult()` | Bytes transferred (or negative error code) |
+| `cancelAsync()` | Cancel an in-progress async operation |
+
 ### Application with defragmentation
 
 ```spin2
@@ -564,7 +632,7 @@ PUB go() | workerCog, handle, frags, result
 
 ## DEBUG_MASK: Selective Debug Channels
 
-The driver uses `DEBUG_MASK` with 12 named debug channels to solve the P2 compiler's 255 debug record limit. All 448 debug statements in the driver use the `debug[CH_xxx]()` form, so only channels with their bit set in `DEBUG_MASK` compile into the binary. Disabled channels produce zero code and zero overhead.
+The driver uses `DEBUG_MASK` with 12 named debug channels to solve the P2 compiler's 255 debug record limit. All 455 debug statements in the driver use the `debug[CH_xxx]()` form, so only channels with their bit set in `DEBUG_MASK` compile into the binary. Disabled channels produce zero code and zero overhead.
 
 Channels 0-9 use the same names and meanings as the standalone SD driver (`micro_sd_fat32_fs.spin2`), so developers familiar with either driver use the same channel values.
 
@@ -590,8 +658,8 @@ Channels 0-9 use the same names and meanings as the standalone SD driver (`micro
 `DEBUG_MASK` is a CON constant inside the driver. To change which channels are active, edit the `DEBUG_MASK` line in `dual_sd_fat32_flash_fs.spin2`:
 
 ```spin2
-  ' Default: init + mount channels only
-  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT)
+  ' Production: zero debug overhead (default)
+  DEBUG_MASK = 0
 
   ' Debug file operations and directory operations
   DEBUG_MASK = (1 << CH_FILE) | (1 << CH_DIR)

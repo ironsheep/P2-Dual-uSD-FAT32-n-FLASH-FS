@@ -42,7 +42,7 @@ The shared-bus design is an efficient use of the P2 Edge Module's 4-pin SPI head
 2. **`switch_to_sd()`** (line 6158): `reinitCard()` -- 7-step recovery sequence including CMD0/CMD8/ACMD41/CMD58
 3. **`reinitCard()`** (line 6184): 4096-clock GPIO flush + card re-initialization (~50-100ms)
 
-This works reliably on the P2 Edge Module and is verified by 1,332 regression tests. However, on custom hardware where Flash and SD have their own dedicated pin groups, this switching overhead is unnecessary -- each device's pins are independent, so operating one device never affects the other.
+This works reliably on the P2 Edge Module and is verified by 1,350 regression tests. However, on custom hardware where Flash and SD have their own dedicated pin groups, this switching overhead is unnecessary -- each device's pins are independent, so operating one device never affects the other.
 
 ### 1.3 Independent Pin Layout (Custom Hardware)
 
@@ -475,9 +475,9 @@ pnut-ts -d test_independent_spi.spin2
 
 ### 7.2 Hardware Testing
 
-All 31 existing regression suites must pass in **both** modes:
+All 32 existing regression suites must pass in **both** modes:
 
-1. **Shared-bus mode** (P2 Edge Module): Run full `./run_regression.sh` -- must match current 1,332-test baseline
+1. **Shared-bus mode** (P2 Edge Module): Run full `./run_regression.sh` -- must match current 1,350-test baseline
 2. **Independent-bus mode** (custom board): Run same suites with modified pin configuration
 
 ### 7.3 New Test Coverage

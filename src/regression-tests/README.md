@@ -18,7 +18,7 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | `DFS_SD_RT_mount_tests.spin2` | 21 | Mount, unmount, remount cycles |
 | `DFS_SD_RT_file_ops_tests.spin2` | 22 | Create, open, close, delete, rename (V3 handle API) |
 | `DFS_SD_RT_read_write_tests.spin2` | 38 | Data integrity, sector boundaries, multi-cluster |
-| `DFS_SD_RT_directory_tests.spin2` | 31 | Directory listing, create, navigate, deep nesting |
+| `DFS_SD_RT_directory_tests.spin2` | 37 | Directory listing, create, navigate, deep nesting |
 | `DFS_SD_RT_dirhandle_tests.spin2` | 22 | V3 directory handle enumeration |
 | `DFS_SD_RT_subdir_ops_tests.spin2` | 18 | Cross-buffer cache coherence, subdirectory ops |
 | `DFS_SD_RT_seek_tests.spin2` | 37 | Seek and tell operations |
@@ -36,6 +36,7 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | `DFS_SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks |
 | `DFS_SD_RT_crc_diag_tests.spin2` | 14 | CRC diagnostic counters |
 | `DFS_SD_RT_parity_tests.spin2` | 32 | Feature parity: exists, file_size, stats, seek, open modes |
+| `DFS_SD_RT_defrag_tests.spin2` | 12 | Defrag API, contiguous creation, next-fit allocation |
 
 **Destructive (run separately):**
 
@@ -75,9 +76,9 @@ Hardware-verified regression test suites for the unified dual-FS driver. All tes
 | Category | Suites | Tests |
 |----------|:------:|------:|
 | Dual/Cross-device | 2 | 57 |
-| SD (standard) | 19 | 374 |
+| SD (standard) | 20 | 392 |
 | Flash (standard) | 10 | 901 |
-| **Total (standard)** | **31** | **1,332** |
+| **Total (standard)** | **32** | **1,350** |
 
 Optional suites add: format (+46), 8-cog stress (+66), CRC validation (+6), recovery (+7).
 
@@ -115,7 +116,7 @@ cd ../../tools/
 ```bash
 cd ../../tools/
 
-# Standard suite (31 suites, 1,332 tests)
+# Standard suite (32 suites, 1,350 tests)
 ./run_regression.sh
 
 # Include 8-cog stress test

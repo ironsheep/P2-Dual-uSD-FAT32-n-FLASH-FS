@@ -449,7 +449,7 @@ fs.changeDirectory(fs.DEV_SD, @"..")
 ### Creating Directories (SD)
 
 ```spin2
-if fs.newDirectory(fs.DEV_SD, @"BACKUP")
+if fs.newDirectory(fs.DEV_SD, @"BACKUP") == fs.SUCCESS
   debug("Directory created")
 else
   debug("Failed - may already exist")
@@ -659,8 +659,8 @@ debug("Flash: ", udec(file_count), " files, ", udec(free_ct), " blocks free")
 sn_hi, sn_lo := fs.serial_number(fs.DEV_FLASH)
 
 ' Driver version
-ver := fs.version(fs.DEV_SD)    ' 300 (= v3.0.0)
-ver := fs.version(fs.DEV_FLASH) ' 200 (= v2.0.0)
+ver := fs.version(fs.DEV_SD)    ' 10500 (= v1.5.0)
+ver := fs.version(fs.DEV_FLASH) ' 20000 (= v2.0.0)
 ```
 
 ### Setting Timestamps (SD Only)
@@ -931,14 +931,11 @@ Additional rules:
 Override `MAX_OPEN_FILES` if the default 6 isn't enough:
 
 ```spin2
-CON
-  MAX_OPEN_FILES = 8          ' 3 cogs doing file copy + headroom
-
 OBJ
-  fs : "dual_sd_fat32_flash_fs"
+  fs : "dual_sd_fat32_flash_fs" | MAX_OPEN_FILES = 8   ' 3 cogs doing file copy + headroom
 ```
 
-Each additional handle costs ~4.7 KB (primarily the Flash 4KB block buffer + SD 512-byte sector buffer + state arrays).
+Each additional handle costs ~688 bytes (SD 512-byte sector buffer + 28-byte SD state + ~148-byte Flash state). Flash block buffers are pooled separately (`MAX_FLASH_BUFFERS`, default 3 x 4 KB = 12 KB shared).
 
 ---
 
@@ -964,8 +961,9 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 |-------|----------|
 | 0 | `SUCCESS` |
 | -1 to -96 | SD/FAT32 errors |
-| -100 to -114 | Flash errors |
+| -100 to -115 | Flash errors |
 | -120 to -122 | Unified device errors |
+| -130 to -133 | Stack/defrag errors |
 
 ### Common SD Errors
 
@@ -980,7 +978,8 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 | -90 | `E_TOO_MANY_FILES` | All handle slots in use |
 | -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
 | -92 | `E_FILE_ALREADY_OPEN` | File already open for writing |
-| -93 | `E_INVALID_PARAM` | Invalid parameter (e.g., bad date field) |
+| -93 | `E_NOT_A_DIR_HANDLE` | Handle is not a directory handle (or vice versa) |
+| -94 | `E_INVALID_PARAM` | Invalid parameter (e.g., bad date field) |
 | -95 | `E_ASYNC_BUSY` | Async operation already in progress |
 | -96 | `E_NO_ASYNC_OP` | No pending async operation |
 
@@ -994,6 +993,7 @@ debug("Error: ", zstr(fs.string_for_error(status)))
 | -106 | `E_FLASH_FILE_MODE` | Wrong open mode for operation |
 | -107 | `E_FLASH_FILE_SEEK` | Seek past end of file |
 | -114 | `E_FLASH_FILE_EXISTS` | File already exists |
+| -115 | `E_FLASH_NO_BUFFER` | No Flash buffer available (all in use) |
 
 ### Unified Device Errors
 
@@ -1237,7 +1237,9 @@ pnut-term-ts -r DFS_example_basic.bin
 
 ## Conditional Compilation
 
-Six feature flags control optional SD features. Flash features are always compiled.
+Eight feature flags control optional SD features. Flash features are always compiled.
+
+**Hardware Access flags:**
 
 | Flag | What It Adds |
 |------|-------------|
@@ -1245,9 +1247,15 @@ Six feature flags control optional SD features. Flash features are always compil
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode (50 MHz) |
 | `SD_INCLUDE_DEBUG` | CRC diagnostics, test hooks, hex dump utilities |
-| `SD_INCLUDE_ASYNC` | Non-blocking file I/O (startReadHandle, startWriteHandle, isComplete, getResult, cancelAsync) |
+
+**User-Selectable Features:**
+
+| Flag | What It Adds |
+|------|-------------|
+| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: startReadHandle, startWriteHandle, isComplete, getResult, cancelAsync |
 | `SD_INCLUDE_DEFRAG` | Defragmentation: fileFragments, compactFile, createFileContiguous, isFileContiguous |
-| `SD_INCLUDE_ALL` | All six flags above |
+| `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (not included by `SD_INCLUDE_ALL`) |
+| `SD_INCLUDE_ALL` | All of the above flags except `SD_INCLUDE_STACK_CHECK` |
 
 Enable flags with `#pragma exportdef` **before** the OBJ declaration:
 
@@ -1452,7 +1460,7 @@ if fs.checkCMD6Support()
 
 | Method | Description |
 |--------|-------------|
-| `setSPISpeed(freq)` | Set SPI clock in Hz |
+| `setSPISpeed(freq)` | Set SPI clock in Hz (requires `SD_INCLUDE_SPEED`) |
 | `syncDirCache()` | Invalidate SD directory cache |
 | `sync()` | Flush all pending writes |
 | `fileName()` | Last directory entry name (SD) |

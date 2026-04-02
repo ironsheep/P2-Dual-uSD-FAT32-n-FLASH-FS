@@ -77,6 +77,7 @@ jobs:
           mkdir -p "${DEST}/src"
           cp .release/src/README.md "${DEST}/src/"
           cp src/dual_sd_fat32_flash_fs.spin2 "${DEST}/src/"
+          cp src/isp_stack_check.spin2 "${DEST}/src/"
 
           # src/DEMO/ - demo shell and support files
           mkdir -p "${DEST}/src/DEMO"
@@ -112,7 +113,7 @@ jobs:
           mkdir -p "${DEST}/src/regression-tests"
           [ -f src/regression-tests/README.md ] && cp src/regression-tests/README.md "${DEST}/src/regression-tests/"
           [ -f src/regression-tests/THEORY-OF-OPERATIONS.md ] && cp src/regression-tests/THEORY-OF-OPERATIONS.md "${DEST}/src/regression-tests/"
-          cp src/regression-tests/DFS_SD_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/DFS_SD_RT_*.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_FL_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/DFS_RT_*.spin2 "${DEST}/src/regression-tests/"
 

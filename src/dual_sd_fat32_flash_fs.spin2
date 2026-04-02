@@ -23,16 +23,23 @@
 '' Default: MINIMAL driver (core file operations only)
 '' To enable optional features, use #pragma exportdef in your top-level file:
 ''
+'' Hardware Access Flags:
 ''   #pragma exportdef SD_INCLUDE_RAW        ' Raw sector access
 ''   #pragma exportdef SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
-''   #pragma exportdef SD_INCLUDE_SPEED      ' High-speed mode control (requires SD_INCLUDE_REGISTERS)
+''   #pragma exportdef SD_INCLUDE_SPEED      ' High-speed mode control (requires REGISTERS)
 ''   #pragma exportdef SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
+''
+'' User-Selectable Feature Flags:
+''   #pragma exportdef SD_INCLUDE_ASYNC      ' Non-blocking I/O: startRead/WriteHandle, isComplete, getResult
 ''   #pragma exportdef SD_INCLUDE_DEFRAG     ' Defragmentation: fileFragments, compactFile, createFileContiguous
+''
+'' Diagnostic:
+''   #pragma exportdef SD_INCLUDE_STACK_CHECK ' Worker cog stack depth measurement
 ''
 ''   OBJ
 ''       fs : "dual_sd_fat32_flash_fs"
 ''
-'' Or define SD_INCLUDE_ALL to include everything:
+'' Or define SD_INCLUDE_ALL to include everything (except STACK_CHECK):
 ''   #pragma exportdef SD_INCLUDE_ALL
 '' ===============================================================================
 
@@ -81,7 +88,7 @@ CON ' ---- Device Constants ----
   DEV_BOTH  = 2       ' Both devices (for mount/unmount)
 
   DFS_VERSION   = 1_02_00  ' Dual FS driver version 1.2.0
-  SD_VERSION    = 1_04_00  ' SD sub-driver version 1.4.0
+  SD_VERSION    = 1_05_00  ' SD sub-driver version 1.5.0
   FLASH_VERSION = 2_00_00  ' Flash sub-driver version 2.0.0
 
 CON ' ---- Flash File Open Mode Constants ----

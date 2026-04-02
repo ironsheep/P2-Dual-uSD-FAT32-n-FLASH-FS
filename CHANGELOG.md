@@ -6,6 +6,15 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
+### Fixed
+- **BUGFIX**: Stale directory cluster in subdirectory operations — `do_changeDirectory()` and `do_delete()` now update the cached first-cluster after cross-sector directory scans that trigger a fresh sector read
+- 6 new tests in `DFS_SD_RT_directory_tests` covering the stale-cluster bug scenario
+
+### Changed
+- SD sub-driver version bumped to v1.5.0 (aligned with standalone P2-uSD-FAT32-FS release)
+- Apply authoring guide standards: named constants replace magic numbers, boolean comparisons use `TRUE`/`FALSE`, OBJ override parameter renamed `RT_MAX_OPEN_FILES`
+- Regression suite expanded to 32 standard suites, 1,350 tests
+
 ## [1.3.0] - 2026-03-29
 
 SD sub-driver upgraded to v1.4.3: next-fit allocator, defragmentation API, contiguous file creation.
@@ -26,7 +35,7 @@ SD sub-driver upgraded to v1.4.3: next-fit allocator, defragmentation API, conti
 ### Changed
 - `do_delete()` refactored: cluster-freeing loop extracted into reusable `freeClusterChain()`
 - `auditRootDir()` improved: scans all entries in first root directory sector for volume label (not just offset 0)
-- Regression suite expanded to 32 standard suites, 1,344 tests
+- Regression suite expanded to 32 standard suites, 1,350 tests
 
 ## [1.2.0] - 2026-03-18
 
@@ -89,7 +98,8 @@ Initial release of the unified dual-FS driver for the Parallax Propeller 2.
 ### Hardware Verified
 - Tested on P2 Edge Module with 32 GB GigaStone and Elite SD cards -- 29 suites, 1,308 tests, 0 failures on both
 
-[Unreleased]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ironsheep/P2-Dual-uSD-FAT32-n-FLASH-FS/releases/tag/v1.0.0

@@ -6,14 +6,14 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **31 standard suites** across four device categories producing **1,332 test assertions**, all verified on real P2 hardware.
+The regression test suite validates the `dual_sd_fat32_flash_fs.spin2` unified driver -- a Propeller 2 dual-device filesystem driver that provides simultaneous access to a microSD card (FAT32) and the onboard 16MB Flash chip through a single worker cog and a single API. The suite contains **32 standard suites** across four device categories producing **1,350 test assertions**, all verified on real P2 hardware.
 
-**Verified on hardware (2026-03-18):** 31 standard suites totaling **1,332 tests** -- all passing on both GigaStone 32GB and Elite SD cards:
+**Verified on hardware (2026-03-29):** 32 standard suites totaling **1,350 tests** -- all passing on both GigaStone 32GB and Elite SD cards:
 
 | Group | Suites | Tests |
 |-------|--------|-------|
 | Dual-device verification | 1 | 36 |
-| SD regression | 19 | 374 |
+| SD regression | 20 | 392 |
 | Flash regression | 10 | 901 |
 | Cross-device tests | 1 | 21 |
 
@@ -83,7 +83,7 @@ run_test.sh (from tools/ directory)
 | Script | Purpose |
 |--------|---------|
 | `run_test.sh <file> [-t timeout]` | Run a single test suite |
-| `run_regression.sh` | All 29 standard suites in dependency order (stop on first failure) |
+| `run_regression.sh` | All 32 standard suites in dependency order (stop on first failure) |
 
 Options: `--from <name>` (resume from suite matching name), `--include-format` (destructive SD format), `--include-8cog` (Flash 8-cog stress), `--compile-only` (compile without running).
 
@@ -100,14 +100,14 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 | `DFS_RT_dual_device_tests.spin2` | 36 | Flash mount, SPI bus switching, SD integrity after Flash ops, handle pool |
 | `DFS_RT_cross_device_tests.spin2` | 21 | Interleaved I/O on both devices, `copyFile()` SD<->Flash, device alternation |
 
-### 3.2 SD Regression Tests (17 standard suites, 350 tests)
+### 3.2 SD Regression Tests (20 standard suites, 392 tests)
 
 | File | Tests | Focus Area |
 |------|:-----:|------------|
 | `DFS_SD_RT_mount_tests.spin2` | 21 | Mount, unmount, remount cycles, pre-mount errors |
 | `DFS_SD_RT_file_ops_tests.spin2` | 22 | Create, open, close, delete, rename (V3 handle API) |
 | `DFS_SD_RT_read_write_tests.spin2` | 38 | Data integrity, sector boundaries, multi-cluster, large files |
-| `DFS_SD_RT_directory_tests.spin2` | 31 | Directory listing, create, navigate, deep nesting |
+| `DFS_SD_RT_directory_tests.spin2` | 37 | Directory listing, create, navigate, deep nesting |
 | `DFS_SD_RT_dirhandle_tests.spin2` | 22 | V3 directory handle enumeration, pool interaction |
 | `DFS_SD_RT_subdir_ops_tests.spin2` | 18 | Cross-buffer cache coherence, empty files, subdirectory ops |
 | `DFS_SD_RT_seek_tests.spin2` | 37 | Seek and tell operations, cross-sector seeks |
@@ -115,7 +115,7 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 | `DFS_SD_RT_multicog_tests.spin2` | 14 | Multi-cog singleton, concurrent access, lock serialization |
 | `DFS_SD_RT_multiblock_tests.spin2` | 6 | Multi-sector streamer DMA transfers (CMD18/CMD25) |
 | `DFS_SD_RT_raw_sector_tests.spin2` | 14 | Raw sector read/write round-trips |
-| `DFS_SD_RT_volume_tests.spin2` | 25 | Volume label, VBR access, syncAll, sync, setDate |
+| `DFS_SD_RT_volume_tests.spin2` | 28 | Volume label, VBR access, syncAll, sync, setDate, auto-flush |
 | `DFS_SD_RT_register_tests.spin2` | 6 | Card register access (CID/CSD/SCR/OCR/SD Status) |
 | `DFS_SD_RT_speed_tests.spin2` | 14 | SPI speed control, CMD6 high-speed mode |
 | `DFS_SD_RT_error_handling_tests.spin2` | 17 | Error conditions, invalid handles, state errors |
@@ -123,6 +123,7 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 | `DFS_SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks |
 | `DFS_SD_RT_crc_diag_tests.spin2` | 14 | CRC diagnostic counters, validation toggle |
 | `DFS_SD_RT_parity_tests.spin2` | 32 | Feature parity: exists, file_size, stats, seek, open modes |
+| `DFS_SD_RT_defrag_tests.spin2` | 12 | Defrag API, contiguous creation, next-fit allocation |
 
 **Destructive (run separately):**
 
@@ -223,7 +224,7 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 - **Large file writes** -- 2 KB, 4 KB, cluster boundary crossing
 - **Overwrite and append** -- Shorter/longer rewrites, append at EOF
 
-### 4.6 SD Directory Tests (31 tests)
+### 4.6 SD Directory Tests (37 tests)
 
 **Purpose:** Validate directory creation, navigation, enumeration, and cleanup across nested structures.
 
@@ -326,7 +327,19 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 
 **Why we test this:** The unified driver adds several methods that were not in the standalone SD driver. These tests verify that the new methods return correct results on the SD device.
 
-### 4.19 SD Format Tests (46 tests)
+### 4.19 SD Defrag Tests (12 tests)
+
+**Purpose:** Validate the defragmentation API -- `fileFragments()`, `isFileContiguous()`, `createFileContiguous()`, and `compactFile()` -- as well as the next-fit allocator.
+
+**Why we test this:** The defrag API relocates file clusters to achieve contiguous storage, improving sequential read performance. `compactFile()` uses a copy-then-free strategy with mandatory read-back verification. Incorrect cluster relocation or FAT chain updates would silently corrupt files.
+
+**Test groups:**
+- **Next-fit allocation** -- New files allocate from the previous allocation point, not cluster 2
+- **Fragment counting** -- `fileFragments()` returns correct fragment count for contiguous and fragmented files
+- **Contiguous creation** -- `createFileContiguous()` pre-allocates a contiguous cluster chain
+- **Compaction** -- `compactFile()` defragments a file with data integrity verification
+
+### 4.21 SD Format Tests (46 tests)
 
 **Purpose:** Validate the FAT32 format utility creates a correct, cross-OS-compatible filesystem.
 
@@ -343,47 +356,47 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 - **Root directory** -- Volume label entry
 - **Mount test** -- Driver mounts the freshly formatted card
 
-### 4.20 Flash Mount/Handle Basics Tests (50 tests)
+### 4.22 Flash Mount/Handle Basics Tests (50 tests)
 
 **Purpose:** Validate Flash filesystem mount, format, and basic handle operations -- open, close, delete, exists, stats.
 
 **Why we test this:** Flash mount scans all 3,968 blocks, builds translation tables, and resolves any corruption. Handle operations must correctly manage the block-based storage, including head/body block chains and the 4 KB block size.
 
-### 4.21 Flash Read/Write Tests (118 tests)
+### 4.23 Flash Read/Write Tests (118 tests)
 
 **Purpose:** Validate Flash data integrity for read and write operations.
 
 **Why we test this:** Flash I/O uses GPIO bit-bang SPI (Mode 3), which differs from the SD's smart pin SPI (Mode 0). The different SPI engine means different timing characteristics and potential failure modes.
 
-### 4.22 Flash Block Read/Write Tests (39 tests)
+### 4.24 Flash Block Read/Write Tests (39 tests)
 
 **Purpose:** Validate Flash block-level read/write operations, testing the underlying 4 KB block allocation and data storage.
 
-### 4.23 Flash Read/Modify/Write Tests (102 tests)
+### 4.25 Flash Read/Modify/Write Tests (102 tests)
 
 **Purpose:** Validate that existing files can be reopened, modified (overwritten), and the modified data persists correctly.
 
 **Why we test this:** Flash read/modify/write involves the "fork" mechanism -- creating a new copy of the file with modifications while the old version remains until the new version is committed. This copy-on-write approach must preserve unmodified data.
 
-### 4.24 Flash Append Tests (114 tests)
+### 4.26 Flash Append Tests (114 tests)
 
 **Purpose:** Validate Flash append operations and `flush()` for data persistence.
 
 **Why we test this:** Flash append grows a file by allocating additional body blocks and linking them into the chain. `flush()` commits the current write buffer to Flash. These operations must maintain chain integrity and data ordering.
 
-### 4.25 Flash Seek Tests (81 tests)
+### 4.27 Flash Seek Tests (81 tests)
 
 **Purpose:** Validate Flash seek operations for random access reading within files.
 
 **Why we test this:** Flash seek must follow the block chain to locate the correct 4 KB block and offset for any arbitrary byte position. Unlike SD (which can seek within contiguous sectors), Flash blocks are not necessarily contiguous on the chip.
 
-### 4.26 Flash Circular File Tests (262 + 79 = 341 tests across 2 suites)
+### 4.28 Flash Circular File Tests (262 + 79 = 341 tests across 2 suites)
 
 **Circular Tests (262 tests):** Validate Flash circular file create, write, read, and wrap-around behavior across 15 scenarios (under/at/over limit). Circular files have a fixed maximum size and overwrite the oldest data when full.
 
 **Circular Compatibility Tests (79 tests):** Validate that circular files created by write operations can be correctly read back, including persistence verification across unmount/mount cycles.
 
-### 4.27 Flash CWD Tests (36 tests)
+### 4.29 Flash CWD Tests (36 tests)
 
 **Purpose:** Validate Flash current working directory (CWD) emulation -- `changeDirectory()`, per-cog directory isolation, and absolute path support on the flat Flash filesystem.
 
@@ -396,13 +409,13 @@ Options: `--from <name>` (resume from suite matching name), `--include-format` (
 - **Absolute path basics** -- exists(), file_size(), create, delete via absolute paths
 - **Absolute path edge cases** -- root path, no double prefix, relative isolation, rename, round-trip
 
-### 4.28 Flash Directory Handle Tests (20 tests)
+### 4.30 Flash Directory Handle Tests (20 tests)
 
 **Purpose:** Validate Flash directory handle enumeration -- `openDirectory()`, `readDirectoryHandle()`, and `closeDirectoryHandle()` on the Flash device.
 
 **Why we test this:** The Flash filesystem is flat (no real directories), but the unified driver provides directory handle enumeration that lists files matching the current CWD prefix. These tests verify that the handle-based enumeration API works correctly for Flash, returning proper filenames, sizes, and attributes.
 
-### 4.29 Flash 8-Cog Stress Tests (66 tests)
+### 4.31 Flash 8-Cog Stress Tests (66 tests)
 
 **Purpose:** Validate concurrent Flash access from all 8 P2 cogs simultaneously.
 

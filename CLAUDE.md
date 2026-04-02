@@ -85,12 +85,12 @@ Test framework: `DFS_RT_utilities.spin2` (unified, used by all test suites) — 
 
 ```
 src/
-├── dual_sd_fat32_flash_fs.spin2       # Unified dual-FS driver (~9400 lines)
+├── dual_sd_fat32_flash_fs.spin2       # Unified dual-FS driver (~11,500 lines)
 ├── DEMO/                              # Interactive dual-device shell
 │   └── DFS_demo_shell.spin2
 ├── EXAMPLES/                          # 4 compilable example programs
 ├── UTILS/                             # 7 standalone utilities + 4 support libs
-└── regression-tests/                  # 31 standard suites, 1,332 tests
+└── regression-tests/                  # 32 standard suites, 1,350 tests
 
 tools/                                 # Test runner scripts and logs
 DOCs/                                  # Technical documentation

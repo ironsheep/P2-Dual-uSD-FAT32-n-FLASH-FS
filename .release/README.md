@@ -47,7 +47,7 @@ dual-fs-driver/
     │   ├── isp_mem_strings.spin2             String utilities
     │   └── isp_string_fifo.spin2             Inter-cog string FIFO
     └── regression-tests/                  Regression test suites
-        ├── DFS_SD_RT_*_tests.spin2           SD test suites (17)
+        ├── DFS_SD_RT_*_tests.spin2           SD test suites (20)
         ├── DFS_FL_RT_*_tests.spin2           Flash test suites (10)
         ├── DFS_RT_*_tests.spin2              Cross-device test suites (2)
         └── DFS_RT_utilities.spin2             Unified test framework
@@ -157,7 +157,7 @@ See `src/UTILS/README.md` for all available utilities.
 
 ## Regression Tests
 
-The regression test suite (1,332 tests across 31 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (1,350 tests across 32 standard suites) is included in `src/regression-tests/`. Tests compile with pnut-ts and run on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 

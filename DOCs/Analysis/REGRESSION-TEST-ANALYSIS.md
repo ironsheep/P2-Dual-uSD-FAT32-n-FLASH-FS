@@ -1,10 +1,10 @@
 # Regression Test Suite Analysis
 
-A comprehensive quality analysis of the project's 32 regression test suites (1,335 tests post-hardening) evaluated against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).
+A comprehensive quality analysis of the project's 32 standard suites (1,350 tests) evaluated against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).
 
 **Date:** 2026-03-04
 **Scope:** All test suites in `src/regression-tests/`
-**Driver version:** 116 PUB methods (71 always-compiled, 45 conditional)
+**Driver version:** 145 PUB methods (77 always-compiled, 68 conditional)
 
 ---
 
@@ -25,11 +25,11 @@ A comprehensive quality analysis of the project's 32 regression test suites (1,3
 
 ## 1. Executive Summary
 
-The regression suite is **strong for a 1.0 release**. It covers the full API surface, uses round-trip verification extensively, tests error paths systematically, and has caught real bugs during development. The suite runs on real hardware with 100% pass rate across all 32 suites.
+The regression suite is **strong for a 1.0 release** and has been extended through v1.2.0 and v1.3.0. It covers the full API surface, uses round-trip verification extensively, tests error paths systematically, and has caught real bugs during development. The suite runs on real hardware with 100% pass rate across all 32 standard suites.
 
 **Key metrics:**
-- 32 suites, 1,335 tests, 0 failures
-- All 71 always-compiled PUB methods have at least one test
+- 32 standard suites, 1,350 tests, 0 failures
+- All 77 always-compiled PUB methods have at least one test
 - Round-trip verification in 25+ suites
 - Negative/error-path tests in 20+ suites
 - Buffer guard sentinels in 15+ suites
@@ -299,6 +299,51 @@ A unified test utility library supports all suites:
 | crc_validation_tests | 6 | Tests error injection infrastructure; doesn't verify data correctness after CRC retry |
 | testcard_validation | 38 | Read-only golden-file suite; no buffer guards; benchmark assertion tautological; requires external test card |
 
+### 3.21 DFS_SD_RT_async_tests.spin2 (12 tests)
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Setup validation | Good | Mount checked, handles guarded |
+| Cleanup | Good | Files deleted after each group |
+| Negative tests | Good | Cancel mid-operation, error handling for invalid handles |
+| Boundary tests | Partial | Single-sector and multi-sector async transfers |
+| Round-trip | **Strong** | Async write followed by async read-back with content verification |
+| Test descriptions | Good | Clear per-operation descriptions |
+
+**Strengths:** Validates the non-blocking I/O path (SD_INCLUDE_ASYNC): `startReadHandle`, `startWriteHandle`, `isComplete`, `getResult`, `cancelAsync`. Tests async read, async write, cancel mid-operation, and error handling for invalid states.
+**Issues:** No test for multiple concurrent async operations. No timeout-during-async test.
+**Added in:** v1.2.0 (non-blocking I/O feature)
+
+### 3.22 DFS_SD_RT_timestamp_tests.spin2 (9 tests)
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Setup validation | Good | Mount checked |
+| Cleanup | Good | Test files deleted |
+| Negative tests | Good | `setDate` validation with invalid inputs |
+| Boundary tests | Good | Midnight, end-of-day timestamps |
+| Round-trip | **Strong** | `setDate`/`getDate` round-trip, file modification timestamps verified |
+| Test descriptions | Very good | Date/time encoding documented |
+
+**Strengths:** Validates `setDate` input validation, `getDate` round-trip fidelity, live clock integration, and file modification timestamp accuracy after write operations.
+**Issues:** No leap-year boundary test. No year-range boundary test (FAT32 epoch 1980-2107).
+**Added in:** v1.2.0 (live clock feature)
+
+### 3.23 DFS_SD_RT_defrag_tests.spin2 (12 tests)
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Setup validation | Good | Mount checked, fragmented files created in setup |
+| Cleanup | Good | Test files deleted |
+| Negative tests | Good | Defrag on already-contiguous file, invalid handle |
+| Boundary tests | **Strong** | Next-fit allocator, wrap-around with constrained FAT |
+| Round-trip | **Strong** | Content verified after defrag/compaction |
+| Test descriptions | Very good | Allocator strategy documented |
+
+**Strengths:** Tests the full defrag API: `fileFragments`, `isFileContiguous`, `createFileContiguous`, `compactFile`. Validates next-fit allocator behavior and wrap-around allocation with constrained FAT space.
+**Issues:** No test for defrag during near-full disk. No multi-file concurrent defrag test.
+**Added in:** v1.3.0 (SD_INCLUDE_DEFRAG)
+
 ---
 
 ## 4. Suite-by-Suite Analysis: Flash Tests
@@ -410,6 +455,21 @@ A unified test utility library supports all suites:
 
 **Issues:** ~~`fileNbr` shared counter incremented without lock (race condition -- unlikely collision but unsynchronized).~~ **FIXED** (W15 -- deterministic file ID from cogid()) `openWaitOnHandle()` retries without limit. Non-deterministic file type selection via `GETRND()`.
 
+### 4.11 DFS_FL_RT_dirhandle_tests.spin2 (20 tests)
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Setup validation | Good | Mount checked, test files created |
+| Cleanup | Good | Test files deleted after suite |
+| Negative tests | Good | Invalid handle, closed handle reuse, empty directory |
+| Boundary tests | Good | Empty directory, single file, multiple files |
+| Round-trip | **Strong** | Create files, enumerate via directory handle, verify count and names |
+| Test descriptions | Excellent | Per-scenario descriptions |
+
+**Strengths:** Tests Flash directory handle enumeration via `openDirectory(DEV_FLASH)`, `readDirectoryHandle`, and `closeDirectoryHandle`. Validates CWD-aware listing on the flat Flash filesystem. Confirms handle lifecycle and proper iteration termination.
+**Issues:** No test for directory handle behavior during concurrent file creation. No test for handle pool exhaustion with mixed file and directory handles.
+**Added in:** v1.3.0
+
 ---
 
 ## 5. Suite-by-Suite Analysis: Cross-Device and Multi-Cog
@@ -441,7 +501,7 @@ A unified test utility library supports all suites:
 
 ## 6. API Coverage Matrix
 
-### Always-Compiled Methods (71 total)
+### Always-Compiled Methods (77 total)
 
 | Category | Methods | Tested? | Coverage Notes |
 |----------|---------|---------|----------------|
@@ -452,8 +512,10 @@ A unified test utility library supports all suites:
 | Seek/Position/EOF | seekHandle, seek, flashSeek, tellHandle, eofHandle, fileSizeHandle | Yes | seekHandle/seek extensively tested. flashSeek deprecated but tested. |
 | Sync | syncHandle, syncAllHandles | Yes | Both tested. syncAllHandles lacks flush-verification. |
 | Copy | copyFile | Yes | Tested in cross_device_tests. SD->Flash and Flash->SD. |
-| Directory | openDirectory, readDirectoryHandle, closeDirectoryHandle, readDirectory, newDirectory, changeDirectory, directory | Yes | Extensively tested. Flash directory() tested in cwd_tests. |
-| Metadata | exists, file_size, file_size_unused, rename, deleteFile, moveFile, freeSpace, stats, setDate, serial_number | Yes | All tested. moveFile SD-only tested. |
+| Directory | openDirectory, readDirectoryHandle, closeDirectoryHandle, readDirectory, newDirectory, changeDirectory, directory | Yes | Extensively tested. Flash directory() tested in cwd_tests. Flash directory handles tested in FL_dirhandle_tests. |
+| Metadata | exists, file_size, file_size_unused, rename, deleteFile, moveFile, freeSpace, stats, serial_number | Yes | All tested. moveFile SD-only tested. |
+| Timestamps | setDate, getDate, wrtDate, wrtTime | Yes | Tested in timestamp_tests. setDate validation, getDate round-trip, file modification timestamps. |
+| Auto-flush | automatic flush after idle | Yes | Tested in volume_tests (3 tests). |
 | Entry Buffer | fileName, fileSize, attributes, volumeLabel, setVolumeLabel, syncDirCache | Yes | Tested in volume_tests, dirhandle_tests. |
 | Error | error, string_for_error | Partial | error() tested. string_for_error() used by framework but not directly asserted. |
 | Stack | checkStackGuard, reportStackDepth | Yes | Guard checked in most suites. Depth reported when compiled. |
@@ -468,6 +530,8 @@ A unified test utility library supports all suites:
 | SD_INCLUDE_SPEED | attemptHighSpeed, setSPISpeed, checkCMD6Support, checkHighSpeedCapability | 4 | Yes -- speed_tests |
 | SD_INCLUDE_DEBUG | 27 debug/test methods | 27 | Partial -- CRC counters tested, error injection tested, diagnostic accessors tested. Display methods not tested (visual output only). |
 | SD_INCLUDE_STACK_CHECK | reportStackDepth | 1 | Yes -- conditional in most suites |
+| SD_INCLUDE_ASYNC | startReadHandle, startWriteHandle, isComplete, getResult, cancelAsync | 5 | Yes -- async_tests |
+| SD_INCLUDE_DEFRAG | fileFragments, isFileContiguous, createFileContiguous, compactFile | 4 | Yes -- defrag_tests |
 
 ### Untested or Weakly Tested Methods
 
@@ -500,7 +564,7 @@ A unified test utility library supports all suites:
 10. **Cleanup discipline**: Test files deleted before and after each suite.
 
 ### Coverage Breadth
-11. **Full API surface tested**: All 71 always-compiled PUB methods have at least one test.
+11. **Full API surface tested**: All 77 always-compiled PUB methods have at least one test.
 12. **Conditional APIs tested**: All 4 pragma groups have dedicated suites.
 13. **Multi-cog testing**: Both SD (3 workers) and Flash (7 workers) have dedicated concurrency suites.
 14. **Cross-device testing**: SPI bus-switching regression, handle pool sharing, copyFile both directions.
@@ -583,7 +647,7 @@ These are high-value, low-effort items that directly improve test correctness:
 | **P3** | Add basic Flash absolute-path test to an existing suite | 30 min | New feature has zero coverage; add 3-5 tests to cwd_tests | **DONE** (10 tests added) |
 | **P3** | Validate setup operations in dual_device and cross_device tests | 20 min | Silent setup failures are a false-confidence risk | **DONE** |
 
-### Post-Release (v1.1 or later)
+### Post-Release (v1.4 or later)
 
 These are larger-scope improvements for long-term suite quality:
 
@@ -614,8 +678,8 @@ The suite is **release-ready**. All pre-release items (P1, P2, P3) have been com
 
 Remaining open items (P4-P6): disk-full/Flash-full exhaustion tests, seed logging for GETRND(), circular_compat dependency check, rename collision test, delete-open-file test, syncAllHandles flush verification.
 
-The suite's core strengths -- round-trip verification, boundary testing, error-path coverage, and multi-device/multi-cog stress testing -- provide strong regression protection for a 1.0 release.
+The suite's core strengths -- round-trip verification, boundary testing, error-path coverage, and multi-device/multi-cog stress testing -- provide strong regression protection through v1.3.0. Suites added in v1.2.0 (async, timestamps) and v1.3.0 (defrag, Flash directory handles) maintain the same quality standards.
 
 ---
 
-*Analysis performed 2026-03-04 against 32 regression suites (1,335 tests) using the principles from [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).*
+*Analysis performed 2026-03-04 against 32 standard suites (1,350 tests) using the principles from [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md). Updated 2026-04-02 with v1.2.0 and v1.3.0 suite additions.*

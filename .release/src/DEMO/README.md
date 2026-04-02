@@ -1,6 +1,6 @@
 # Dual Filesystem Demo Shell
 
-An interactive command-line shell for exploring both SD card and Flash filesystem operations on the P2. Supports DOS-style (`dir`, `type`, `del`) and Unix-style (`ls`, `cat`, `rm`) commands. Switch between devices with `dev sd` / `dev flash`, or copy across devices with `copy sd:FILE flash:FILE`.
+An interactive command-line shell for exploring both SD card and Flash filesystem operations on the P2. Supports DOS-style (`dir`, `type`, `del`) and Unix-style (`ls`, `cat`, `rm`) commands. Switch between devices with `dvc sd` / `dvc flash`, or copy across devices with `copy sd:FILE flash:FILE`.
 
 Beyond exercising driver features, the shell is a practical all-in-one management tool: format a device, check filesystem integrity with `audit`, repair corruption with `fsck`, and measure performance with `bench` -- all without leaving the terminal session.
 
@@ -64,13 +64,13 @@ sd:(unmounted)> _        (SD not mounted)
 
 ### Device Switching
 
-Use `dev` to switch between SD and Flash:
+Use `dvc` to switch between SD and Flash:
 
 ```
-sd:/> dev flash
+sd:/> dvc flash
 flash:/> dir
  ... Flash file listing ...
-flash:/> dev sd
+flash:/> dvc sd
 sd:/>
 ```
 
@@ -91,7 +91,7 @@ sd:/>
 Switch to Flash and mount it:
 
 ```
-sd:/> dev flash
+sd:/> dvc flash
 flash:(unmounted)> mount
 Mounting Flash...
 Flash mounted successfully
@@ -224,7 +224,7 @@ sd:/> bench
 ### Navigation
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `dev sd` / `dev flash` | | Switch active device |
+| `dvc sd` / `dvc flash` | | Switch active device |
 | `mount` | | Mount the active device (or `mount both`) |
 | `unmount` | `eject` | Safely unmount the active device |
 | `dir` | `ls` | List directory contents |
