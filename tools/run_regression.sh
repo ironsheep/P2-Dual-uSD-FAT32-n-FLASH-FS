@@ -220,6 +220,7 @@ DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$REGTEST_DIR")"
 REF_SD_SRC="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src" "$REGTEST_DIR")"
 REF_SD_UTILS="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src/UTILS" "$REGTEST_DIR")"
 REF_SD_DEMO="$(_relpath "$PROJECT_ROOT/REF-FLASH-uSD/uSD-FAT32/src/DEMO" "$REGTEST_DIR")"
+CACHE_DIR="$PROJECT_ROOT/.pnut-cache"
 
 # --- Dependency-aware compilation ---
 # Shared source dependencies (transitive): if ANY of these change, ALL tests need recompilation.
@@ -298,13 +299,13 @@ for i in "${!SUITES[@]}"; do
         continue
     fi
 
-    if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I "$REF_SD_SRC" -I "$REF_SD_UTILS" -I "$REF_SD_DEMO" "$FILE" >/dev/null 2>&1; then
+    if pnut-ts -d --cache --cache-dir "$CACHE_DIR" -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I "$REF_SD_SRC" -I "$REF_SD_UTILS" -I "$REF_SD_DEMO" "$FILE" >/dev/null 2>&1; then
         SIZE=$(wc -c < "$BIN_FILE" | tr -d ' ')
         echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
         COMPILE_PASS=$((COMPILE_PASS + 1))
     else
         echo -e "  ${RED}FAIL${NC}: $FILE"
-        pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I "$REF_SD_SRC" -I "$REF_SD_UTILS" -I "$REF_SD_DEMO" "$FILE" 2>&1 | grep -i error || true
+        pnut-ts -d --cache --cache-dir "$CACHE_DIR" -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I "$REF_SD_SRC" -I "$REF_SD_UTILS" -I "$REF_SD_DEMO" "$FILE" 2>&1 | grep -i error || true
         COMPILE_FAIL=$((COMPILE_FAIL + 1))
         COMPILE_FAILED_FILES+=("$FILE")
     fi

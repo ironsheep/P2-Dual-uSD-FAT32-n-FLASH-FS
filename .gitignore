@@ -6,6 +6,9 @@ REF-FLASH-uSD/
 *.bin
 *.obj
 
+# Compiler cache (pnut-ts --cache)
+.pnut-cache/
+
 # Build artifacts
 *.lst
 *.list
@@ -55,3 +58,4 @@ src/DEMO/run_demo.sh
 /src/DEMO/tests
 .mcp.json
 xport.tar.gz
+/DOCs/Plans/ext-agents

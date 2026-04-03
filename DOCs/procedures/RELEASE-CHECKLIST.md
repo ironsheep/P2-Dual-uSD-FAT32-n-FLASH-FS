@@ -155,6 +155,15 @@ git push origin vX.Y.Z
 - [ ] Release zip contains all expected files (spot-check against workflow)
 - [ ] Release notes extracted correctly from CHANGELOG
 
+## 9. Post-Release Cleanup
+
+```bash
+# Clear all pnut-ts compilation caches for fresh start on next release cycle
+find . -type d -name .pnut-cache -exec rm -rf {} +
+```
+
+- [ ] All compilation caches cleared (`find . -type d -name .pnut-cache`)
+
 ---
 
 *Adapted for the P2 Dual SD FAT32 + Flash Filesystem project.*
