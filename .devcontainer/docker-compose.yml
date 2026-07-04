@@ -1,12 +1,18 @@
 services:
   dev:
-    image: mcr.microsoft.com/devcontainers/javascript-node:24-bookworm
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Name the built image so Docker reuses the cached layers across rebuilds.
+    image: p2-dual-usd-fat32-n-flash-fs-dev:local
     volumes:
       - ..:/workspaces/P2-Dual-uSD-FAT32-n-FLASH-FS:cached
-      - todo-mcp-data:/home/vscode/.local/share/todo-mcp
+      # Persist todo-mcp task data across container rebuilds.
+      - todo-mcp-data:/home/node/.local/share/todo-mcp
     command: sleep infinity
-    # Note: features, postCreateCommand, extensions, and settings
-    # are handled in devcontainer.json, not here
+    # Note: postCreateCommand, extensions, and settings are handled in
+    # devcontainer.json, not here. Tooling (pnut-ts, Claude CLI) is baked
+    # into the image via Dockerfile.
 
 volumes:
   todo-mcp-data:
