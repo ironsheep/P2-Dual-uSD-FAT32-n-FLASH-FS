@@ -6,7 +6,8 @@
   "workspaceFolder": "/workspaces/P2-Dual-uSD-FAT32-n-FLASH-FS",
   "containerEnv": {
     "LANG": "en_US.UTF-8",
-    "LC_ALL": "en_US.UTF-8"
+    "LC_ALL": "en_US.UTF-8",
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
   },
   "initializeCommand": "test -f .devcontainer/docker-compose.override.yml || echo 'services: {}' > .devcontainer/docker-compose.override.yml",
   "features": {
