@@ -610,4 +610,27 @@ its own line with pass/fail counts + totals — never grouped or abbreviated).
 - **Runner artifacts** (`src/regression-tests/performance.log`,
   `pnut-term-settings.json`, `tests/`) are pnut-term output — do not commit.
 
+---
+
+## Section ↔ Task cross-reference (todo-mcp, sprint tag `fixture-discipline`)
+
+| Plan § | Deliverable | Task | seq |
+| ------ | ----------- | ---- | --- |
+| §2 | `largestFreeExtent` SD driver query | «#2» | 1 |
+| §3 | `compactFile` clean-fail invariant | «#3» | 2 |
+| §4 | Device-parameterize Flash-only helpers | «#4» | 3 |
+| §5 | SD setup / precondition helpers | «#5» | 4 |
+| §1 | Fixture-discipline contract (docs) | «#6» | 5 |
+| §6 | Defrag retrofit (template) | «#7» | 6 |
+| §7 | MEDIUM retrofit — directory-fixture (directory, dirhandle-SD) | «#8» | 7 |
+| §7 | MEDIUM retrofit — geometry (raw_sector, multiblock) | «#9» | 8 |
+| §8 | LOW retrofit — needs-changes (large-writers, idempotency, FL_dirhandle) | «#10» | 9 |
+| §8 | LOW — compliance verification sweep | «#11» | 10 |
+| §9 | Documentation finalization | «#12» | 11 |
+| §10 | Native hardware certification | «#13» | 12 |
+
+Ordering note: §1 (contract) is authored at seq 5 — after the §4/§5 helpers exist so it
+references their shipped names, and before the retrofits (§6–8) that apply it
+(standards-before-application).
+
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
