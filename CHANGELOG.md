@@ -6,6 +6,17 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-05
+
+SD sub-driver upgraded to v1.5.1: shared SD/Flash bus hardening against microSD corruption.
+
+### Added
+- **Shared-bus corruption protection**: SD CRC checking is enabled session-wide (CMD59) and every SD command carries a valid CRC-7, so stray traffic on the SD/Flash shared SPI bus during Flash access is rejected by the microSD card instead of being executed as a destructive command -- guards against MBR wipe and card lock on the P2 Edge module
+- `DFS_RT_mbr_sentinel_stress_tests` -- verifies MBR and reserved-sector integrity under SD-only and interleaved SD+Flash load
+
+### Fixed
+- Command completion is robust against a spurious or concurrent ATN, so a caller always reads its own operation's result
+
 ## [1.3.0] - 2026-04-02
 
 SD sub-driver upgraded to v1.5.0: next-fit allocator, defragmentation API, contiguous file creation.
