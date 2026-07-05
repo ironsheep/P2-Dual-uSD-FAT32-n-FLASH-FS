@@ -425,25 +425,46 @@ PUB evaluateSubHandle(resultHandle, pMessage) | bPassed
         debug[CH_EVAL]("   -> pass")
         passCountSub[cogid()]++
 
-PUB evaluateFSStats(pMessage, expectedFileCount, expectedBlocksUsed) | blocksUsed, blocksFree, fileCount, bPassed, pPassFail
-'' Report on expected vs. actual filesystem stats
+PUB evaluateFSStats(pMessage, expectedFileCount, expectedBlocksUsed)
+'' Report on expected vs. actual Flash filesystem stats (thin Flash wrapper)
 ''
 '' @param pMessage - intro message
 '' @param expectedFileCount - count of files expected
 '' @param expectedBlocksUsed - count of blocks used expected
 
+    evaluateFSStatsDev(dfs.DEV_FLASH, pMessage, expectedFileCount, expectedBlocksUsed)
+
+PUB evaluateFSStatsDev(dev, pMessage, expectedFileCount, expectedBlocksUsed) | blocksUsed, blocksFree, fileCount, bPassed, pPassFail
+'' Report on expected vs. actual filesystem stats for either device.
+'' Flash: asserts file-count AND blocks-used (blocks-used is a Flash concept).
+'' SD: dfs.stats() reports used==0 (total-minus-free needs SD_INCLUDE_RAW), so blocks-used
+''     has no SD analog -- assert file-count and report free sectors (the SD capacity metric).
+''
+'' @param dev - Target device (dfs.DEV_FLASH or dfs.DEV_SD)
+'' @param pMessage - intro message
+'' @param expectedFileCount - count of files expected
+'' @param expectedBlocksUsed - count of blocks used expected (Flash only; ignored on SD)
+
     debug[CH_STATE]("* ", zstr_(pMessage))
-    blocksUsed, blocksFree, fileCount := dfs.stats(dfs.DEV_FLASH)
+    blocksUsed, blocksFree, fileCount := dfs.stats(dev)
     debug[CH_STATE]("  # FileSystem: ", udec_(blocksUsed, blocksFree, fileCount))
-    bPassed := expectedFileCount == fileCount and expectedBlocksUsed == blocksUsed
-    if fileCount <> expectedFileCount
-        debug[CH_STATE]("  # files: ", udec_(fileCount), " (expected ", udec_(expectedFileCount), ")")
+    if dev == dfs.DEV_FLASH
+        bPassed := expectedFileCount == fileCount and expectedBlocksUsed == blocksUsed
+        if fileCount <> expectedFileCount
+            debug[CH_STATE]("  # files: ", udec_(fileCount), " (expected ", udec_(expectedFileCount), ")")
+        else
+            debug[CH_STATE]("  # files: ", udec_(fileCount))
+        if blocksUsed <> expectedBlocksUsed
+            debug[CH_STATE]("  # blocks used: ", udec_(blocksUsed), " (expected ", udec_(expectedBlocksUsed), ")")
+        else
+            debug[CH_STATE]("  # blocks used: ", udec_(blocksUsed))
     else
-        debug[CH_STATE]("  # files: ", udec_(fileCount))
-    if blocksUsed <> expectedBlocksUsed
-        debug[CH_STATE]("  # blocks used: ", udec_(blocksUsed), " (expected ", udec_(expectedBlocksUsed), ")")
-    else
-        debug[CH_STATE]("  # blocks used: ", udec_(blocksUsed))
+        bPassed := expectedFileCount == fileCount
+        if fileCount <> expectedFileCount
+            debug[CH_STATE]("  # files: ", udec_(fileCount), " (expected ", udec_(expectedFileCount), ")")
+        else
+            debug[CH_STATE]("  # files: ", udec_(fileCount))
+        debug[CH_STATE]("  # free sectors: ", udec_(blocksFree))
     pPassFail := !bPassed ? @"FAIL" : @"pass"
     ifnot bPassed
         failCount[cogid()]++
@@ -540,10 +561,17 @@ PUB showErrorCode(pCaller, errorCode)
 
     debug[CH_STATE]("EEEE ", zstr_(pCaller), " error: ", zstr_(dfs.string_for_error(errorCode)))
 
-PUB ShowStats() | blocksUsed, blocksFree, fileCount
-'' Display filesystem stats
+PUB ShowStats()
+'' Display Flash filesystem stats (thin Flash wrapper)
 
-    blocksUsed, blocksFree, fileCount := dfs.stats(dfs.DEV_FLASH)
+    ShowStatsDev(dfs.DEV_FLASH)
+
+PUB ShowStatsDev(dev) | blocksUsed, blocksFree, fileCount
+'' Display filesystem stats for either device
+''
+'' @param dev - Target device (dfs.DEV_FLASH or dfs.DEV_SD)
+
+    blocksUsed, blocksFree, fileCount := dfs.stats(dev)
     debug[CH_STATE](udec(blocksUsed, blocksFree, fileCount))
 
 PUB showFileDetails(pFilename) | bytesUsed, bytes_free, block_count
@@ -559,29 +587,59 @@ PUB showFileDetails(pFilename) | bytesUsed, bytes_free, block_count
     else
         debug[CH_STATE]("  File: [", zstr_(pFilename), "], ", udec(bytesUsed, bytes_free, block_count))
 
-PUB showFiles() | blockID, byteCount, byte contentBuf[30], BlocksUsed
-'' Display all files on Flash device
+PUB showFiles()
+'' Display all files on Flash device (thin Flash wrapper)
+
+    showFilesDev(dfs.DEV_FLASH)
+
+PUB showFilesDev(dev) | blockID, byteCount, byte contentBuf[30], BlocksUsed, sdHandle
+'' Display all files in the current working directory of either device
+''
+'' @param dev - Target device (dfs.DEV_FLASH or dfs.DEV_SD)
 
     debug[CH_STATE](" ")
     debug[CH_STATE]("  All Files:")
     blockID := 0
+    sdHandle := -1
+    if dev <> dfs.DEV_FLASH
+        sdHandle := dfs.openDirectory(dfs.DEV_SD, @".")
     repeat
-        dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
+        if dev == dfs.DEV_FLASH
+            dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
+        else
+            byteCount := sdDirNextEntry(sdHandle)               ' fills @filename (empty at end)
         BlocksUsed := blockCountForFileSize(byteCount)
         if filename[0]
-            ReadFile(@filename, @contentBuf, 30)
+            ReadFileDev(dev, @filename, @contentBuf, 30)
             if isZstr(@contentBuf, 30)
                 debug[CH_STATE](zstr_(@filename), udec(byteCount, blockID, BlocksUsed), zstr(@contentBuf))
             else
                 debug[CH_STATE](zstr_(@filename), udec(byteCount, blockID, BlocksUsed), ", @contentBuf={binary data}")
         else
             quit
+    if dev <> dfs.DEV_FLASH and sdHandle >= 0
+        dfs.closeDirectoryHandle(sdHandle)
 
-PUB ensureEmptyDirectory() | blockID, byteCount, bPassed, pPassFail
-'' Validate that Flash directory is empty
+PUB ensureEmptyDirectory()
+'' Validate that Flash directory is empty (thin Flash wrapper)
 
-    blockID := 0
-    dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
+    ensureEmptyDirectoryDev(dfs.DEV_FLASH)
+
+PUB ensureEmptyDirectoryDev(dev) | blockID, byteCount, bPassed, pPassFail, sdHandle
+'' Validate that the current working directory of either device is empty
+''
+'' @param dev - Target device (dfs.DEV_FLASH or dfs.DEV_SD)
+
+    byteCount := 0
+    if dev == dfs.DEV_FLASH
+        blockID := 0
+        dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
+    else
+        filename[0] := 0
+        sdHandle := dfs.openDirectory(dfs.DEV_SD, @".")
+        if sdHandle >= 0
+            byteCount := sdDirNextEntry(sdHandle)              ' fills @filename with first file (or empty)
+            dfs.closeDirectoryHandle(sdHandle)
     bPassed := true
     if filename[0]
         bPassed := false
@@ -593,6 +651,31 @@ PUB ensureEmptyDirectory() | blockID, byteCount, bPassed, pPassFail
     else
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
+
+PRI sdDirNextEntry(sdHandle) : byteCount | p_entry, pName, bDone
+' Advance an open SD directory handle to the next FILE entry (skipping ., .., subdirs),
+' copying its bare 8.3 name into the module `filename` buffer -- the SD analog of one
+' dfs.directory() step, so downstream logic (shared with the Flash path) is device-agnostic.
+' At end of directory sets filename[0]=0 and returns 0, matching the Flash convention.
+'
+' @param sdHandle - Open SD directory handle (from dfs.openDirectory(DEV_SD, ...))
+' @returns byteCount - Size in bytes of the entry loaded into `filename`, 0 at end-of-dir
+' @local p_entry - Pointer to the driver's shared entry buffer, 0 at end
+' @local pName - Pointer to the driver's bare-filename temp buffer
+' @local bDone - Loop guard: set once a file entry or end-of-dir is reached
+
+    byteCount := 0
+    filename[0] := 0
+    bDone := false
+    repeat until bDone
+        p_entry := dfs.readDirectoryHandle(sdHandle)
+        if p_entry == 0
+            bDone := true                                     ' end of directory: filename[0] stays 0
+        elseif (dfs.attributes() & dfs.DIR_ATTR_DIRECTORY) == 0   ' a file (skip subdirectory entries)
+            pName := dfs.fileName()
+            bytemove(@filename, pName, strsize(pName) + 1)
+            byteCount := dfs.fileSize()
+            bDone := true
 
 ' ===============================================================================
 ' FLASH FILE SIZE CALCULATION UTILITIES
@@ -645,18 +728,25 @@ PUB bytesInLastBlock(totalBytes) : bytesInLast
     if bytesInLast > dfs.BYTES_IN_BODY_BLOCK
         bytesInLast := bytesInLast +// dfs.BYTES_IN_BODY_BLOCK
 
-PUB checkMatchingEntries(pDirEntries) | blockID, byteCount, bPassed, pPassFail, refFileCount, foundFileCount, pCurrRefDir, pRefFilename, refByteCount, refBlocks, calcBlocks, bBadEntry
-'' Verify directory contents match expected entries
+PUB checkMatchingEntries(pDirEntries)
+'' Verify Flash directory contents match expected entries (thin Flash wrapper)
+
+    checkMatchingEntriesDev(dfs.DEV_FLASH, pDirEntries)
+
+PUB checkMatchingEntriesDev(dev, pDirEntries) | blockID, byteCount, bPassed, pPassFail, refFileCount, foundFileCount, pCurrRefDir, pRefFilename, refByteCount, refBlocks, calcBlocks, bBadEntry, sdHandle
+'' Verify the current working directory contents of either device match expected entries
 '' Structure: LONG[ptr_filename, byte_count, block_count, ...] terminated by ptr=0
+'' The per-file block-count is a Flash allocation concept and is asserted on Flash only;
+'' on SD the block-count column is ignored (assert filename + byte-count + file-count).
 {
         ' structure for directory checking
         ' (pDirEntries := @dirEntr1)
 dirEntr1        LONG    @testfile1     ' pointer to filename
 fileBytes1      LONG    10             ' length in bytes
-fileBlocks1     LONG    1              ' number of blocks allocated
+fileBlocks1     LONG    1              ' number of blocks allocated (Flash only; ignored on SD)
 dirEntr2        LONG    @testfile2     ' pointer to filename
 fileBytes2      LONG    20             ' length in bytes
-fileBlocks2     LONG    1              ' number of blocks allocated
+fileBlocks2     LONG    1              ' number of blocks allocated (Flash only; ignored on SD)
 dirEnd          LONG    0              ' ptr = NULL, no more entries
 }
     bPassed := true
@@ -664,11 +754,17 @@ dirEnd          LONG    0              ' ptr = NULL, no more entries
     refFileCount := 0
     foundFileCount := 0
     blockID := 0
+    sdHandle := -1
+    if dev <> dfs.DEV_FLASH
+        sdHandle := dfs.openDirectory(dfs.DEV_SD, @".")
     repeat
         pRefFilename := LONG[pCurrRefDir][0]
         refByteCount := LONG[pCurrRefDir][1]
         refBlocks    := LONG[pCurrRefDir][2]
-        dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
+        if dev == dfs.DEV_FLASH
+            dfs.directory(dfs.DEV_FLASH, @blockID, @filename, @byteCount)
+        else
+            byteCount := sdDirNextEntry(sdHandle)              ' fills @filename (empty at end)
         if pRefFilename == 0
         else
             refFileCount++
@@ -687,7 +783,7 @@ dirEnd          LONG    0              ' ptr = NULL, no more entries
             if byteCount <> refByteCount
                 debug[CH_STATE](" - BAD byte count!")
                 bBadEntry := true
-            if calcBlocks <> refBlocks
+            if dev == dfs.DEV_FLASH and calcBlocks <> refBlocks   ' block-count is Flash-only
                 debug[CH_STATE](" - BAD block count!")
                 bBadEntry := true
             if bBadEntry
@@ -696,6 +792,9 @@ dirEnd          LONG    0              ' ptr = NULL, no more entries
                 bPassed := false
         if pRefFilename <> 0
             pCurrRefDir := @LONG[pCurrRefDir][3]
+
+    if dev <> dfs.DEV_FLASH and sdHandle >= 0
+        dfs.closeDirectoryHandle(sdHandle)
 
     if foundFileCount <> refFileCount
         debug[CH_STATE]("  # Found ", udec_(foundFileCount), " files (expected ", udec_(refFileCount), ")")
@@ -744,15 +843,25 @@ PUB isZstr(pBffr, count) : bIsStringStatus | bytIdx
         if pBffr[bytIdx] < ASCII_PRINTABLE_MIN or pBffr[bytIdx] > ASCII_PRINTABLE_MAX
             quit
 
-PUB ReadFile(pFilename, pStr, maxlen) | fileHndl, byteCount, bValidHndl
-'' Read a string file into buffer
+PUB ReadFile(pFilename, pStr, maxlen)
+'' Read a string file from Flash into buffer (thin Flash wrapper)
 ''
 '' @param pFilename - pointer to filename
 '' @param pStr - pointer to output buffer
 '' @param maxlen - max bytes to read
 
+    ReadFileDev(dfs.DEV_FLASH, pFilename, pStr, maxlen)
+
+PUB ReadFileDev(dev, pFilename, pStr, maxlen) | fileHndl, byteCount, bValidHndl
+'' Read a string file from either device into buffer
+''
+'' @param dev - Target device (dfs.DEV_FLASH or dfs.DEV_SD)
+'' @param pFilename - pointer to filename
+'' @param pStr - pointer to output buffer
+'' @param maxlen - max bytes to read
+
     if isStringsFile(pFilename)
-        fileHndl := dfs.open(dfs.DEV_FLASH, pFilename, dfs.FILEMODE_READ)
+        fileHndl := dfs.open(dev, pFilename, dfs.FILEMODE_READ)
         bValidHndl := (fileHndl >= 0)
         if bValidHndl == TRUE
             byteCount := dfs.rd_str(fileHndl, pStr, maxlen)
