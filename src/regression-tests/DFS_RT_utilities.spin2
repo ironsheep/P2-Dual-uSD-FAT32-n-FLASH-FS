@@ -26,6 +26,8 @@ CON
   GUARD_BYTE    = $CC         ' Sentinel value (distinct from $00, $FF, $AA, $55)
 
 
+  SECTOR_BYTES        = 512  ' FAT sector size (fixed) -- used to convert SD sectors <-> clusters
+
   HEXDUMP_LINE_BYTES  = 16   ' Bytes per hex dump row
   ASCII_PRINTABLE_MIN = 32   ' Space - first printable ASCII
   ASCII_PRINTABLE_MAX = 126  ' Tilde - last printable ASCII
@@ -57,6 +59,7 @@ VAR { test stats vars }
   LONG    failCount[dfs.MAX_P2_COGS]
   LONG    passCountSub[dfs.MAX_P2_COGS]
   LONG    failCountSub[dfs.MAX_P2_COGS]
+  LONG    setupNotMetCount[dfs.MAX_P2_COGS]     ' unmet-precondition count -- reported distinctly, NEVER folded into pass/fail
 
   LONG    varSignature[dfs.MAX_P2_COGS]
 
@@ -75,6 +78,7 @@ PRI initIfNotAlready()
         failCount[cogid()] := 0
         passCountSub[cogid()] := 0
         failCountSub[cogid()] := 0
+        setupNotMetCount[cogid()] := 0
         varSignature[cogid()] := TEST_SIGNATURE
         debug[CH_EVAL]("* init VAR")
 
@@ -135,12 +139,14 @@ PUB ShowTestEndCounts() | pMsg
     debug(" ")
     debug(" ============================================================")
     debug("* ", udec_(numberTests[cogid()]), " Tests - Pass: ", udec_(passCount[cogid()]), ", Fail: ", udec_(failCount[cogid()]))
+    if setupNotMetCount[cogid()] <> 0
+      debug("*  Setup-not-met (skipped, NOT failures): ", udec_(setupNotMetCount[cogid()]))
     if numberTests[cogid()] <> passCount[cogid()] + failCount[cogid()]
       pMsg := (numberTests[cogid()] > passCount[cogid()] + failCount[cogid()]) ? @"missing" : @"extra"
       debug("*  BAD TEST COUNTS: ", udec_(numberTests[cogid()]), " <> ", udec_(passCount[cogid()] + failCount[cogid()]), " (", zstr_(pMsg), " ", udec_(abs(numberTests[cogid()] - (passCount[cogid()] + failCount[cogid()]))), " tests)")
     debug(" ============================================================")
 
-PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail
+PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail, totalSetupNotMet
 '' Display combined multi-cog test summary (sums across all cogs)
 
     showSubTestResults()
@@ -148,14 +154,18 @@ PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail
     totalTests := 0
     totalPass := 0
     totalFail := 0
+    totalSetupNotMet := 0
     repeat cogIdx from 0 to dfs.MAX_P2_COGS - 1
         totalTests += numberTests[cogIdx]
         totalPass += passCount[cogIdx]
         totalFail += failCount[cogIdx]
+        totalSetupNotMet += setupNotMetCount[cogIdx]
 
     debug(" ")
     debug(" ============================================================")
     debug("* ALL COGS: ", udec_(totalTests), " Tests - Pass: ", udec_(totalPass), ", Fail: ", udec_(totalFail))
+    if totalSetupNotMet <> 0
+      debug("* ALL COGS: Setup-not-met (skipped, NOT failures): ", udec_(totalSetupNotMet))
     debug(" ============================================================")
 
 PUB setCheckCountPerTest(countTests)
@@ -806,6 +816,109 @@ dirEnd          LONG    0              ' ptr = NULL, no more entries
     else
         passCount[cogid()]++
     debug("   -> ", zstr_(pPassFail))
+
+' ===============================================================================
+' SD SETUP / TEARDOWN / PRECONDITION-ASSERT HELPERS  (fixture-discipline contract)
+' ===============================================================================
+' An unmet precondition is a SETUP problem, not a driver defect: these report via
+' assertPrecondition(), which increments setupNotMetCount -- reported distinctly and
+' NEVER folded into the driver pass/fail totals. A test whose precondition is unmet
+' should skip its body and report setup-not-met, so a fragmented/full card can never
+' masquerade as a driver failure. (See DOCs/Decisions/REGRESSION-TESTING-BEST-PRACTICES.md)
+
+PUB assertPrecondition(bHeld, pMessage) : bResult
+'' Report a setup precondition. If unmet, emit a distinct setup-not-met outcome that does
+'' NOT touch the driver pass/fail counters, and return FALSE so the caller can skip its body.
+''
+'' @param bHeld - TRUE if the precondition is satisfied
+'' @param pMessage - description of the precondition (shown when unmet)
+'' @returns bResult - the precondition state (same as bHeld)
+
+    bResult := bHeld
+    ifnot bHeld
+        debug("  # SETUP NOT MET: ", zstr_(pMessage), "  (skipped; NOT a driver failure)")
+        setupNotMetCount[cogid()]++
+
+PUB ensureCleanBaseline(dev, pOwnedNames) : bClean | idx, pName
+'' Establish/restore this suite's baseline: delete every file the suite OWNS (idempotent --
+'' safe to call at both start and end) then audit that none remain. Scoped to the suite's own
+'' entries only -- it never asserts the ambient device root is globally empty, so it is safe on
+'' a shared card. A leftover owned file after delete is reported as setup-not-met (a dirty
+'' baseline is a setup condition, e.g. a prior crashed run), not a driver failure.
+''
+'' @param dev - Target device (dfs.DEV_SD or dfs.DEV_FLASH)
+'' @param pOwnedNames - Pointer to a 0-terminated LONG array of filename-string pointers
+''                      (LONG[ @name1, @name2, ..., 0 ])
+'' @returns bClean - TRUE if every owned file is absent after cleanup
+
+    idx := 0                                             ' delete pass (ignore not-found)
+    repeat
+        pName := LONG[pOwnedNames][idx++]
+        if pName == 0
+            quit
+        dfs.deleteFile(dev, pName)
+
+    bClean := true                                       ' audit pass: none of our owned names remain
+    idx := 0
+    repeat
+        pName := LONG[pOwnedNames][idx++]
+        if pName == 0
+            quit
+        if dfs.exists(dev, pName)
+            debug("  # BASELINE not clean: [", zstr_(pName), "] still present after delete")
+            bClean := false
+    assertPrecondition(bClean, @"ensureCleanBaseline: owned files removed")
+
+PUB clustersForBytes(dev, sizeBytes) : clusters | bytesPerCluster
+'' Convert a byte size to the number of SD clusters it occupies, using the mounted card's
+'' actual geometry (sectorsPerCluster). Inverse of the defrag Test-11 sizing math
+'' (clusters * sectorsPerCluster * 512). SD-only concept; returns 0 for non-SD devices.
+''
+'' @param dev - Target device (dfs.DEV_SD)
+'' @param sizeBytes - File size in bytes
+'' @returns clusters - Clusters required (>=1 for any non-zero size), 0 for non-SD
+
+    clusters := 0
+    if dev == dfs.DEV_SD
+        bytesPerCluster := dfs.sectorsPerCluster() * SECTOR_BYTES
+        if bytesPerCluster > 0
+            clusters := (sizeBytes + bytesPerCluster - 1) / bytesPerCluster
+        if clusters < 1
+            clusters := 1
+
+PUB assertFreeSpace(dev, minClusters, pMessage) : bMet | freeClusters
+'' Audit that the device has at least minClusters of FREE space (regardless of contiguity).
+'' UNGATED -- any large-write suite can audit capacity without enabling SD_INCLUDE_DEFRAG.
+'' SD: free sectors / sectorsPerCluster. Flash: freeSpace already returns free blocks.
+'' Reports setup-not-met (not a driver failure) when capacity is short.
+''
+'' @param dev - Target device (dfs.DEV_SD or dfs.DEV_FLASH)
+'' @param minClusters - Minimum free clusters (SD) / blocks (Flash) required
+'' @param pMessage - Precondition description (shown when unmet)
+'' @returns bMet - TRUE if free space is sufficient
+
+    if dev == dfs.DEV_SD
+        freeClusters := dfs.freeSpace(dfs.DEV_SD) / dfs.sectorsPerCluster()
+    else
+        freeClusters := dfs.freeSpace(dev)
+    bMet := freeClusters >= minClusters
+    assertPrecondition(bMet, pMessage)
+
+#ifdef SD_INCLUDE_DEFRAG
+PUB assertContiguousFree(dev, minClusters, pMessage) : bMet
+'' Audit that the device has a CONTIGUOUS free run of at least minClusters -- the precondition
+'' for contiguous-allocation / defrag tests. SD-only, gated on SD_INCLUDE_DEFRAG because it
+'' relies on largestFreeExtent(). Reports setup-not-met (not a driver failure) when the largest
+'' contiguous run is too short (e.g. a fragmented card, or a setTestMaxClusters-constrained FAT).
+''
+'' @param dev - Target device (must be dfs.DEV_SD)
+'' @param minClusters - Minimum contiguous free-cluster run required
+'' @param pMessage - Precondition description (shown when unmet)
+'' @returns bMet - TRUE if a sufficient contiguous run exists
+
+    bMet := dfs.largestFreeExtent(dev) >= minClusters
+    assertPrecondition(bMet, pMessage)
+#endif
 
 ' ===============================================================================
 ' FILE TYPE UTILITIES
