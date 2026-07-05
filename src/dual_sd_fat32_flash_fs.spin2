@@ -9370,6 +9370,19 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, startClstr, fileSzBytes
 ' Relocates a file's clusters into a contiguous chain using copy-then-free.
 ' 12-step process with mandatory read-back verification.
 '
+' FAILURE-SAFETY INVARIANT (allocate-verify-then-swap): the destination run is
+' secured (Step 5) and the copy read-back verified (Steps 6-7) BEFORE any FAT/dir
+' state is committed. Steps 1-7 are discardable -- every pre-commit failure
+' (E_NO_CONTIGUOUS_SPACE, copy E_IO_ERROR, E_VERIFY_FAILED) returns with the file
+' 100% intact, the original chain untouched, and free accounting unchanged. Step 9
+' (dir-entry swap) is the ATOMIC COMMIT POINT; the original chain is released
+' (Step 10) ONLY after the new chain is fully committed -- never a half-swapped
+' state. Do not reorder these steps or move a persisted write ahead of Step 5.
+' (Residual limit: an E_IO_ERROR while persisting the new chain in Steps 8-9 can
+'  leak the freshly-allocated new-chain range -- old file stays intact+readable;
+'  recovered by the fsck utility, consistent with this driver's best-effort,
+'  fsck-backed write model. This never occurs on the E_NO_CONTIGUOUS_SPACE path.)
+'
 ' @param p_path - Pointer to null-terminated filename string
 ' @returns status - SUCCESS or negative error code
 
@@ -9410,10 +9423,10 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, startClstr, fileSzBytes
               quit
             clstr := nextClstr
 
-          ' Step 5: Find contiguous free space
+          ' Step 5: Find contiguous free space (last read-only step; pre-commit early-exit)
           newFirstClstr := findContiguousRun(clstrCnt)
           if newFirstClstr < 0
-            status := newFirstClstr                     ' E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
+            status := newFirstClstr                     ' E_NO_CONTIGUOUS_SPACE or E_IO_ERROR -- nothing mutated, file intact
           else
             ' Step 6: Copy phase -- walk old chain, copy each cluster to new location
             clstr := startClstr
@@ -9452,7 +9465,7 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, startClstr, fileSzBytes
               status := allocateContiguousChain(newFirstClstr, clstrCnt)
 
             if status == SUCCESS
-              ' Step 9: Update directory entry to point to new first cluster
+              ' Step 9: ATOMIC COMMIT POINT -- point the dir entry at the new first cluster
               if readSector(dir_sec, BUF_DIR) < 0
                 status := E_IO_ERROR
               else
@@ -9461,7 +9474,7 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, startClstr, fileSzBytes
                 bytemove(@dir_buf + dir_off, @entry_buffer, DIR_ENTRY_SIZE)
                 writeSector(dir_sec, BUF_DIR)
 
-                ' Step 10: Free old clusters
+                ' Step 10: Release the original chain -- ONLY now that the new chain is committed
                 freeClusterChain(startClstr)
 
                 ' Step 11: Invalidate all caches
