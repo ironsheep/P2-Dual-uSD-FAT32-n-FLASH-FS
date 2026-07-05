@@ -128,6 +128,11 @@ Bill Wake (2001) introduced the shorthand **Arrange-Act-Assert (AAA)**, populari
 
 **Key discipline:** Keep the Exercise phase to a single operation. If you're calling multiple functions, you're testing an interaction scenario, not a unit -- which is fine, but be explicit about it.
 
+> **For this project's SD/Flash suites these four phases are not merely advice.**
+> They are promoted to a mandatory five-phase contract (Setup *establishes and audits*
+> preconditions; Verify includes *untouched-stayed-untouched*), with a hard rule that an
+> unmet precondition reports as **setup-not-met, never a driver failure.** See §11.5.
+
 ---
 
 ## 5. What to Test: Coverage Strategies
@@ -443,6 +448,67 @@ utils.evaluateBool(fileExists(@"DATA.TXT"), @"precondition: file exists", true)
 - **Resource-limited environments.** If handles or memory are exhausted from a prior test's leak, setup calls in subsequent tests will fail.
 
 **Rule of thumb:** If a setup call *can* fail, it *will* fail eventually. Checking it costs one line; not checking it can cost hours of debugging phantom test failures.
+
+### 11.5 The Mandatory Five-Phase Fixture-Discipline Contract
+
+Sections 4 (Four Phases) and 11.1-11.4 above are advice. For this project's SD/Flash
+regression suites they are **promoted to a mandatory contract.** Every test — and every
+suite — runs five phases in order, and none may be skipped:
+
+1. **Setup — establish AND audit preconditions.** Beyond checking that `mount()` etc.
+   succeeded (§11.2), *audit that the working area is in the state the test assumes.*
+   The precondition classes are:
+   - **Entry-count / cleanliness** — the files this suite owns are absent (or present)
+     as the test expects. Audit the suite's **owned entries only** — never assert the
+     ambient device root is globally empty (see anti-pattern in §11.5, and
+     `Test-Weakness-Patterns.md` Pattern J).
+   - **Free-space capacity** — enough free space exists for what the test will write.
+   - **Contiguity** — a contiguous free run of the required length exists (for
+     contiguous-allocation / defrag tests).
+2. **Build + audit the fixture.** Create the files/layout the test acts on, and confirm
+   they were built as intended (e.g. a fragmented fixture really has >1 fragment; a
+   contiguous fixture really has 1).
+3. **Act.** The single operation under test.
+4. **Verify postconditions** — including *untouched-stayed-untouched*: files the
+   operation was not supposed to change are byte-for-byte intact.
+5. **Teardown.** Restore the baseline for the suite's owned entries (delete owned files),
+   so a re-run starts clean. Teardown that deletes files but leaves the free-space layout
+   fragmented is incomplete — see `Test-Weakness-Patterns.md` Pattern K.
+
+**The hard rule — an unmet precondition is SETUP-NOT-MET, never a driver failure.**
+If a Setup-phase audit fails (card too full, too fragmented, a leftover file from a
+crashed run), the test must report a distinct **setup-not-met** outcome and skip its
+body. It must **never** increment the driver pass/fail totals. A fragmented or full card
+is a property of the fixture, not a defect in the driver; counting it as a failure
+manufactures phantom red and trains people to ignore failures.
+
+**Shipped helper surface** (`DFS_RT_utilities.spin2`) implementing the contract:
+
+| Phase | Helper | Notes |
+|-------|--------|-------|
+| Setup audit | `assertPrecondition(bHeld, pMessage)` | The setup-not-met reporter. Bumps `setupNotMetCount` (reported distinctly, never folded into pass/fail); returns FALSE so the caller skips its body. |
+| Setup audit | `assertFreeSpace(dev, minClusters, pMessage)` | Ungated capacity audit (any suite, no defrag needed). |
+| Setup audit | `assertContiguousFree(dev, minClusters, pMessage)` | Contiguity audit; SD-only, gated on `SD_INCLUDE_DEFRAG`. |
+| Setup/Teardown | `ensureCleanBaseline(dev, pOwnedNames)` | Idempotent (call at start *and* end); scoped to the suite's owned entries only. |
+| Sizing | `clustersForBytes(dev, sizeBytes)` | Geometry-driven (uses `sectorsPerCluster()`), so fixtures size correctly on any card. |
+| Verify (either device) | `evaluateFSStatsDev` / `checkMatchingEntriesDev` / `ensureEmptyDirectoryDev` / `showFilesDev` / `ShowStatsDev` / `ReadFileDev` | Device-parameterized cores; SD asserts file-count + free-space where Flash asserts blocks-used. |
+
+### 11.6 The Two SD Determinism Levers
+
+FAT free-space state is ambient — a test cannot assume a card's contiguity. Two driver
+levers make the contiguous-allocation preconditions **deterministic**:
+
+- **`largestFreeExtent(dev)`** *(audit lever)* — returns the longest run of consecutive
+  free clusters. Use it (via `assertContiguousFree`) to *audit* that the positive
+  precondition holds before a contiguous-allocation test acts.
+- **`setTestMaxClusters(N)`** *(force lever)* — caps the FAT the allocator/scanner sees,
+  so a test can deterministically manufacture the **negative**: constrain the card so no
+  contiguous home of the needed length exists, then assert the operation returns
+  `E_NO_CONTIGUOUS_SPACE` (and, per the §3 invariant, leaves the target file intact and
+  the filesystem consistent). Reset with `setTestMaxClusters(0)`.
+
+Together these turn "did the card happen to be contiguous?" (nondeterministic, flaky)
+into an audited precondition plus a forced negative (deterministic, reproducible).
 
 ---
 
