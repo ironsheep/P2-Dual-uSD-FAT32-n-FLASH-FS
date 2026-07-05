@@ -177,6 +177,7 @@ CON ' command codes for worker cog
   CMD_CREATE_CONTIGUOUS    = 87                                               ' Create file with pre-allocated contiguous chain: param0=path ptr, param1=file_size, returns data0=handle
   CMD_COMPACT_FILE         = 88                                               ' Defragment a single file: param0=path ptr
   CMD_FILE_FRAGMENTS       = 89                                               ' Count file fragmentation: param0=path ptr, returns data0=fragment_count
+  CMD_LARGEST_FREE_EXTENT  = 90                                               ' Longest run of consecutive free clusters: returns data0=cluster count (SD-only)
 #endif
 
   ' ===========================================================================
@@ -2614,6 +2615,22 @@ PUB compactFile(dev, p_path) : status
   else
     status := send_command(CMD_COMPACT_FILE, p_path, 0, 0, 0)
 
+PUB largestFreeExtent(dev) : count
+'' Return the length, in clusters, of the longest run of consecutive free clusters
+'' on the volume. Lets a regression test audit a contiguous-space precondition before
+'' asserting (report "setup not met" instead of a spurious driver failure). SD-only.
+''
+'' @param dev - Target device (must be DEV_SD)
+'' @returns count - Longest consecutive free-cluster run in clusters (0 if none or
+''                  unmounted), or negative error (E_NOT_SUPPORTED off SD, E_IO_ERROR
+''                  on FAT read failure)
+
+  if dev <> DEV_SD
+    count := set_error(E_NOT_SUPPORTED)
+  else
+    send_command(CMD_LARGEST_FREE_EXTENT, 0, 0, 0, 0)
+    count := LONG[@saved_data0][COGID()]
+
 #endif
 
 PUB syncDirCache()
@@ -3705,9 +3722,9 @@ PRI fs_worker() | cur_cmd
 ' Raw sector commands are allowed in both MODE_RAW and MODE_FILESYSTEM
 ' Mode transitions (MOUNT, UNMOUNT, INIT_CARD_ONLY) have their own logic
 ' V3: Include handle-based commands (CMD_OPEN_READ through CMD_SD_FILE_SIZE_UNUSED)
-' V4: Include defrag commands (CMD_CREATE_CONTIGUOUS through CMD_FILE_FRAGMENTS)
+' V4: Include defrag commands (CMD_CREATE_CONTIGUOUS through CMD_LARGEST_FREE_EXTENT)
 #ifdef SD_INCLUDE_DEFRAG
-    if (cur_cmd >= CMD_NEWDIR AND cur_cmd <= CMD_MOVEFILE) OR (cur_cmd >= CMD_OPEN_READ AND cur_cmd <= CMD_SD_FILE_SIZE_UNUSED) OR (cur_cmd >= CMD_CREATE_CONTIGUOUS AND cur_cmd <= CMD_FILE_FRAGMENTS)
+    if (cur_cmd >= CMD_NEWDIR AND cur_cmd <= CMD_MOVEFILE) OR (cur_cmd >= CMD_OPEN_READ AND cur_cmd <= CMD_SD_FILE_SIZE_UNUSED) OR (cur_cmd >= CMD_CREATE_CONTIGUOUS AND cur_cmd <= CMD_LARGEST_FREE_EXTENT)
 #else
     if (cur_cmd >= CMD_NEWDIR AND cur_cmd <= CMD_MOVEFILE) OR (cur_cmd >= CMD_OPEN_READ AND cur_cmd <= CMD_SD_FILE_SIZE_UNUSED)
 #endif
@@ -3965,6 +3982,10 @@ PRI fs_worker() | cur_cmd
 
       CMD_CREATE_CONTIGUOUS:
         pb_data0 := do_create_contiguous(pb_param0, pb_param1)
+        pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
+
+      CMD_LARGEST_FREE_EXTENT:
+        pb_data0 := do_largest_free_extent()
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
 #endif
 
@@ -9087,28 +9108,71 @@ PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, fatEntry, runSta
   runStart := ROOT_CLUSTER
   runLen := 0
   fat_idx := ROOT_CLUSTER * 4                           ' start at cluster 2
-  repeat
-    if fat_idx & SECTOR_MASK == 0                       ' at sector boundary?
-      if fat_idx >> SECTOR_BITS >= sec_per_fat          '   past end of FAT?
-        quit
-      if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0
-        DEBUG[CH_SECTOR]("  [findContiguousRun] FAT read FAILED")
-        first_cluster := E_IO_ERROR
-        quit
-    if test_max_clusters > 0 AND (fat_idx >> FAT_ENTRY_SHIFT) >= test_max_clusters
-      quit                                              ' test hook: artificial limit
-    fatEntry := LONG[@fat_buf + (fat_idx & SECTOR_MASK)]
-    if (fatEntry & FAT_EOC_MASK) == 0                   ' free cluster?
-      if runLen == 0
-        runStart := fat_idx >> FAT_ENTRY_SHIFT          '   start new run
-      runLen++
-      if runLen >= cluster_count                        ' found enough?
-        first_cluster := runStart
-        quit
+  if readSector(fat_sec, BUF_FAT) < 0                   ' pre-load FAT sector 0: scan starts at cluster 2, so the
+    first_cluster := E_IO_ERROR                         '   in-loop boundary read below only fires from cluster 128 on
+  else
+    repeat
+      if fat_idx & SECTOR_MASK == 0 AND fat_idx > 0     ' at sector boundary (sector 0 already loaded above)?
+        if fat_idx >> SECTOR_BITS >= sec_per_fat        '   past end of FAT?
+          quit
+        if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0
+          DEBUG[CH_SECTOR]("  [findContiguousRun] FAT read FAILED")
+          first_cluster := E_IO_ERROR
+          quit
+      if test_max_clusters > 0 AND (fat_idx >> FAT_ENTRY_SHIFT) >= test_max_clusters
+        quit                                            ' test hook: artificial limit
+      fatEntry := LONG[@fat_buf + (fat_idx & SECTOR_MASK)]
+      if (fatEntry & FAT_EOC_MASK) == 0                 ' free cluster?
+        if runLen == 0
+          runStart := fat_idx >> FAT_ENTRY_SHIFT        '   start new run
+        runLen++
+        if runLen >= cluster_count                      ' found enough?
+          first_cluster := runStart
+          quit
+      else
+        runLen := 0                                     ' reset run
+      fat_idx += 4
+    fat_sec_in_buf := -1                                ' invalidate cache at single exit
+
+PRI do_largest_free_extent() : max_run | fat_idx, fatEntry, runLen
+' Scan the FAT and return the length (in clusters) of the longest run of
+' consecutive free clusters. SD-only; lets a test audit a contiguity precondition.
+' Honors test_max_clusters (the same artificial cap the allocator sees), so a test
+' can cap the range, confirm the longest run is short, and expect E_NO_CONTIGUOUS_SPACE.
+' FAT-scan skeleton mirrors findContiguousRun (incl. the sector-0 pre-load); keep the
+' two in sync if the FAT read/cache mechanics ever change.
+'
+' @returns max_run - Longest consecutive free-cluster run in clusters, 0 if unmounted,
+'                    or E_IO_ERROR on FAT read failure
+' @local fat_idx - Byte offset into the FAT being scanned
+' @local fatEntry - FAT entry value at fat_idx
+' @local runLen - Length of the current free run
+
+  max_run := 0
+  runLen := 0
+  if flags & F_MOUNTED
+    fat_idx := ROOT_CLUSTER * 4                           ' start at cluster 2
+    if readSector(fat_sec, BUF_FAT) < 0                   ' pre-load FAT sector 0: scan starts at cluster 2, so the
+      max_run := E_IO_ERROR                               '   in-loop boundary read below only fires from cluster 128 on
     else
-      runLen := 0                                       ' reset run
-    fat_idx += 4
-  fat_sec_in_buf := -1                                  ' invalidate cache at single exit
+      repeat
+        if fat_idx & SECTOR_MASK == 0 AND fat_idx > 0     ' at sector boundary (sector 0 already loaded above)?
+          if fat_idx >> SECTOR_BITS >= sec_per_fat        '   past end of FAT?
+            quit
+          if readSector(fat_sec + fat_idx >> SECTOR_BITS, BUF_FAT) < 0
+            DEBUG[CH_SECTOR]("  [do_largest_free_extent] FAT read FAILED")
+            max_run := E_IO_ERROR
+            quit
+        if test_max_clusters > 0 AND (fat_idx >> FAT_ENTRY_SHIFT) >= test_max_clusters
+          quit                                            ' test hook: artificial limit
+        fatEntry := LONG[@fat_buf + (fat_idx & SECTOR_MASK)]
+        if (fatEntry & FAT_EOC_MASK) == 0                 ' free cluster?
+          runLen++
+          max_run := max_run #> runLen                    ' track longest run seen (limit-min = max)
+        else
+          runLen := 0                                     ' reset run
+        fat_idx += 4
+      fat_sec_in_buf := -1                                ' invalidate cache at single exit
 
 PRI allocateContiguousChain(first_cluster, count) : status | clstr, fat_idx, buf_idx, high_bits, prev_fat_sector
 ' Mark N consecutive clusters as a linked sequential chain in FAT.

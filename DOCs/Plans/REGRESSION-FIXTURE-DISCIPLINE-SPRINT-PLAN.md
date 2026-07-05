@@ -545,7 +545,15 @@ docs must land with the code, not after.
 - Section 1's contract/anti-pattern doc updates (best-practices, strategy,
   Test-Weakness-Patterns) are authored there but cross-checked here for consistency
   with the shipped helper names.
-- **Version (entry decision, 2026-07-05): no bump planned — revisit at closeout.**
+- **Version — UPDATED 2026-07-05 (during §2 execution): patch bump now CONFIRMED.**
+  Task «#2» uncovered and fixed a real latent driver bug (`findContiguousRun` missing
+  the FAT-sector-0 pre-load; affects `createFileContiguous`/`compactFile`). Driver
+  *behavior* has therefore changed, and Stephen confirmed we ship a driver fix patch
+  after the regression work. So at `build-wrapup` bump the **patch**: `DFS_VERSION`
+  1.3.1 → 1.3.2 / `SD_VERSION` 1.5.1 → 1.5.2 (`dual_sd_fat32_flash_fs.spin2:89-90`).
+  Original conditional entry decision retained below for provenance.
+
+- **Version (original entry decision, 2026-07-05): no bump planned — revisit at closeout.**
   This sprint is predominantly regression-test augmentation. Two items touch the
   driver source: the additive, `SD_INCLUDE_DEFRAG`-gated public `largestFreeExtent()`
   method (backward-compatible), and the `compactFile` clean-fail fix *only if*

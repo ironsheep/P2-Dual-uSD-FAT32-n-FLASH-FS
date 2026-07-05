@@ -56,6 +56,9 @@ src/DEMO/performance.log
 src/DEMO/pnut-term-settings.json
 src/DEMO/run_demo.sh
 /src/DEMO/tests
+src/regression-tests/performance.log
+src/regression-tests/pnut-term-settings.json
+/src/regression-tests/tests
 .mcp.json
 xport.tar.gz
 /DOCs/Plans/ext-agents
