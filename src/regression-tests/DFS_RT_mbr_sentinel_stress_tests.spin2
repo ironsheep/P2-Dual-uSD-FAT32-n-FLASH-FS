@@ -1,0 +1,326 @@
+'' =================================================================================================
+''
+''   File....... DFS_RT_mbr_sentinel_stress_tests.spin2
+''   Purpose.... Reproduce & discriminate the shared-bus microSD corruption ("wiped MBR" / locked card)
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JUL 2026
+''   Updated.... 04 JUL 2026
+''
+'' =================================================================================================
+''
+'' WHY THIS TEST EXISTS
+'' --------------------
+'' Field reports: something is damaging the microSD filesystem. A standalone rescue tool
+'' (sd_rescue.spin2) confirmed a healthy card whose sector 0 (MBR / partition table) was
+'' overwritten -- the desktop then refuses the card. A second signature is a PASSWORD-LOCKED
+'' card (CMD13 R2 bit0). On the P2 Edge the SD card and boot-Flash SHARE four pins with roles
+'' swapped:
+''       P60 = SD CS   = Flash SCK      P61 = SD SCK  = Flash CS      P58/P59 = shared MISO/MOSI
+'' So every Flash access physically drives the SD card's chip-select, clock and data lines.
+'' The driver already documents this (switch_to_sd: "the SD card sees its CS rapidly toggling,
+'' which corrupts the card's SPI state machine"). The theory under test: occasionally that stray
+'' traffic is latched by the card as a DESTRUCTIVE command (a write to LBA 0, an erase, or a
+'' CMD42 lock), which a re-init cannot undo.
+''
+'' WHAT THIS TEST PROVES (three arms -- see run instructions below)
+'' ---------------------------------------------------------------
+''   ARM 1  SD-ONLY stress ................ heavy SD file churn, NO Flash ops (no bus switching).
+''                                          If a sentinel corrupts HERE, it is a pure driver/FS
+''                                          logic bug (a write reaching LBA 0), NOT the shared bus.
+''   ARM 2  SD+FLASH interleave ........... alternate Flash and SD ops every iteration, forcing a
+''                                          bus switch (switch_to_flash / switch_to_sd+reinit) at the
+''                                          most vulnerable moment. If sentinels corrupt HERE but not
+''                                          in ARM 1 -> the shared-bus mechanism is PROVEN.
+''
+'' ARM 3 is the SAME BINARY re-run against the FIXED driver (CMD59 CRC-on + parked idle lines):
+'' ARM 2 must then stay clean -> the fix is PROVEN. (A Spin2 binary links one driver at compile
+'' time, so "protection on/off" = which driver this test was compiled against.)
+''
+'' SENTINELS (sectors the filesystem must NEVER write during file I/O):
+''   sector 0  = MBR / partition table         (the reported failure)
+''   sector 1  = pre-partition reserved gap
+''   sector 2  = pre-partition reserved gap
+'' Plus CMD13 R2 is polled for the LOCK (bit0) and WP-violation signatures each check.
+''
+'' *** DESTRUCTIVE: run ONLY against a SCRATCH microSD card. If the bug fires, the card's
+''     partition table is destroyed (recover with sd_rescue / desktop reformat). ***
+''
+'' RUN
+''   cd tools/
+''   ./run_test.sh ../src/regression-tests/DFS_RT_mbr_sentinel_stress_tests.spin2 -t 300
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     BUFFER_SIZE     = 512                                   ' Sector buffer size in bytes
+
+     ' ---- stress configuration (tune iteration counts here) ----
+     ARM1_ITERS      = 300                                   ' SD-only iterations
+     ARM2_ITERS      = 300                                   ' SD+Flash interleave iterations
+     CHECK_EVERY     = 10                                    ' re-check sentinels every N iterations
+     N_SENTINELS     = 3                                     ' sentinel sectors monitored (LBA 0,1,2)
+
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_RAW
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#else
+#pragma exportdef SD_INCLUDE_DEBUG                           ' debug diagnostics
+#pragma exportdef SD_INCLUDE_RAW                             ' raw sector read + testCMD13()
+#endif
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+    utils : "DFS_RT_utilities"
+
+DAT
+
+' Reused scratch filenames (created + deleted each iteration so the card does not fill)
+sd_scratch      BYTE    "STRESS.TMP", 0
+fl_scratch      BYTE    "STRESSFL", 0
+
+' Sentinel LBAs the filesystem must never touch during file I/O
+sentinelLBA     LONG    0, 1, 2
+
+VAR
+    long baseSentCRC[N_SENTINELS]                           ' baseline CRC of each sentinel sector
+    long baseLockBits                                       ' baseline CMD13 R2 (lock/WP snapshot)
+    byte secBuf[BUFFER_SIZE]                                ' raw sector read buffer
+    byte ioBuf[BUFFER_SIZE]                                 ' file I/O data buffer
+    byte vfyBuf[BUFFER_SIZE]                                ' readback verify buffer
+
+PUB go() | opStatus, iter, violLBA, r2
+
+    debug(" ")
+    debug("=====================================================")
+    debug("  MBR Sentinel Stress -- shared-bus SD corruption")
+    debug("  (ARM1 SD-only  vs  ARM2 SD+Flash interleave)")
+    debug("=====================================================")
+    debug(" ")
+    debug("  *** DESTRUCTIVE -- SCRATCH microSD card only! ***")
+    debug(" ")
+
+    ' ----------------------------------
+    ' SETUP: init + mount both devices
+    ' ----------------------------------
+    utils.startTestGroup(@"Setup: init + mount both devices")
+
+    utils.startTest(@"init()")
+    opStatus := dfs.init()
+    utils.evaluateRange(opStatus, @"init() returns cog ID", 0, dfs.MAX_P2_COGS - 1)
+
+    utils.startTest(@"mount(DEV_SD)")
+    opStatus := dfs.mount(dfs.DEV_SD)
+    utils.evaluateSingleValue(opStatus, @"mount(DEV_SD)", dfs.SUCCESS)
+
+    utils.startTest(@"mount(DEV_FLASH)")
+    opStatus := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateSingleValue(opStatus, @"mount(DEV_FLASH)", dfs.SUCCESS)
+
+    ' ----------------------------------
+    ' BASELINE: snapshot sentinel sectors + card status
+    ' ----------------------------------
+    utils.startTestGroup(@"Baseline: capture sentinel sectors + card status")
+
+    utils.startTest(@"capture sentinel baseline (LBA 0,1,2)")
+    opStatus := captureBaseline()
+    utils.evaluateBool(opStatus, @"all sentinel sectors read", TRUE)
+    showBaseline()
+
+    utils.startTest(@"card not locked/WP at baseline")
+    r2 := dfs.testCMD13()
+    utils.evaluateBool((r2 & (dfs.CSR_CARD_IS_LOCKED | dfs.CSR_WP_VIOLATION)) == 0, @"CMD13 R2 lock/WP clear", TRUE)
+
+    ' ----------------------------------
+    ' ARM 1: SD-ONLY stress  (control -- no bus switching)
+    ' ----------------------------------
+    utils.startTestGroup(@"ARM 1: SD-only stress (no Flash, no bus switch)")
+    debug(" ")
+    debug("  ARM 1: ", udec_(ARM1_ITERS), " SD-only iterations...")
+
+    violLBA := -1
+    repeat iter from 1 to ARM1_ITERS
+        sd_churn(iter)
+        if iter // CHECK_EVERY == 0
+            violLBA := sentinelViolation()
+            debug("    [arm1] iter ", udec_(iter), " of ", udec_(ARM1_ITERS), zstr_(sentinelTag(violLBA)))
+            if violLBA <> -1
+                quit
+
+    utils.startTest(@"ARM 1: no sentinel corruption under SD-only load")
+    utils.evaluateBool(violLBA == -1, @"SD-only leaves MBR/reserved sectors intact", TRUE)
+    if violLBA <> -1
+        debug("  !! ARM 1 CORRUPTION -> a pure driver/FS bug reaches LBA ", udec_(violLBA), " (NOT the shared bus)")
+
+    ' ----------------------------------
+    ' ARM 2: SD+FLASH interleave  (the suspect)
+    ' ----------------------------------
+    utils.startTestGroup(@"ARM 2: SD+Flash interleave (forces bus switching)")
+    debug(" ")
+    debug("  ARM 2: ", udec_(ARM2_ITERS), " interleaved Flash<->SD iterations...")
+
+    violLBA := -1
+    repeat iter from 1 to ARM2_ITERS
+        fl_churn(iter)                                      ' Flash op: heavily clocks P60(SD CS)/P61(SD SCK)
+        sd_churn(iter)                                      ' SD op: forces switch_to_sd -> reinitCard
+        if iter // CHECK_EVERY == 0
+            violLBA := sentinelViolation()
+            debug("    [arm2] iter ", udec_(iter), " of ", udec_(ARM2_ITERS), zstr_(sentinelTag(violLBA)))
+            if violLBA <> -1
+                quit
+
+    utils.startTest(@"ARM 2: no sentinel corruption under interleaved load")
+    utils.evaluateBool(violLBA == -1, @"interleaved Flash/SD leaves sectors intact", TRUE)
+    if violLBA <> -1
+        debug("  !! ARM 2 CORRUPTION at LBA ", udec_(violLBA), " while ARM 1 was clean")
+        debug("  !! => SHARED-BUS mechanism reproduced (Flash traffic executed as an SD command)")
+        dumpViolation(violLBA)
+
+    ' ----------------------------------
+    ' Summary
+    ' ----------------------------------
+    dfs.unmount(dfs.DEV_BOTH)
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+    debug(" ")
+    debug("* MBR Sentinel Stress Complete")
+    debug("END_SESSION")
+
+
+PRI captureBaseline() : ok | idx
+'' Read each sentinel sector and record its baseline CRC; snapshot CMD13 lock/WP bits.
+    ok := TRUE
+    repeat idx from 0 to N_SENTINELS - 1
+        if dfs.readSectorRaw(sentinelLBA[idx], @secBuf) <> dfs.SUCCESS
+            ok := FALSE
+        else
+            baseSentCRC[idx] := utils.record_crc(@secBuf, BUFFER_SIZE)
+    baseLockBits := dfs.testCMD13() & (dfs.CSR_CARD_IS_LOCKED | dfs.CSR_WP_VIOLATION)
+
+
+PRI sentinelViolation() : pLBA | idx, crc, r2
+'' Re-read sentinels + CMD13. Return -1 if clean, else the LBA (or -2 for a lock/WP change)
+'' of the first violation detected. A read failure is itself a violation (card gone dark).
+    pLBA := -1
+    ' card-status signature (lock / WP) -- independent of any sector contents
+    r2 := dfs.testCMD13() & (dfs.CSR_CARD_IS_LOCKED | dfs.CSR_WP_VIOLATION)
+    if r2 <> baseLockBits
+        return -2
+    repeat idx from 0 to N_SENTINELS - 1
+        if dfs.readSectorRaw(sentinelLBA[idx], @secBuf) <> dfs.SUCCESS
+            return sentinelLBA[idx]
+        crc := utils.record_crc(@secBuf, BUFFER_SIZE)
+        if crc <> baseSentCRC[idx]
+            return sentinelLBA[idx]
+
+
+PRI sd_churn(iter)
+'' Exercise the SD filesystem: create -> write 512B -> read back -> delete.
+    utils.fillBufferWithRandom(@ioBuf, BUFFER_SIZE)
+    ioBuf[0] := "S"                                          ' recognizable tag if it ever leaks to a sentinel
+    ioBuf[1] := iter & $FF
+    fileRoundTrip(dfs.DEV_SD, @sd_scratch)
+
+
+PRI fl_churn(iter)
+'' Exercise the Flash filesystem: create -> write 512B -> read back -> delete.
+'' This is the operation that repurposes P60/P61 (the SD card's CS/SCK) as Flash SCK/CS.
+    utils.fillBufferWithRandom(@ioBuf, BUFFER_SIZE)
+    ioBuf[0] := "F"
+    ioBuf[1] := iter & $FF
+    fileRoundTrip(dfs.DEV_FLASH, @fl_scratch)
+
+
+PRI fileRoundTrip(dev, pName) | h
+'' create/write/read/delete one scratch file on the given device (best-effort; errors ignored --
+'' the point is the bus traffic, and sentinel checks catch any damage).
+    dfs.deleteFile(dev, pName)                               ' ensure clean slate
+    h := dfs.open(dev, pName, dfs.FILEMODE_WRITE)
+    if h >= 0
+        dfs.writeHandle(h, @ioBuf, BUFFER_SIZE)
+        dfs.close(h)
+    h := dfs.open(dev, pName, dfs.FILEMODE_READ)
+    if h >= 0
+        dfs.readHandle(h, @vfyBuf, BUFFER_SIZE)
+        dfs.close(h)
+    dfs.deleteFile(dev, pName)
+
+
+PRI sentinelTag(violLBA) : pStr
+'' Human-readable suffix for the per-iteration progress line.
+    if violLBA == -1
+        pStr := @" -- clean"
+    elseif violLBA == -2
+        pStr := @" -- !! CARD STATUS CHANGED (lock/WP)"
+    else
+        pStr := @" -- !! SENTINEL CHANGED"
+
+
+PRI showBaseline() | idx
+    debug(" ")
+    repeat idx from 0 to N_SENTINELS - 1
+        debug("    sentinel LBA ", udec_(sentinelLBA[idx]), " baseline CRC=$", uhex_long_(baseSentCRC[idx]))
+    debug("    CMD13 R2 lock/WP baseline=$", uhex_word_(baseLockBits))
+
+
+PRI dumpViolation(violLBA) | r2
+'' On a confirmed hit, dump the offending sector and the card status so we get the same
+'' fingerprint sd_rescue produces (all-zero MBR? locked? WP?).
+    debug(" ")
+    if violLBA >= 0
+        if dfs.readSectorRaw(violLBA, @secBuf) == dfs.SUCCESS
+            utils.dbgMemDump(@"  corrupted sentinel sector (first 32 bytes)", @secBuf, 32)
+            debug("    55AA signature: ", uhex_word_(WORD[@secBuf + $1FE]), " (want $AA55 little-endian)")
+    r2 := dfs.testCMD13()
+    debug("    CMD13 R2 now=$", uhex_word_(r2))
+    if r2 & dfs.CSR_CARD_IS_LOCKED
+        debug("    >>> CARD IS PASSWORD-LOCKED (CMD42 lock latched from stray bus traffic) <<<")
+    if r2 & dfs.CSR_WP_VIOLATION
+        debug("    >>> WRITE-PROTECT VIOLATION flagged <<<")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

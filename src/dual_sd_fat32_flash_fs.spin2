@@ -4166,8 +4166,16 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
     ' Issue command (triggers worker)
     pb_cmd := op_cmd
 
-    ' Wait for completion using WAITATN (efficient sleep)
-    WAITATN()
+    ' Wait for completion by POLLING the worker's done-flag (pb_cmd -> CMD_NONE), sleeping on
+    ' ATN between checks. A bare WAITATN() is unsafe when the caller cog also receives ATN
+    ' from another source (e.g. an actor message fabric's cogatn): a stale/concurrent ATN
+    ' makes WAITATN return before the worker finishes, so the caller reads the PREVIOUS op's
+    ' results (spurious E_INVALID_HANDLE, etc.). Re-checking pb_cmd makes spurious wakes
+    ' harmless. (This mirrors the async getResult path, which already polls pb_cmd == CMD_NONE.)
+    repeat
+      if pb_cmd == CMD_NONE                              ' worker clears pb_cmd then COGATNs
+        quit
+      WAITATN()
 
 ' Check worker cog stack guard after every command
 ' (Skip when stack checker is active -- prepStackForCheck sentinel overlaps guard[0])
@@ -6133,7 +6141,7 @@ PRI do_test_cmd13() : r2_response | r1, status
   sp_transfer_8($00)
   sp_transfer_8($00)
   sp_transfer_8($00)
-  sp_transfer_8($FF)                                    ' CRC disabled after init in SPI mode
+  sp_transfer_8(cmd_crc7(CMD13, 0))                     ' real CRC7 (CRC checking is ON via CMD59)
 
   ' Get R1 response (first byte of R2)
   r1 := waitR1Response()
@@ -6312,6 +6320,13 @@ PRI switch_to_flash()
     pinclear(PIN_MOSI)
     pinclear(PIN_MISO)
 
+    ' Park the shared lines at safe idle levels instead of leaving them floating:
+    ' P60 high = SD deselected (also the Mode-3 flash-SCK idle level), P61 high =
+    ' flash deselected. Floating lines let noise clock garbage bits into the SD card.
+    pinh(PIN_SD_CS)
+    pinh(PIN_SD_SCK)
+    pinh(PIN_MOSI)
+
     current_spi_device := DEV_FLASH
     DEBUG[CH_RECOVER]("  [switch_to_flash] SPI bus switched to Flash mode")
 
@@ -6432,6 +6447,10 @@ PRI reinitCard() : ok | resp, timeout, saved_freq
     elseif (resp & $FFF) == $1AA
       saved_acmd41_arg := $40000000
     DEBUG[CH_RECOVER]("    [reinitCard] CMD8 done, acmd41_arg=$", uhex_long_(saved_acmd41_arg))
+
+    ' Re-arm CRC checking (CMD0 reset it to off) -- see initCard STEP 5.5
+    resp := cmd(59, 1)
+    DEBUG[CH_RECOVER]("    [reinitCard] CMD59 (CRC ON) response: $", uhex_(resp))
 
     ' ----------------------------------------------------------
     ' STEP 5: ACMD41 - SD_SEND_OP_COND (loop until ready)
@@ -9937,6 +9956,18 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
     saved_acmd41_arg := acmd41_arg
 
     ' ============================================
+    ' STEP 5.5: CMD59 - CRC_ON_OFF (arg 1 = ON)
+    ' Turn CRC checking ON for the whole SPI session. THE anti-brick measure for the
+    ' shared SD/flash bus: stray traffic (boot-ROM flash reads at reset, flash image
+    ' downloads, float glitches) otherwise reaches the card as CRC-unchecked garbage,
+    ' and a random frame that decodes as CMD42 (password LOCK) or an erase kills the
+    ' card. With CRC on, such frames are rejected. The card keeps power across a P2
+    ' reset, so this protection persists through resets until the next full init.
+    ' ============================================
+    resp := cmd(59, 1)
+    DEBUG[CH_INIT]("    [initCard] Step 5.5: CMD59 (CRC ON) response: $", uhex_(resp))
+
+    ' ============================================
     ' STEP 6: ACMD41 - SD_SEND_OP_COND (loop until ready)
     ' Requires CMD55 prefix before each ACMD41
     ' CMD55: 0x77 0x00 0x00 0x00 0x00 0x65
@@ -10024,6 +10055,32 @@ PRI initCard() : ok | timeout, resp, card_version, acmd41_arg, got_response
       DEBUG[CH_INIT]("    [initCard] === INIT SUCCESS ===")
       ok := true
 
+PRI cmd_crc7(op, parm) : frame | fb[2], i, d, crc
+' CRC-7 of a 6-byte SD command frame, returned as the final frame byte ((crc << 1) | stop bit).
+' Every command must carry a REAL CRC now that initCard enables CRC checking via CMD59:
+' with checking on, the card REJECTS any frame whose CRC doesn't match -- which is the
+' protection against stray traffic on the shared SD/flash bus being executed as commands.
+' Spec vectors: CMD0/0 -> $95, CMD8/$1AA -> $87.
+'
+' @param op - Command number (0-63)
+' @param parm - 32-bit command argument
+' @returns frame - CRC byte to send after the 4 argument bytes
+
+  BYTE[@fb][0] := $40 | op
+  BYTE[@fb][1] := parm >> 24
+  BYTE[@fb][2] := parm >> 16
+  BYTE[@fb][3] := parm >> 8
+  BYTE[@fb][4] := parm
+  crc := 0
+  repeat i from 0 to 4
+    d := BYTE[@fb][i] & $FF
+    repeat 8
+      crc := (crc << 1) & $FF
+      if (d ^ crc) & $80
+        crc ^= $09
+      d := (d << 1) & $FF
+  frame := ((crc << 1) | 1) & $FF
+
 PRI cmd(op,parm) : response | timeout
 ' Send a SPI command using smart pins - sends command byte, argument, and CRC.
 ' Handles R1, R3, and R7 response formats based on command type.
@@ -10042,11 +10099,9 @@ PRI cmd(op,parm) : response | timeout
   sp_transfer(-1,8)                                                             '  required for certain cards (my 512MB and 32GB cards fail if not present)
   sp_transfer($40 | op,8)
   sp_transfer(parm,32)
+  sp_transfer(cmd_crc7(op, parm),8)                                             '  real CRC7 on every command (CRC checking is ON via CMD59)
   if op == 0
-    sp_transfer($95,8)                                                          '  send CRC for cmd(0,0)
     DEBUG[CH_INIT]("      [cmd] After CMD0 sent, MISO=", udec_(pinr(PIN_MISO)))
-  else
-    sp_transfer($87,8)                                                          '  send CRC for cmd(8,$1AA)
   timeout := GETCT() + clkfreq
   repeat
     response := sp_transfer(-1,8)                                               '  read 1st byte of reply
@@ -10926,7 +10981,7 @@ PRI sendCmd13Transaction() : r1, status | idx, resp, timeout
   cmd13_pre_capture[2] := sp_transfer_8($00)            ' Argument byte 2
   cmd13_pre_capture[3] := sp_transfer_8($00)            ' Argument byte 1
   cmd13_pre_capture[4] := sp_transfer_8($00)            ' Argument byte 0
-  cmd13_pre_capture[5] := sp_transfer_8($FF)            ' CRC (not checked)
+  cmd13_pre_capture[5] := sp_transfer_8(cmd_crc7(CMD13, 0)) ' real CRC7 -- CRC checking is ON via CMD59 (initCard Step 5.5)
   cmd13_pre_capture[6] := sp_transfer_8($FF)            ' Padding byte
 
   ' Scan for R1 with 100ms timeout, capturing raw bytes
@@ -11099,9 +11154,10 @@ PRI readDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : ok | timeout, 
   sp_transfer_8($FF)
 
   ' Send command: $40 | cmd_num, 32-bit arg, CRC
+  ' (crc_byte parameter superseded: CRC checking is ON via CMD59, so compute the real CRC7)
   sp_transfer_8($40 | cmd_num)
   sp_transfer(arg, 32)
-  sp_transfer_8(crc_byte)
+  sp_transfer_8(cmd_crc7(cmd_num, arg))
 
   ' Wait for R1 response (bit 7 = 0 per SD spec 7.3.2.1)
   timeout := GETCT() + clkfreq
