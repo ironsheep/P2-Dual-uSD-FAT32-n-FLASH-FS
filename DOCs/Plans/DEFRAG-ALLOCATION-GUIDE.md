@@ -16,7 +16,7 @@ Two problems existed in the allocator and no defrag support existed at all:
 
 The fix has two independent parts:
 - **Next-fit allocator** (unconditional, benefits all users): `allocateCluster()` starts scanning after the previously allocated cluster, wraps around to cluster 2 at end-of-FAT, and persists the `fsi_nxt_free` hint across mount/unmount cycles.
-- **Defrag API** (gated by `SD_INCLUDE_DEFRAG`): Four new public methods — `fileFragments()`, `isFileContiguous()`, `compactFile()`, `createFileContiguous()` — plus seven new internal helpers.
+- **Defrag API** (gated by `SD_INCLUDE_DEFRAG`): Five new public methods — `fileFragments()`, `isFileContiguous()`, `compactFile()`, `createFileContiguous()`, `largestFreeExtent()` — plus eight new internal helpers.
 
 ---
 
@@ -200,7 +200,7 @@ This tracks the last cluster in a pre-allocated contiguous chain. When non-zero,
 
 ---
 
-## Part 3: Public API Methods (4 methods)
+## Part 3: Public API Methods (5 methods)
 
 All four methods follow the standard public API pattern: `send_command()` → check `pb_status` → `set_error()` on failure → return result. Place them in a new section gated by `#ifdef SD_INCLUDE_DEFRAG`.
 
@@ -276,6 +276,49 @@ PUB compactFile(p_path) : result
   else
     result := pb_status
 ```
+
+**Clean-fail invariant (contract).** `compactFile()` follows an *allocate-verify-then-swap*
+sequence, so failure is always safe:
+
+1. The contiguous destination run is located (`findContiguousRun`) — a read-only step — and the
+   copy is read-back verified **before** any FAT/directory state is committed.
+2. Every pre-commit failure (`E_NO_CONTIGUOUS_SPACE`, copy `E_IO_ERROR`, `E_VERIFY_FAILED`)
+   returns with the **target file 100% intact and readable, the original chain untouched, and
+   free accounting unchanged**.
+3. The directory-entry swap is the atomic commit point; the original chain is released **only
+   after** the new chain is fully committed — never a half-swapped state.
+
+In particular, on `E_NO_CONTIGUOUS_SPACE` the filesystem is left fully consistent and usable
+with no leaked or half-relocated clusters. (A media-level `E_IO_ERROR` while persisting the new
+chain can leave a fsck-recoverable leak of the freshly-allocated range; the file stays intact.
+This never occurs on the `E_NO_CONTIGUOUS_SPACE` path.) The regression suite
+`DFS_SD_RT_defrag_tests` asserts this invariant on hardware by forcing no contiguous home via
+`setTestMaxClusters` and confirming the file and filesystem survive.
+
+### 3.5 largestFreeExtent(dev) : count
+
+```spin2
+PUB largestFreeExtent(dev) : count
+'' Return the length, in clusters, of the longest run of consecutive free clusters on the volume.
+'' SD-only. Lets a caller (e.g. a regression test) audit a contiguous-space precondition BEFORE
+'' asserting -- reporting "setup not met" instead of a spurious driver failure -- and lets an
+'' application check whether a createFileContiguous() / compactFile() of a given size can succeed.
+''
+'' @param dev - Target device (must be DEV_SD)
+'' @returns count - Longest consecutive free-cluster run in clusters (0 if none or unmounted),
+''                  or negative error (E_NOT_SUPPORTED off SD, E_IO_ERROR on FAT read failure)
+
+  if dev <> DEV_SD
+    count := set_error(E_NOT_SUPPORTED)
+  else
+    send_command(CMD_LARGEST_FREE_EXTENT, 0, 0, 0, 0)
+    count := LONG[@saved_data0][COGID()]
+```
+
+The worker scanner `do_largest_free_extent()` mirrors `findContiguousRun`'s FAT walk (including the
+FAT-sector-0 pre-load) but tracks the maximum free run instead of stopping at the first fit, and it
+honors the same `test_max_clusters` cap the allocator sees — so a test can constrain the FAT window,
+confirm the longest run is short, and expect `E_NO_CONTIGUOUS_SPACE` from the allocator.
 
 ---
 

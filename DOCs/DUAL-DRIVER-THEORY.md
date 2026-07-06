@@ -603,7 +603,7 @@ Seven feature flags control optional SD features. Flash features are always comp
 | Flag | Features Included |
 |------|-------------------|
 | `SD_INCLUDE_ASYNC` | Async (non-blocking) read/write with polling completion |
-| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()`, `largestFreeExtent()` |
 
 **Diagnostic:**
 
@@ -1056,7 +1056,8 @@ The `string_for_error(code)` method returns a human-readable string for any erro
 | `fileFragments(dev, p_path) : fragment_count` | Count non-contiguous fragments (1 = contiguous, 0 = empty) |
 | `isFileContiguous(dev, p_path) : result` | TRUE if file has exactly 1 fragment |
 | `createFileContiguous(dev, p_path, expected_size) : handle` | Create file with pre-allocated contiguous cluster chain |
-| `compactFile(dev, p_path) : result` | Relocate fragmented file to contiguous clusters |
+| `compactFile(dev, p_path) : result` | Relocate fragmented file to contiguous clusters (clean-fail: on `E_NO_CONTIGUOUS_SPACE` the file and filesystem are left intact) |
+| `largestFreeExtent(dev) : count` | Longest run of consecutive free clusters — audit a contiguous-space precondition before allocating |
 
 ## Allocation and Defragmentation
 
