@@ -16,6 +16,16 @@
 ''
 '' =================================================================================================
 
+' Mirror the driver's SD_INCLUDE_ALL -> SD_INCLUDE_DEFRAG expansion here, so a suite that exports
+' SD_INCLUDE_ALL (e.g. one embedding isp_format_utility) still compiles the DEFRAG-gated helpers
+' below (assertContiguousFree). The ALL->DEFRAG expansion in the driver is not visible in this
+' compilation unit, so it must be repeated.
+#ifdef SD_INCLUDE_ALL
+#ifndef SD_INCLUDE_DEFRAG
+#define SD_INCLUDE_DEFRAG
+#endif
+#endif
+
 CON
 
   RT_MAX_OPEN_FILES = 6       ' Default (match driver default); parent overrides via OBJ | to change handle count

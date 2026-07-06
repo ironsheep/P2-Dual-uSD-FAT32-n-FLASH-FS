@@ -6,15 +6,35 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... 28 MAR 2026
-''   Updated.... 30 MAR 2026
+''   Updated.... 06 JUL 2026
 ''
 '' =================================================================================================
 ''
+'' TEMPLATE SUITE for the fixture-discipline contract (see
+'' DOCs/Decisions/REGRESSION-TESTING-BEST-PRACTICES.md §11.5-11.6). Every other SD retrofit
+'' copies the structure here:
+''   Setup     - format-normalize the card to a known clean, fully-contiguous FAT32 baseline
+''               (the suite ERASES the card -- requires a formattable scratch card), then VERIFY
+''               the baseline is contiguous (a post-format audit failure is a real defect).
+''   Fixture   - build BOTH a fragmented and a contiguous file, and audit each was built as
+''               intended (fileFragments >1 / ==1) before acting.
+''   Act/Verify- compact the fragmented file; verify it became contiguous, the untouched file
+''               stayed byte-for-byte intact, and data survived.
+''   Negative  - force no-contiguous-home via setTestMaxClusters and assert the §3 failure-safety
+''               invariant: compactFile -> E_NO_CONTIGUOUS_SPACE AND file intact+readable AND the
+''               filesystem still usable AND free accounting unchanged.
+''   Teardown  - ensureCleanBaseline over this suite's owned files.
+''
+'' Preconditions that cannot be met (card too small/fragmented) report as SETUP-NOT-MET via the
+'' assert* helpers -- never as driver failures.
+''
 '' Tests:
-''   Group 1 - Fragment Query (3 tests)
-''   Group 2 - compactFile (6 tests)
-''   Group 3 - createFileContiguous (2 tests)
-''   Group 4 - Next-Fit Allocation (1 test)
+''   Group 1 - Baseline Normalization (2 tests)
+''   Group 2 - Fragment Query (3 tests)
+''   Group 3 - compactFile (7 tests)
+''   Group 4 - createFileContiguous (2 tests)
+''   Group 5 - Next-Fit Allocation (1 test)
+''   Group 6 - compactFile failure-safety / §3 invariant (1 test)
 ''
 '' =================================================================================================
 
@@ -27,6 +47,7 @@ CON
      FILL_PATTERN_A  = $AA
      FILL_PATTERN_B  = $BB
      FILL_PATTERN_C  = $CC
+     FILL_PATTERN_D  = $DD
 
      ' Buffer sizes
      WRITE_BUF_SIZE  = 512
@@ -42,28 +63,29 @@ CON
      ' Fragment count constants (intent-communicating)
      CONTIGUOUS_FRAGMENTS = 1        ' a file with 1 fragment is contiguous
 
+' This suite's format-normalize setup embeds isp_format_utility, whose own dfs instance needs
+' SD_INCLUDE_ALL/RAW (initCardOnly). The Spin2 exportdef cascade applies one feature set to the
+' whole program, so we export SD_INCLUDE_ALL (a superset of SD_INCLUDE_DEFRAG -- see driver
+' header). Mirrors DFS_SD_RT_format_tests. The DEFRAG API under test is included in ALL.
 #ifdef __SPINTOOLS__
-#define SD_INCLUDE_DEFRAG
-#define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #elseifdef __FLEXSPIN__
-#define SD_INCLUDE_DEFRAG
-#pragma exportdef SD_INCLUDE_DEFRAG
-#define SD_INCLUDE_DEBUG
-#pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
 #else
-'' Enable defrag and debug methods for tests
-#pragma exportdef SD_INCLUDE_DEFRAG
-#pragma exportdef SD_INCLUDE_DEBUG
+'' Enable full driver features (formatter needs them) for tests
+#pragma exportdef SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
 #endif
 
 OBJ
-    dfs   : "dual_sd_fat32_flash_fs"
     utils : "DFS_RT_utilities"
+    fmt   : "isp_format_utility"                         ' SD FAT32 formatter (own dfs instance + worker cog)
+    dfs   : "dual_sd_fat32_flash_fs"
 
 DAT
 
@@ -77,18 +99,24 @@ nonexistent     BYTE    "DFNOEX.TXT", 0
 seqFile1        BYTE    "DFSEQ1.BIN", 0
 seqFile2        BYTE    "DFSEQ2.BIN", 0
 seqFile3        BYTE    "DFSEQ3.BIN", 0
+probeFile       BYTE    "DFPROBE.BIN", 0        ' unrelated file for the "FS still usable" probe
+
+' Owned-names roster for ensureCleanBaseline (0-terminated array of name pointers).
+' Scoped to THIS suite's files only -- never asserts the ambient root is empty.
+ownedNames      LONG    @fragFileA, @fragFileB, @spacerFile, @contigFile, @emptyFile
+                LONG    @seqFile1, @seqFile2, @seqFile3, @probeFile, 0
 
 writeBuf        BYTE    0[WRITE_BUF_SIZE]
 readBuf         BYTE    0[READ_BUF_SIZE]
 
-PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead, byteIdx, bContig, compactStatus, dataIntact, allContig, bValidHndl, allocSize
-'' Main entry point for defrag regression tests
+PUB go() | workerCog, mountStatus, fmtStatus, handle, numFragments, bytesRead, byteIdx, bContig, compactStatus, dataIntact, allContig, bValidHndl, allocSize, needClusters, largestRun, untouchedOk, invariantOk
+'' Main entry point for defrag regression tests (fixture-discipline template)
 ''
 '' @local workerCog - Cog ID returned by dfs.init()
 '' @local mountStatus - Status from dfs.mount()
+'' @local fmtStatus - Status from fmt.format() (baseline normalization)
 '' @local handle - File handle from create/open operations
 '' @local numFragments - Fragment count returned by fileFragments()
-'' @local bytesWritten - Bytes written by writeHandle()
 '' @local bytesRead - Bytes read by readHandle()
 '' @local byteIdx - Loop index for byte-by-byte data verification
 '' @local bContig - Boolean: TRUE if file is contiguous
@@ -96,175 +124,223 @@ PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead
 '' @local dataIntact - Boolean: TRUE if data integrity verified
 '' @local allContig - Boolean: TRUE if all sequential files are contiguous
 '' @local bValidHndl - Boolean: TRUE if handle is valid (>= 0)
+'' @local allocSize - Byte size for the constrained-allocation negative test
+'' @local needClusters - Clusters the 64 KB fixture occupies (geometry-derived)
+'' @local largestRun - Longest contiguous free run (largestFreeExtent result)
+'' @local freeBefore/freeAfter - Free-space snapshots for the §3 accounting check
+'' @local untouchedOk - Boolean: untouched file stayed byte-for-byte intact
+'' @local fsUsable - Boolean: FS still usable after a failed compact
+'' @local invariantOk - Boolean: the composite §3 failure-safety invariant held
 
     debug(" ")
     debug("==============================================")
     debug("  Dual FS (SD) - Defrag & Allocation Tests")
     debug("  (SD_INCLUDE_DEFRAG API)")
     debug("==============================================")
+    debug(" ")
+    debug("WARNING: This test ERASES ALL DATA on the card!")
+    debug(" ")
 
-    ' Initialize worker cog
+    ' =============================================================================
+    ' SETUP PHASE -- normalize the card to a known clean, fully-contiguous baseline
+    ' =============================================================================
+    ' Format via the standalone formatter (its own worker cog); release it before
+    ' bringing up this suite's driver. Mirrors DFS_SD_RT_format_tests.
+    fmtStatus := fmt.format()
+    fmt.stop()
+
     workerCog := dfs.init()
-
-    ' Mount the card first
     mountStatus := dfs.mount(dfs.DEV_SD)
-    if mountStatus <> dfs.SUCCESS
-        debug("ERROR: Could not mount SD card!")
-    else
-        debug(" ")
-        debug("* SD Card mounted successfully")
 
-        ' Clean up any leftover test files
-        cleanup()
+    ' Setup validation (sub-assertions -- visible but do not inflate the test count)
+    utils.evaluateSubValue(fmtStatus, @"setup: format card", dfs.SUCCESS)
+    utils.evaluateSubValue(mountStatus, @"setup: mount", dfs.SUCCESS)
+
+    if fmtStatus <> dfs.SUCCESS or mountStatus <> dfs.SUCCESS
+        debug("ERROR: setup failed (format or mount) -- aborting suite")
+    else
+        debug("* SD Card formatted and mounted successfully")
+
+        ' Geometry-derived fixture size (clusters), so preconditions are card-agnostic
+        needClusters := utils.clustersForBytes(dfs.DEV_SD, FRAG_FILE_SIZE)
+
+        ' Idempotent baseline (card is already clean post-format; also runs at teardown)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' =============================================
-        ' Group 1: Fragment Query Tests
+        ' Group 1: Baseline Normalization
+        ' =============================================
+        utils.startTestGroup(@"Baseline Normalization")
+
+        ' Test 1: fresh format yields a contiguous free run large enough for the fixture.
+        ' This is a VERIFICATION (not a skip gate): a fresh format that is not contiguous
+        ' is a real defect, so it counts as a driver pass/fail.
+        utils.startTest(@"fresh format yields contiguous free run >= fixture size")
+        largestRun := dfs.largestFreeExtent(dfs.DEV_SD)
+        utils.evaluateBool(largestRun >= needClusters, @"post-format contiguous run sufficient", TRUE)
+
+        ' Test 2: largestFreeExtent honors the test cluster cap (bounded-window unit check).
+        ' Under a cap of TEST_CLUSTER_LIMIT the longest run must be > 0 (fresh card has free
+        ' space in the low clusters) and strictly < the window it is allowed to scan.
+        utils.startTest(@"largestFreeExtent honors setTestMaxClusters window")
+        dfs.setTestMaxClusters(TEST_CLUSTER_LIMIT)
+        largestRun := dfs.largestFreeExtent(dfs.DEV_SD)
+        dfs.setTestMaxClusters(0)
+        utils.evaluateBool(largestRun > 0 and largestRun < TEST_CLUSTER_LIMIT, @"constrained extent bounded", TRUE)
+
+        ' =============================================
+        ' Group 2: Fragment Query Tests
         ' =============================================
         utils.startTestGroup(@"Fragment Query")
 
-        ' Test 1: fileFragments() on fresh file returns CONTIGUOUS_FRAGMENTS
-        utils.startTest(@"fileFragments() on fresh file returns 1")
-        handle := dfs.createFileNew(dfs.DEV_SD, @fragFileA)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_A, WRITE_BUF_SIZE)
-            repeat FRAG_FILE_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
-            numFragments := dfs.fileFragments(dfs.DEV_SD, @fragFileA)
-            utils.evaluateSingleValue(numFragments, @"fileFragments fresh file", CONTIGUOUS_FRAGMENTS)
-        else
-            utils.recordFail()
-            debug("  SKIP: createFileNew failed: ", sdec_(handle))
+        ' Precondition: enough contiguous room to build the fragmentation fixture
+        ' (fragFileA 64 KB + spacer 64 KB + appended 64 KB). If unmet -> setup-not-met, skip group.
+        if utils.assertContiguousFree(dfs.DEV_SD, needClusters * 3, @"Group 2 needs 3x fixture contiguous")
+            ' Test 3: fileFragments() on fresh file returns CONTIGUOUS_FRAGMENTS
+            utils.startTest(@"fileFragments() on fresh file returns 1")
+            handle := dfs.createFileNew(dfs.DEV_SD, @fragFileA)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                fillFile(handle, FILL_PATTERN_A, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
+                numFragments := dfs.fileFragments(dfs.DEV_SD, @fragFileA)
+                utils.evaluateSingleValue(numFragments, @"fileFragments fresh file", CONTIGUOUS_FRAGMENTS)
+            else
+                utils.recordFail()
+                debug("  SKIP: createFileNew failed: ", sdec_(handle))
 
-        ' Test 2: isFileContiguous() on fresh file returns TRUE
-        utils.startTest(@"isFileContiguous() on fresh file returns TRUE")
-        bContig := dfs.isFileContiguous(dfs.DEV_SD, @fragFileA)
-        utils.evaluateBool(bContig, @"isFileContiguous fresh file", TRUE)
-
-        ' Test 3: Fragmented file has fragment count > CONTIGUOUS_FRAGMENTS
-        ' Strategy: File A already exists (64 KB). Create spacer (64 KB). Append to A (64 KB).
-        ' File A's clusters must skip over spacer, creating >= 2 fragments.
-        utils.startTest(@"Fragmented file has fragment count > 1")
-        ' Create spacer file
-        handle := dfs.createFileNew(dfs.DEV_SD, @spacerFile)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_B, WRITE_BUF_SIZE)
-            repeat SPACER_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
-
-        ' Append to file A (opens for write at end)
-        handle := dfs.openFileWrite(dfs.DEV_SD, @fragFileA)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_C, WRITE_BUF_SIZE)
-            repeat FRAG_FILE_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
-            numFragments := dfs.fileFragments(dfs.DEV_SD, @fragFileA)
-            utils.evaluateBool(numFragments > CONTIGUOUS_FRAGMENTS, @"fragmented file count > 1", TRUE)
-        else
-            utils.recordFail()
-            debug("  SKIP: openFileWrite failed: ", sdec_(handle))
-
-        ' =============================================
-        ' Group 2: compactFile Tests
-        ' =============================================
-        utils.startTestGroup(@"compactFile")
-
-        ' Test 4: compactFile() makes fragmented file contiguous
-        utils.startTest(@"compactFile() makes fragmented file contiguous")
-        compactStatus := dfs.compactFile(dfs.DEV_SD, @fragFileA)
-        if compactStatus == dfs.SUCCESS
+            ' Test 4: isFileContiguous() on fresh file returns TRUE
+            utils.startTest(@"isFileContiguous() on fresh file returns TRUE")
             bContig := dfs.isFileContiguous(dfs.DEV_SD, @fragFileA)
-            utils.evaluateBool(bContig, @"compact makes contiguous", TRUE)
-        else
-            utils.recordFail()
-            debug("  SKIP: compactFile failed: ", sdec_(compactStatus))
+            utils.evaluateBool(bContig, @"isFileContiguous fresh file", TRUE)
 
-        ' Test 5: Data integrity preserved after compact
-        utils.startTest(@"Data integrity after compact")
-        handle := dfs.openFileRead(dfs.DEV_SD, @fragFileA)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            ' Read first sector — should be FILL_PATTERN_A
-            bytesRead := dfs.readHandle(handle, @readBuf, WRITE_BUF_SIZE)
-            dataIntact := TRUE
-            repeat byteIdx from 0 to WRITE_BUF_SIZE - 1
-                if readBuf[byteIdx] <> FILL_PATTERN_A
-                    dataIntact := FALSE
-                    quit
-            dfs.closeFileHandle(handle)
-            utils.evaluateBool(dataIntact, @"first sector data intact", TRUE)
-        else
-            utils.recordFail()
-            debug("  SKIP: openFileRead failed: ", sdec_(handle))
+            ' Test 5: Fragmented file has fragment count > CONTIGUOUS_FRAGMENTS
+            ' Strategy: File A already exists (64 KB). Create spacer (64 KB). Append to A (64 KB).
+            ' File A's clusters must skip over spacer, creating >= 2 fragments. Audit the fixture
+            ' actually came out fragmented before trusting downstream compact tests.
+            utils.startTest(@"Fragmented file has fragment count > 1")
+            handle := dfs.createFileNew(dfs.DEV_SD, @spacerFile)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                fillFile(handle, FILL_PATTERN_B, SPACER_SIZE)
+                dfs.closeFileHandle(handle)
 
-        ' Test 6: Contiguous file returns SUCCESS (no-op)
-        utils.startTest(@"compactFile() on contiguous file = SUCCESS")
-        compactStatus := dfs.compactFile(dfs.DEV_SD, @fragFileA)
-        utils.evaluateSingleValue(compactStatus, @"compact contiguous file", dfs.SUCCESS)
+            handle := dfs.openFileWrite(dfs.DEV_SD, @fragFileA)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                fillFile(handle, FILL_PATTERN_C, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
+                numFragments := dfs.fileFragments(dfs.DEV_SD, @fragFileA)
+                utils.evaluateBool(numFragments > CONTIGUOUS_FRAGMENTS, @"fragmented file count > 1", TRUE)
+            else
+                utils.recordFail()
+                debug("  SKIP: openFileWrite failed: ", sdec_(handle))
 
-        ' Test 7: Open file returns E_FILE_OPEN_FOR_COMPACT
-        ' Opening a file and then attempting compactFile() should fail — file must be closed
-        utils.startTest(@"compactFile() on open file = E_FILE_OPEN_FOR_COMPACT")
-        handle := dfs.openFileRead(dfs.DEV_SD, @fragFileA)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
+            ' =============================================
+            ' Group 3: compactFile Tests
+            ' =============================================
+            utils.startTestGroup(@"compactFile")
+
+            ' Build a CONTIGUOUS bystander file and audit it, so the compact below can prove
+            ' that a file it must NOT touch stays byte-for-byte intact (untouched-stayed-untouched).
+            handle := dfs.createFileContiguous(dfs.DEV_SD, @contigFile, FRAG_FILE_SIZE)
+            if handle >= 0
+                fillFile(handle, FILL_PATTERN_D, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
+
+            ' Test 6: compactFile() makes fragmented file contiguous AND leaves bystander intact
+            utils.startTest(@"compactFile() -> contiguous, untouched file intact")
             compactStatus := dfs.compactFile(dfs.DEV_SD, @fragFileA)
-            dfs.closeFileHandle(handle)
-            utils.evaluateSingleValue(compactStatus, @"compact open file", dfs.E_FILE_OPEN_FOR_COMPACT)
-        else
-            utils.recordFail()
-            debug("  SKIP: openFileRead failed: ", sdec_(handle))
+            if compactStatus == dfs.SUCCESS
+                bContig := dfs.isFileContiguous(dfs.DEV_SD, @fragFileA)
+                untouchedOk := fileAllBytesAre(@contigFile, FILL_PATTERN_D, FRAG_FILE_SIZE)
+                utils.evaluateBool(bContig and untouchedOk, @"compact contiguous + bystander intact", TRUE)
+            else
+                utils.recordFail()
+                debug("  SKIP: compactFile failed: ", sdec_(compactStatus))
 
-        ' Test 8: Nonexistent file returns E_FILE_NOT_FOUND
-        ' Compacting a file that does not exist on the SD card should return E_FILE_NOT_FOUND
-        utils.startTest(@"compactFile() on nonexistent file = E_FILE_NOT_FOUND")
-        compactStatus := dfs.compactFile(dfs.DEV_SD, @nonexistent)
-        utils.evaluateSingleValue(compactStatus, @"compact nonexistent", dfs.E_FILE_NOT_FOUND)
+            ' Test 7: Data integrity preserved after compact (first sector of target == pattern A)
+            utils.startTest(@"Data integrity after compact")
+            handle := dfs.openFileRead(dfs.DEV_SD, @fragFileA)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                bytesRead := dfs.readHandle(handle, @readBuf, WRITE_BUF_SIZE)
+                dataIntact := TRUE
+                repeat byteIdx from 0 to WRITE_BUF_SIZE - 1
+                    if readBuf[byteIdx] <> FILL_PATTERN_A
+                        dataIntact := FALSE
+                        quit
+                dfs.closeFileHandle(handle)
+                utils.evaluateBool(dataIntact, @"first sector data intact", TRUE)
+            else
+                utils.recordFail()
+                debug("  SKIP: openFileRead failed: ", sdec_(handle))
 
-        ' Test 9: Empty file returns SUCCESS
-        utils.startTest(@"compactFile() on empty file = SUCCESS")
-        handle := dfs.createFileNew(dfs.DEV_SD, @emptyFile)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            dfs.closeFileHandle(handle)
-            compactStatus := dfs.compactFile(dfs.DEV_SD, @emptyFile)
-            utils.evaluateSingleValue(compactStatus, @"compact empty file", dfs.SUCCESS)
+            ' Test 8: Contiguous file returns SUCCESS (no-op)
+            utils.startTest(@"compactFile() on contiguous file = SUCCESS")
+            compactStatus := dfs.compactFile(dfs.DEV_SD, @fragFileA)
+            utils.evaluateSingleValue(compactStatus, @"compact contiguous file", dfs.SUCCESS)
+
+            ' Test 9: Open file returns E_FILE_OPEN_FOR_COMPACT
+            utils.startTest(@"compactFile() on open file = E_FILE_OPEN_FOR_COMPACT")
+            handle := dfs.openFileRead(dfs.DEV_SD, @fragFileA)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                compactStatus := dfs.compactFile(dfs.DEV_SD, @fragFileA)
+                dfs.closeFileHandle(handle)
+                utils.evaluateSingleValue(compactStatus, @"compact open file", dfs.E_FILE_OPEN_FOR_COMPACT)
+            else
+                utils.recordFail()
+                debug("  SKIP: openFileRead failed: ", sdec_(handle))
+
+            ' Test 10: Nonexistent file returns E_FILE_NOT_FOUND
+            utils.startTest(@"compactFile() on nonexistent file = E_FILE_NOT_FOUND")
+            compactStatus := dfs.compactFile(dfs.DEV_SD, @nonexistent)
+            utils.evaluateSingleValue(compactStatus, @"compact nonexistent", dfs.E_FILE_NOT_FOUND)
+
+            ' Test 11: Empty file returns SUCCESS
+            utils.startTest(@"compactFile() on empty file = SUCCESS")
+            handle := dfs.createFileNew(dfs.DEV_SD, @emptyFile)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                dfs.closeFileHandle(handle)
+                compactStatus := dfs.compactFile(dfs.DEV_SD, @emptyFile)
+                utils.evaluateSingleValue(compactStatus, @"compact empty file", dfs.SUCCESS)
+            else
+                utils.recordFail()
+                debug("  SKIP: createFileNew failed: ", sdec_(handle))
         else
-            utils.recordFail()
-            debug("  SKIP: createFileNew failed: ", sdec_(handle))
+            debug("  (Group 2/3 skipped: insufficient contiguous space -- setup not met)")
 
         ' =============================================
-        ' Group 3: createFileContiguous Tests
+        ' Group 4: createFileContiguous Tests
         ' =============================================
         utils.startTestGroup(@"createFileContiguous")
 
-        ' Test 10: Creates contiguous file
-        utils.startTest(@"createFileContiguous() creates contiguous file")
-        handle := dfs.createFileContiguous(dfs.DEV_SD, @contigFile, FRAG_FILE_SIZE)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_A, WRITE_BUF_SIZE)
-            repeat FRAG_FILE_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
-            bContig := dfs.isFileContiguous(dfs.DEV_SD, @contigFile)
-            utils.evaluateBool(bContig, @"contiguous file created", TRUE)
-        else
-            utils.recordFail()
-            debug("  SKIP: createFileContiguous failed: ", sdec_(handle))
+        ' Fresh fixture area for the allocation tests
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
-        ' Test 11: Returns E_NO_CONTIGUOUS_SPACE when constrained
-        ' Clean up all test files first so constrained range starts empty,
-        ' then compute allocation size dynamically to exceed the constraint
-        ' regardless of cluster size.
-        cleanup()
+        ' Test 12: Creates contiguous file (precondition: a 64 KB contiguous run exists)
+        if utils.assertContiguousFree(dfs.DEV_SD, needClusters, @"createFileContiguous needs 1x fixture contiguous")
+            utils.startTest(@"createFileContiguous() creates contiguous file")
+            handle := dfs.createFileContiguous(dfs.DEV_SD, @contigFile, FRAG_FILE_SIZE)
+            bValidHndl := (handle >= 0)
+            if bValidHndl == TRUE
+                fillFile(handle, FILL_PATTERN_A, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
+                bContig := dfs.isFileContiguous(dfs.DEV_SD, @contigFile)
+                utils.evaluateBool(bContig, @"contiguous file created", TRUE)
+            else
+                utils.recordFail()
+                debug("  SKIP: createFileContiguous failed: ", sdec_(handle))
+        else
+            debug("  (Test 12 skipped: insufficient contiguous space -- setup not met)")
+
+        ' Test 13: Returns E_NO_CONTIGUOUS_SPACE when constrained.
+        ' Clean the area, cap the FAT window, and request more contiguous clusters than the
+        ' window can hold. Geometry-derived so it holds for any cluster size.
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
         utils.startTest(@"createFileContiguous() E_NO_CONTIGUOUS_SPACE when constrained")
-        ' Compute size that exceeds all usable clusters in the constrained range:
         ' (limit - 2 reserved + 1 margin) * sectors_per_cluster * 512 bytes/sector
         allocSize := (TEST_CLUSTER_LIMIT - 2 + 1) * dfs.sectorsPerCluster() * 512
         dfs.setTestMaxClusters(TEST_CLUSTER_LIMIT)
@@ -273,50 +349,53 @@ PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead
         utils.evaluateSingleValue(handle, @"no space with constraint", dfs.E_NO_CONTIGUOUS_SPACE)
 
         ' =============================================
-        ' Group 4: Next-Fit Allocation Tests
+        ' Group 5: Next-Fit Allocation Tests
         ' =============================================
         utils.startTestGroup(@"Next-Fit Allocation")
 
-        ' Clean up first to ensure fresh allocation sequence
-        cleanup()
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
-        ' Test 12: Sequential file creates are contiguous
-        utils.startTest(@"Sequential creates are contiguous (1 fragment each)")
-        handle := dfs.createFileNew(dfs.DEV_SD, @seqFile1)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_A, WRITE_BUF_SIZE)
-            repeat FRAG_FILE_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
+        ' Test 14: Sequential file creates are contiguous (precondition: room for 3 fixtures)
+        if utils.assertContiguousFree(dfs.DEV_SD, needClusters * 3, @"next-fit needs 3x fixture contiguous")
+            utils.startTest(@"Sequential creates are contiguous (1 fragment each)")
+            handle := dfs.createFileNew(dfs.DEV_SD, @seqFile1)
+            if handle >= 0
+                fillFile(handle, FILL_PATTERN_A, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
+            handle := dfs.createFileNew(dfs.DEV_SD, @seqFile2)
+            if handle >= 0
+                fillFile(handle, FILL_PATTERN_B, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
+            handle := dfs.createFileNew(dfs.DEV_SD, @seqFile3)
+            if handle >= 0
+                fillFile(handle, FILL_PATTERN_C, FRAG_FILE_SIZE)
+                dfs.closeFileHandle(handle)
 
-        handle := dfs.createFileNew(dfs.DEV_SD, @seqFile2)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_B, WRITE_BUF_SIZE)
-            repeat FRAG_FILE_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
+            numFragments := dfs.fileFragments(dfs.DEV_SD, @seqFile1)
+            allContig := (numFragments == CONTIGUOUS_FRAGMENTS)
+            numFragments := dfs.fileFragments(dfs.DEV_SD, @seqFile2)
+            allContig := allContig and (numFragments == CONTIGUOUS_FRAGMENTS)
+            numFragments := dfs.fileFragments(dfs.DEV_SD, @seqFile3)
+            allContig := allContig and (numFragments == CONTIGUOUS_FRAGMENTS)
+            utils.evaluateBool(allContig, @"all 3 sequential files contiguous", TRUE)
+        else
+            debug("  (Test 14 skipped: insufficient contiguous space -- setup not met)")
 
-        handle := dfs.createFileNew(dfs.DEV_SD, @seqFile3)
-        bValidHndl := (handle >= 0)
-        if bValidHndl == TRUE
-            bytefill(@writeBuf, FILL_PATTERN_C, WRITE_BUF_SIZE)
-            repeat FRAG_FILE_SIZE / WRITE_BUF_SIZE
-                dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
-            dfs.closeFileHandle(handle)
+        ' =============================================
+        ' Group 6: compactFile Failure-Safety (§3 invariant)
+        ' =============================================
+        utils.startTestGroup(@"compactFile failure-safety (S3 invariant)")
 
-        numFragments := dfs.fileFragments(dfs.DEV_SD, @seqFile1)
-        allContig := (numFragments == CONTIGUOUS_FRAGMENTS)
-        numFragments := dfs.fileFragments(dfs.DEV_SD, @seqFile2)
-        allContig := allContig and (numFragments == CONTIGUOUS_FRAGMENTS)
-        numFragments := dfs.fileFragments(dfs.DEV_SD, @seqFile3)
-        allContig := allContig and (numFragments == CONTIGUOUS_FRAGMENTS)
-        utils.evaluateBool(allContig, @"all 3 sequential files contiguous", TRUE)
+        ' Rebuild a fragmented target on a clean area, then FORCE no contiguous home and assert
+        ' the composite invariant: E_NO_CONTIGUOUS_SPACE AND file intact+readable AND FS still
+        ' usable AND free accounting unchanged.
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
+        utils.startTest(@"compact w/o contiguous home: clean fail, file+FS intact")
+        invariantOk := runNoContiguousHomeInvariant(needClusters)
+        utils.evaluateBool(invariantOk, @"E_NO_CONTIGUOUS_SPACE + intact + usable + free-stable", TRUE)
 
-        ' Final cleanup
-        cleanup()
-
+        ' ---- Teardown ----
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
         dfs.unmount(dfs.DEV_SD)
 
 #ifdef SD_INCLUDE_STACK_CHECK
@@ -331,14 +410,125 @@ PUB go() | workerCog, mountStatus, handle, numFragments, bytesWritten, bytesRead
     debug("* Defrag & Allocation Tests Complete")
     debug("END_SESSION")
 
-PRI cleanup()
-' Remove all test files (ignore errors if they don't exist)
+PRI runNoContiguousHomeInvariant(fixtureClusters) : bInvariantHeld | handle, compactStatus, freeBefore, freeAfter, fragOk, cleanFail, fileIntact, fsUsable, capLimit
+' Build a fragmented file, cap the FAT so no contiguous home of its size exists, compact it,
+' and verify the §3 failure-safety invariant. Returns TRUE only if EVERY clause holds.
+'
+' @param fixtureClusters - Clusters one 64 KB fixture occupies (geometry-derived)
+' @returns bInvariantHeld - TRUE iff clean-fail + file intact + FS usable + free accounting stable
+' @local handle - File handle
+' @local compactStatus - Status from the compact under constraint
+' @local freeBefore/freeAfter - Free-sector snapshots bracketing the failed compact
+' @local fragOk - the target really came out fragmented (fixture audit)
+' @local cleanFail - compact returned E_NO_CONTIGUOUS_SPACE
+' @local fileIntact - target still readable with its original first-sector pattern
+' @local fsUsable - an unrelated create/write/read/delete still works
+' @local capLimit - FAT-window cap that guarantees no free contiguous home (placement-independent)
 
-    dfs.deleteFile(dfs.DEV_SD, @fragFileA)
-    dfs.deleteFile(dfs.DEV_SD, @fragFileB)
-    dfs.deleteFile(dfs.DEV_SD, @spacerFile)
-    dfs.deleteFile(dfs.DEV_SD, @contigFile)
-    dfs.deleteFile(dfs.DEV_SD, @emptyFile)
-    dfs.deleteFile(dfs.DEV_SD, @seqFile1)
-    dfs.deleteFile(dfs.DEV_SD, @seqFile2)
-    dfs.deleteFile(dfs.DEV_SD, @seqFile3)
+    ' Build fragmented target: fragFileA (A) | spacer (B) | append to fragFileA (C)
+    handle := dfs.createFileNew(dfs.DEV_SD, @fragFileA)
+    if handle >= 0
+        fillFile(handle, FILL_PATTERN_A, FRAG_FILE_SIZE)
+        dfs.closeFileHandle(handle)
+    handle := dfs.createFileNew(dfs.DEV_SD, @spacerFile)
+    if handle >= 0
+        fillFile(handle, FILL_PATTERN_B, SPACER_SIZE)
+        dfs.closeFileHandle(handle)
+    handle := dfs.openFileWrite(dfs.DEV_SD, @fragFileA)
+    if handle >= 0
+        fillFile(handle, FILL_PATTERN_C, FRAG_FILE_SIZE)
+        dfs.closeFileHandle(handle)
+
+    fragOk := dfs.fileFragments(dfs.DEV_SD, @fragFileA) > CONTIGUOUS_FRAGMENTS
+
+    ' fragFileA occupies 2x fixture clusters (original 64 KB + appended 64 KB). Cap the FAT window
+    ' just above that: findContiguousRun scans clusters [2, capLimit), i.e. at most (capLimit-2)
+    ' clusters. With capLimit = 2*fixture + 1, even a fully-FREE window holds (2*fixture - 1) < the
+    ' 2*fixture the file needs -> guaranteed E_NO_CONTIGUOUS_SPACE, independent of where prior churn
+    ' placed the clusters (no packing assumption).
+    capLimit := (fixtureClusters * 2) + 1
+
+    freeBefore := dfs.freeSpace(dfs.DEV_SD)
+    dfs.setTestMaxClusters(capLimit)
+    compactStatus := dfs.compactFile(dfs.DEV_SD, @fragFileA)
+    dfs.setTestMaxClusters(0)
+    freeAfter := dfs.freeSpace(dfs.DEV_SD)
+
+    cleanFail := (compactStatus == dfs.E_NO_CONTIGUOUS_SPACE)
+
+    ' File intact + readable: first sector must still be pattern A (compact must not have mutated it)
+    fileIntact := fileFirstSectorIs(@fragFileA, FILL_PATTERN_A)
+
+    ' FS still usable: an unrelated file round-trips create/write/read/delete
+    fsUsable := probeFsUsable()
+
+    bInvariantHeld := fragOk and cleanFail and fileIntact and fsUsable and (freeBefore == freeAfter)
+    if not bInvariantHeld
+        debug("  # invariant detail: frag=", udec_(fragOk), " cleanFail=", udec_(cleanFail), " intact=", udec_(fileIntact), " usable=", udec_(fsUsable), " freeEq=", udec_(freeBefore == freeAfter))
+        debug("  #   compactStatus=", sdec_(compactStatus), " freeBefore=", udec_(freeBefore), " freeAfter=", udec_(freeAfter))
+
+PRI probeFsUsable() : bUsable | handle, bytesRead
+' Create/write/read/delete an unrelated file to prove the filesystem is still usable.
+'
+' @returns bUsable - TRUE if the full round-trip succeeded and read data matched
+
+    bUsable := FALSE
+    handle := dfs.createFileNew(dfs.DEV_SD, @probeFile)
+    if handle >= 0
+        bytefill(@writeBuf, FILL_PATTERN_D, WRITE_BUF_SIZE)
+        dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
+        dfs.closeFileHandle(handle)
+        handle := dfs.openFileRead(dfs.DEV_SD, @probeFile)
+        if handle >= 0
+            bytefill(@readBuf, 0, READ_BUF_SIZE)
+            bytesRead := dfs.readHandle(handle, @readBuf, WRITE_BUF_SIZE)
+            dfs.closeFileHandle(handle)
+            bUsable := (bytesRead == WRITE_BUF_SIZE) and utils.verifyBufferValue(@readBuf, WRITE_BUF_SIZE, FILL_PATTERN_D)
+        dfs.deleteFile(dfs.DEV_SD, @probeFile)
+
+PRI fileFirstSectorIs(pFilename, fillByte) : bMatch | handle, bytesRead
+' Open a file, read its first sector, and confirm every byte equals fillByte.
+'
+' @returns bMatch - TRUE if the file opened and its first sector is all fillByte
+
+    bMatch := FALSE
+    handle := dfs.openFileRead(dfs.DEV_SD, pFilename)
+    if handle >= 0
+        bytefill(@readBuf, 0, READ_BUF_SIZE)
+        bytesRead := dfs.readHandle(handle, @readBuf, WRITE_BUF_SIZE)
+        dfs.closeFileHandle(handle)
+        bMatch := (bytesRead == WRITE_BUF_SIZE) and utils.verifyBufferValue(@readBuf, WRITE_BUF_SIZE, fillByte)
+
+PRI fileAllBytesAre(pFilename, fillByte, sizeBytes) : bMatch | handle, remaining, chunk, bytesRead
+' Read an entire file and confirm every byte equals fillByte (untouched-stayed-untouched check).
+'
+' @returns bMatch - TRUE if the whole file read back as sizeBytes of fillByte
+
+    bMatch := FALSE
+    handle := dfs.openFileRead(dfs.DEV_SD, pFilename)
+    if handle >= 0
+        bMatch := TRUE
+        remaining := sizeBytes
+        repeat while remaining > 0 and bMatch
+            chunk := remaining < READ_BUF_SIZE ? remaining : READ_BUF_SIZE
+            bytefill(@readBuf, 0, READ_BUF_SIZE)
+            bytesRead := dfs.readHandle(handle, @readBuf, chunk)
+            if bytesRead <> chunk
+                bMatch := FALSE
+            elseifnot utils.verifyBufferValue(@readBuf, chunk, fillByte)
+                bMatch := FALSE
+            remaining -= chunk
+        dfs.closeFileHandle(handle)
+
+PRI fillFile(handle, fillByte, sizeBytes) | remaining
+' Write sizeBytes of fillByte to an open handle in WRITE_BUF_SIZE chunks.
+'
+' @param handle - Open, writable file handle
+' @param fillByte - Byte value to write
+' @param sizeBytes - Total bytes to write (multiple of WRITE_BUF_SIZE for these fixtures)
+
+    bytefill(@writeBuf, fillByte, WRITE_BUF_SIZE)
+    remaining := sizeBytes
+    repeat while remaining > 0
+        dfs.writeHandle(handle, @writeBuf, WRITE_BUF_SIZE)
+        remaining -= WRITE_BUF_SIZE
