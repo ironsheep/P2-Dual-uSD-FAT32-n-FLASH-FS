@@ -222,7 +222,7 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
         ' ----------------------------------
         utils.startTestGroup(@"Directory Listing")
 
-        utils.startTest(@"readDirectory() enumerates entries")
+        utils.startTest(@"readDirectory() lists our created directories")
         fileCount := 0
         idx := 0
         repeat
@@ -232,9 +232,11 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
             pFilename := dfs.fileName()
             attrs := dfs.attributes()
             debug("  Entry ", udec_(idx), ": [", zstr_(pFilename), "] attr=$", uhex_(attrs))
-            fileCount++
+            if strcomp(pFilename, @testDir1) or strcomp(pFilename, @testDir2)
+                fileCount++                              ' count only OUR entries -- ambient root contents are irrelevant
             idx++
-        utils.evaluateRange(fileCount, @"directory entries found", 2, 100)  ' At least our 2 test dirs
+        ' Assert both our test dirs are present; do NOT assert the ambient root entry count (Pattern J)
+        utils.evaluateSingleValue(fileCount, @"our 2 test dirs present in root", 2)
 
         utils.startTest(@"List subdirectory contents")
         dfs.changeDirectory(dfs.DEV_SD, @testDir1)
@@ -247,10 +249,11 @@ PUB go() | workerCog, status, pEntry, pFilename, attrs, fileCount, idx, handle, 
             pFilename := dfs.fileName()
             attrs := dfs.attributes()
             debug("  Entry ", udec_(idx), ": [", zstr_(pFilename), "] attr=$", uhex_(attrs))
-            fileCount++
+            if strcomp(pFilename, @testFile1) or strcomp(pFilename, @subDir1)
+                fileCount++                              ' our self-built entries (FILE1.TXT + SUBDIR1)
             idx++
-        ' Should have FILE1.TXT and SUBDIR1
-        utils.evaluateRange(fileCount, @"subdir entries", 2, 10)
+        ' RTDIR1 is fully self-built: assert our two entries are present (ambient-independent)
+        utils.evaluateSingleValue(fileCount, @"our 2 entries present in RTDIR1", 2)
         dfs.changeDirectory(dfs.DEV_SD, @"/")
 
         ' ----------------------------------

@@ -43,6 +43,15 @@ CON
 
      GUARD_SIZE           = 16
 
+     ' Known contents of the self-built DHTDIR1 fixture (createTestStructure):
+     ' DH1.TXT, DH2.TXT, DH3.TXT (3 files) + DHSUB1 + the . and .. dot entries.
+     ' readDirectoryHandle returns . and .. (both carry ATTR_DIRECTORY), so DHTDIR1
+     ' enumerates as: 3 files, 3 dirs (., .., DHSUB1), 6 total. Asserting these exact
+     ' self-built counts is ambient-independent (does NOT depend on the card's root).
+     DHTDIR1_FILES        = 3
+     DHTDIR1_DIRS         = 3
+     DHTDIR1_TOTAL        = 6
+
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_STACK_CHECK
@@ -160,7 +169,7 @@ PUB go() | workerCog, opStatus, hndl1, hndl2, hndl3, hndl4, hndl5, hDir, hDir2, 
                 debug("  Entry: [", zstr_(pName), "]")
                 entryCount++
             ' Should have: . .. DH1.TXT DH2.TXT DH3.TXT DHSUB1 = at least 4 non-dot entries
-            utils.evaluateSubBool(entryCount >= 4, @"DHTDIR1 has >= 4 entries", TRUE)
+            utils.evaluateSubValue(entryCount, @"DHTDIR1 entry count", DHTDIR1_TOTAL)
             dfs.closeDirectoryHandle(hDir)
 
         ' Test: closeDirectoryHandle releases slot
@@ -194,8 +203,8 @@ PUB go() | workerCog, opStatus, hndl1, hndl2, hndl3, hndl4, hndl5, hDir, hDir2, 
                     foundDirs++
                 else
                     foundFiles++
-            utils.evaluateSubBool(foundFiles >= 3, @"found >= 3 files", TRUE)
-            utils.evaluateSubBool(foundDirs >= 1, @"found >= 1 subdir", TRUE)
+            utils.evaluateSubValue(foundFiles, @"DHTDIR1 file count", DHTDIR1_FILES)
+            utils.evaluateSubValue(foundDirs, @"DHTDIR1 dir count (., .., DHSUB1)", DHTDIR1_DIRS)
             dfs.closeDirectoryHandle(hDir)
         else
             utils.evaluateSubBool(FALSE, @"found >= 3 files", TRUE)
@@ -239,8 +248,8 @@ PUB go() | workerCog, opStatus, hndl1, hndl2, hndl3, hndl4, hndl5, hDir, hDir2, 
                     foundDirs++
                 else
                     foundFiles++
-            utils.evaluateSubBool(foundFiles > 0, @"has file entries", TRUE)
-            utils.evaluateSubBool(foundDirs > 0, @"has dir entries", TRUE)
+            utils.evaluateSubValue(foundFiles, @"DHTDIR1 file entries", DHTDIR1_FILES)
+            utils.evaluateSubValue(foundDirs, @"DHTDIR1 dir entries (., .., DHSUB1)", DHTDIR1_DIRS)
             dfs.closeDirectoryHandle(hDir)
 
         ' Test: Empty directory returns only dot entries (. and ..)
@@ -436,7 +445,7 @@ PUB go() | workerCog, opStatus, hndl1, hndl2, hndl3, hndl4, hndl5, hDir, hDir2, 
                 if pEntry == 0
                     quit
                 entryCount++
-            utils.evaluateSubBool(entryCount >= 4, @"abs path has entries", TRUE)
+            utils.evaluateSubValue(entryCount, @"abs path DHTDIR1 entry count", DHTDIR1_TOTAL)
             dfs.closeDirectoryHandle(hDir)
 
         ' Test: After changeDirectory, "." reflects new CWD
@@ -451,8 +460,8 @@ PUB go() | workerCog, opStatus, hndl1, hndl2, hndl3, hndl4, hndl5, hDir, hDir2, 
                 if pEntry == 0
                     quit
                 foundFiles++
-            ' DHTDIR1 has files + subdir, different count from root
-            utils.evaluateSubBool(foundFiles >= 4, @"CWD entries match subdir", TRUE)
+            ' DHTDIR1 total entry count via CWD "." (foundFiles here counts ALL entries)
+            utils.evaluateSubValue(foundFiles, @"CWD . entry count matches DHTDIR1", DHTDIR1_TOTAL)
             dfs.closeDirectoryHandle(hDir)
         dfs.changeDirectory(dfs.DEV_SD, @"/")
 
