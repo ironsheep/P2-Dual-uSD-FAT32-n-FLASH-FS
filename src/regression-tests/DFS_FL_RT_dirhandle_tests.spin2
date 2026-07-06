@@ -103,6 +103,12 @@ PUB go() | workerCog, status, dirHndl, dirHndl2, fileHndl1, fileHndl2, fileHndl3
     ' Initialize driver
     workerCog := dfs.init()
 
+    ' Format Flash to a known-empty baseline first (like the other 10 DFS_FL_RT_* suites),
+    ' so enumeration tests never depend on ambient Flash directory contents.
+    status := dfs.format(dfs.DEV_FLASH)
+    if status <> dfs.SUCCESS
+        utils.showErrorCode(@"format()", status)
+
     ' Mount Flash
     status := dfs.mount(dfs.DEV_FLASH)
     if status == dfs.SUCCESS
@@ -111,7 +117,10 @@ PUB go() | workerCog, status, dirHndl, dirHndl2, fileHndl1, fileHndl2, fileHndl3
         debug(" ")
         debug("* Flash mounted OK")
 
-        ' Clean up any existing test files
+        ' Audit the clean slate the format established (post-format Flash root must be empty)
+        utils.ensureEmptyDirectoryDev(dfs.DEV_FLASH)
+
+        ' Clean up any leftover test files (belt-and-suspenders after format)
         cleanupTestFiles()
 
         ' Create test file structure

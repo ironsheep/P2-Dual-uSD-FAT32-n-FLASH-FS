@@ -68,6 +68,9 @@ DAT
 crcTestFile     BYTE    "CRCTEST1.BIN", 0
 crcTestFile2    BYTE    "CRCTEST2.BIN", 0
 
+' Owned-file baseline list (0-terminated) for ensureCleanBaseline
+ownedNames      LONG    @crcTestFile, @crcTestFile2, 0
+
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
@@ -98,6 +101,9 @@ PUB go() | workerCog, verifyResult, fileHndl, bValidHndl, bytesRead, matchCount,
         ' Clean up any existing test files
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile2)
+
+        ' Establish clean baseline (idempotent -- also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' ======================================================================
         ' TEST GROUP: CRC Counter Initial State
@@ -267,6 +273,9 @@ PUB go() | workerCog, verifyResult, fileHndl, bValidHndl, bytesRead, matchCount,
 
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile2)
+
+        ' Restore clean baseline for re-run idempotency (also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         dfs.unmount(dfs.DEV_SD)
 

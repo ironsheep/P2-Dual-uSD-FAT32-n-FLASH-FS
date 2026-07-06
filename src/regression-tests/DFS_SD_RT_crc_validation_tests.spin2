@@ -58,6 +58,9 @@ DAT
 ' Test filenames
 crcTestFile     BYTE    "CRCVAL.TXT", 0
 
+' Owned-file baseline list (0-terminated) for ensureCleanBaseline
+ownedNames      LONG    @crcTestFile, 0
+
 ' Buffers
 writeBuffer     BYTE    0[dfs.SECTOR_SIZE]
 readBuffer      BYTE    0[64]
@@ -79,6 +82,9 @@ PUB go() | workerCog, mountResult, fileHndl, bValidHndl, mismatchBefore, mismatc
 
         debug(" ")
         debug("* SD Card mounted successfully")
+
+        ' Establish clean baseline (idempotent -- also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' ----------------------------------
         ' TEST GROUP: Error Hook State
@@ -170,6 +176,9 @@ PUB go() | workerCog, mountResult, fileHndl, bValidHndl, mismatchBefore, mismatc
         ' ----------------------------------
         dfs.clearTestErrors()
         dfs.deleteFile(dfs.DEV_SD, @crcTestFile)
+
+        ' Restore clean baseline for re-run idempotency (also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         dfs.unmount(dfs.DEV_SD)
 

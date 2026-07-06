@@ -71,6 +71,10 @@ recFile1        BYTE    "RECOV1.BIN", 0
 recFile2        BYTE    "RECOV2.BIN", 0
 recFile3        BYTE    "RECOV3.BIN", 0
 recWriteFile    BYTE    "RECWR1.TXT", 0
+remountFile     BYTE    "REMOUNT.TXT", 0
+
+' Owned-file baseline list (0-terminated) for ensureCleanBaseline
+ownedNames      LONG    @recFile1, @recFile2, @recFile3, @recWriteFile, @remountFile, 0
 
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
@@ -106,6 +110,9 @@ PUB go() | workerCog, verifyStatus, handle, hndl0, hndl1, hndl2, bytesRead, byte
         dfs.deleteFile(dfs.DEV_SD, @recFile2)
         dfs.deleteFile(dfs.DEV_SD, @recFile3)
         dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
+
+        ' Establish clean baseline (idempotent -- also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' Create test files with known patterns
         ' recFile1: pattern $31 (1024 bytes = 2 sectors)
@@ -359,6 +366,9 @@ PUB go() | workerCog, verifyStatus, handle, hndl0, hndl1, hndl2, bytesRead, byte
     dfs.deleteFile(dfs.DEV_SD, @recFile2)
     dfs.deleteFile(dfs.DEV_SD, @recFile3)
     dfs.deleteFile(dfs.DEV_SD, @recWriteFile)
+
+    ' Restore clean baseline for re-run idempotency (also audits cleanliness)
+    utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
     dfs.unmount(dfs.DEV_SD)
 

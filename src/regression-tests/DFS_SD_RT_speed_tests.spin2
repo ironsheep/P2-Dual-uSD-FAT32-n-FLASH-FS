@@ -105,6 +105,11 @@ PUB go() | workerCog, verifyResult, fileHndl, bValidHndl, spiFreq, maxSpeed, hsA
         dfs.deleteFile(dfs.DEV_SD, @spTestFile)
         dfs.deleteFile(dfs.DEV_SD, @spTestFile2)
 
+        ' Capacity audit: the integrity tests below write small (512-byte) files. On a
+        ' full/fragmented card a write would fail; audit free space first so that surfaces
+        ' as setup-not-met, not a spurious driver write failure.
+        utils.assertFreeSpace(dfs.DEV_SD, utils.clustersForBytes(dfs.DEV_SD, BUFFER_SIZE) + 4, @"card has space for speed tests")
+
         ' ======================================================================
         ' TEST GROUP: Always-Available Speed
         ' ======================================================================

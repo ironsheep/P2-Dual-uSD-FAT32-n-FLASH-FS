@@ -78,6 +78,9 @@ testdir2        BYTE    "NONEXIST", 0
 badPath1        BYTE    "NOEXIST/CHILD", 0    ' parent doesn't exist
 testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
 
+' Owned-file baseline list (0-terminated) for ensureCleanBaseline
+ownedNames      LONG    @testfile1, @testfile2, @testfile3, @testfile4, @testfile5, @testdir1, 0
+
 ' Buffer for MBR integrity check
 mbr_buf         BYTE    0[dfs.SECTOR_SIZE]
 
@@ -111,6 +114,9 @@ PUB go() | workerCog, status, handle, hndl1, hndl2, hndl3, hndl4, hndl5, bytesRe
         dfs.deleteFile(dfs.DEV_SD, @testfile4)
         dfs.deleteFile(dfs.DEV_SD, @testfile5)
         dfs.deleteFile(dfs.DEV_SD, @testdir1)
+
+        ' Establish clean baseline (idempotent -- also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' ----------------------------------
         ' TEST GROUP: File State Errors
@@ -454,6 +460,9 @@ PUB go() | workerCog, status, handle, hndl1, hndl2, hndl3, hndl4, hndl5, bytesRe
         dfs.deleteFile(dfs.DEV_SD, @testfile4)
         dfs.deleteFile(dfs.DEV_SD, @testfile5)
         dfs.deleteFile(dfs.DEV_SD, @testdir1)
+
+        ' Restore clean baseline for re-run idempotency (also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' Unmount
         dfs.unmount(dfs.DEV_SD)

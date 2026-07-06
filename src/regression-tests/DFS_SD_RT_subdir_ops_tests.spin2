@@ -76,6 +76,9 @@ dotPath        BYTE    ".", 0
 dotdotPath     BYTE    "..", 0
 testContent1   BYTE    "Hello from subdir", 0
 
+' Owned-file baseline list (0-terminated) for ensureCleanBaseline (root-level static names)
+ownedNames     LONG    @emptyFile, @renamedEmpty, @testfile1, @testfile2, @testfile3, @testdir, 0
+
 PUB go() | workerCog, opStatus, status, handle, dirHndl, count, pEntry, bValidHndl, bValidDirHndl
 '' Main entry point for subdirectory operations regression tests
 
@@ -102,6 +105,9 @@ PUB go() | workerCog, opStatus, status, handle, dirHndl, count, pEntry, bValidHn
         debug("  CLEARING ROOT DIRECTORY...")
         opStatus := dfs.debugClearRootDir()
         debug("  Clear result: ", sdec_(opStatus))
+
+        ' Establish clean baseline (idempotent -- also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' ======================================================================
         ' TEST GROUP: Empty file operations in root directory
@@ -420,6 +426,9 @@ PUB go() | workerCog, opStatus, status, handle, dirHndl, count, pEntry, bValidHn
         ' cd back to root and remove test directory
         dfs.changeDirectory(dfs.DEV_SD, @dotdotPath)
         dfs.deleteFile(dfs.DEV_SD, @testdir)                                                    ' rmdir
+
+        ' Restore clean baseline for re-run idempotency (also audits cleanliness)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' Unmount
         dfs.unmount(dfs.DEV_SD)

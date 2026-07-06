@@ -165,6 +165,11 @@ PUB go() | workerCog, opStatus, handle, bytesRead, bytesWritten, idx, fileSize, 
         dfs.deleteFile(dfs.DEV_SD, @testMulti)
         dfs.deleteFile(dfs.DEV_SD, @testPattern)
 
+        ' Capacity audit: the groups below write several small files (largest is the 2 KB
+        ' multi-sector test). On a full/fragmented card a write would fail; audit free space
+        ' first so that surfaces as setup-not-met, not a spurious driver write failure.
+        utils.assertFreeSpace(dfs.DEV_SD, utils.clustersForBytes(dfs.DEV_SD, LARGE_BUFFER_SIZE) + 4, @"card has space for read/write tests")
+
         ' ----------------------------------
         ' TEST GROUP: Byte-level writes
         ' ----------------------------------
