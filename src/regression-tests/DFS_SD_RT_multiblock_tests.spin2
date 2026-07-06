@@ -42,6 +42,7 @@ CON
 
     ' Test sector numbers (in free space area, safe for 64GB+ cards)
     TEST_SECTOR_BASE = 200_000
+    TEST_REGION_SECTORS = 128       ' destructive writes span [BASE, BASE+114]; 128 covers them with margin
 
     ' Test sizes
     SMALL_COUNT      = 8            ' Standard multi-block test size
@@ -78,7 +79,7 @@ VAR
     BYTE    large_read_buf_guard[GUARD_SIZE]
 
 
-PUB go() | workerCog, mountStatus
+PUB go() | workerCog, mountStatus, cardSectors
 '' Main entry point for multi-block data integrity tests
 ''
 '' Tests readSectorsRaw/writeSectorsRaw operations
@@ -96,31 +97,40 @@ PUB go() | workerCog, mountStatus
     if mountStatus <> dfs.SUCCESS
         debug("ERROR: Mount failed!")
     else
+        ' Geometry audit: the destructive raw-write region [TEST_SECTOR_BASE, +TEST_REGION_SECTORS)
+        ' must lie within the card. On a card too small, report setup-not-met and skip the raw tests
+        ' (never write out of range) -- NOT a driver failure.
+        cardSectors := dfs.cardSizeSectors()
+        debug(" ")
+        debug("* Card size: ", udec_(cardSectors), " sectors")
+        if utils.assertPrecondition(cardSectors > TEST_SECTOR_BASE + TEST_REGION_SECTORS, @"card holds multi-block test region")
 
-        ' ========================================
-        ' TEST 1: Round-trip multi-block
-        ' ========================================
-        testRoundTripMultiBlock()
+            ' ========================================
+            ' TEST 1: Round-trip multi-block
+            ' ========================================
+            testRoundTripMultiBlock()
 
-        ' ========================================
-        ' TEST 2: Multi-write, single-read
-        ' ========================================
-        testMultiWriteSingleRead()
+            ' ========================================
+            ' TEST 2: Multi-write, single-read
+            ' ========================================
+            testMultiWriteSingleRead()
 
-        ' ========================================
-        ' TEST 3: Single-write, multi-read
-        ' ========================================
-        testSingleWriteMultiRead()
+            ' ========================================
+            ' TEST 3: Single-write, multi-read
+            ' ========================================
+            testSingleWriteMultiRead()
 
-        ' ========================================
-        ' TEST 4: Edge cases
-        ' ========================================
-        testEdgeCases()
+            ' ========================================
+            ' TEST 4: Edge cases
+            ' ========================================
+            testEdgeCases()
 
-        ' ========================================
-        ' TEST 5: Large multi-block (64 sectors)
-        ' ========================================
-        testLargeMultiBlock()
+            ' ========================================
+            ' TEST 5: Large multi-block (64 sectors)
+            ' ========================================
+            testLargeMultiBlock()
+        else
+            debug("  (multi-block raw tests skipped: card too small for the audited test region)")
 
         ' Unmount
         dfs.unmount(dfs.DEV_SD)

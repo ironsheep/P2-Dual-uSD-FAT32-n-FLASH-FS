@@ -88,7 +88,7 @@ VAR
     BYTE    read_buf[dfs.SECTOR_SIZE]
     BYTE    read_buf_guard[GUARD_SIZE]
 
-PUB go() | workerCog, initResult, byteIdx, sector
+PUB go() | workerCog, initResult, cardSectors, highSector
 '' Main entry point for raw sector round-trip tests
 ''
 '' Tests readSectorRaw/writeSectorRaw operations with various patterns
@@ -108,6 +108,57 @@ PUB go() | workerCog, initResult, byteIdx, sector
         debug("ERROR: Card init failed!")
     else
         debug("Card initialized successfully")
+
+        cardSectors := dfs.cardSizeSectors()
+        debug(" ")
+        debug("* Card size: ", udec_(cardSectors), " sectors")
+
+        ' Geometry audit: the destructive write region [TEST_SECTOR_BASE, +NUM_TEST_SECTORS) must lie
+        ' within the card so raw writes never go out of range. On a card too small, report setup-not-met
+        ' and skip the write/verify phases -- NOT a driver failure.
+        if utils.assertPrecondition(cardSectors > TEST_SECTOR_BASE + NUM_TEST_SECTORS, @"card holds raw test region")
+            runWritePhases()
+        else
+            debug("  (write/verify phases skipped: card too small for the audited test region)")
+
+        ' ========================================
+        ' PHASE 4: Sector Address Boundary Tests
+        ' ========================================
+        utils.startTestGroup(@"Sector Address Boundary Tests")
+
+        utils.startTest(@"Read sector 0 (MBR) and verify signature")
+        utils.initGuard(@read_buf_guard)
+        dfs.readSectorRaw(0, @read_buf)
+        utils.checkGuard(@read_buf_guard, @"read_buf guard")
+        utils.evaluateBool(read_buf[510] == $55 and read_buf[511] == $AA, @"MBR signature $55 $AA", TRUE)
+
+        ' Large-LBA addressing: use HIGH_SECTOR_NUM when the card is that big, otherwise the last valid
+        ' sector -- so the large-address path is exercised (and stays in range) on any card size.
+        highSector := cardSectors > HIGH_SECTOR_NUM ? HIGH_SECTOR_NUM : cardSectors - 1
+        utils.startTest(@"Read a high sector number (large LBA)")
+        utils.initGuard(@read_buf_guard)
+        initResult := dfs.readSectorRaw(highSector, @read_buf)
+        utils.checkGuard(@read_buf_guard, @"read_buf guard")
+        debug("  High sector ", udec_(highSector), " read result: ", sdec_(initResult))
+        utils.evaluateBool(initResult == dfs.SUCCESS or initResult == dfs.E_TIMEOUT, @"large LBA read", TRUE)
+
+#ifdef SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
+#endif
+
+    dfs.stop()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Raw Sector Tests Complete")
+    debug("END_SESSION")
+
+PRI runWritePhases() | byteIdx, sector
+' Destructive raw write/verify phases (1-3). Only invoked once the card-size audit confirms the
+' write region lies within the card. Writes 5 patterns to TEST_SECTOR_A..E, reads them back in
+' reverse order, and does full 512-byte verification of two patterns.
 
         ' ========================================
         ' PHASE 1: Write all test patterns
@@ -182,37 +233,6 @@ PUB go() | workerCog, initResult, byteIdx, sector
 
         utils.startTest(@"Full verify Pattern B (alternating AA/55)")
         utils.evaluateBool(verifyFullPatternAlt(TEST_SECTOR_B, $B0), @"verifyFullPattern(B)", TRUE)
-
-        ' ========================================
-        ' PHASE 4: Sector Address Boundary Tests
-        ' ========================================
-        utils.startTestGroup(@"Sector Address Boundary Tests")
-
-        utils.startTest(@"Read sector 0 (MBR) and verify signature")
-        utils.initGuard(@read_buf_guard)
-        dfs.readSectorRaw(0, @read_buf)
-        utils.checkGuard(@read_buf_guard, @"read_buf guard")
-        utils.evaluateBool(read_buf[510] == $55 and read_buf[511] == $AA, @"MBR signature $55 $AA", TRUE)
-
-        utils.startTest(@"Read high sector number 1,000,000 (large LBA)")
-        utils.initGuard(@read_buf_guard)
-        initResult := dfs.readSectorRaw(HIGH_SECTOR_NUM, @read_buf)
-        utils.checkGuard(@read_buf_guard, @"read_buf guard")
-        debug("  High sector read result: ", sdec_(initResult))
-        utils.evaluateBool(initResult == dfs.SUCCESS or initResult == dfs.E_TIMEOUT, @"large LBA read", TRUE)
-
-#ifdef SD_INCLUDE_STACK_CHECK
-    debug(" ")
-    debug("* Worker cog stack: ", udec_(dfs.reportStackDepth()), " of ", udec_(dfs.STACK_SIZE), " longs used")
-#endif
-
-    dfs.stop()
-
-    utils.ShowTestEndCounts()
-
-    debug(" ")
-    debug("* Raw Sector Tests Complete")
-    debug("END_SESSION")
 
 PRI addBoundaryMarkers(sector, patternId) | secLow
 ' Add head and tail boundary markers to write_buf
