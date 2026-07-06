@@ -252,11 +252,16 @@ PUB go() | workerCog, status, handle, fileSize, sn_hi, sn_lo, used, free_ct, fil
         ' ======================================================================
         utils.startTestGroup(@"stats(DEV_SD)")
 
-        ' Test 18: file_count matches expectations
+        ' Test 18: file_count reflects a file WE create (self-scoped -- do not depend on the
+        ' ambient root having files; on a freshly-formatted card the root is empty).
         utils.startTest(@"stats() file_count > 0")
+        handle := dfs.createFileNew(dfs.DEV_SD, @"STATCNT.TXT")
+        if handle >= 0
+            dfs.closeFileHandle(handle)
         used, free_ct, file_count := dfs.stats(dfs.DEV_SD)
         debug("   stats: used=", sdec(used), " free=", sdec(free_ct), " files=", sdec(file_count))
         utils.evaluateBool(file_count > 0, @"file_count > 0", TRUE)
+        dfs.deleteFile(dfs.DEV_SD, @"STATCNT.TXT")
 
         ' Test 19: free_ct > 0
         utils.startTest(@"stats() free_ct > 0")
