@@ -2192,6 +2192,18 @@ PUB freeSpace(dev) : free_count
     other:
       free_count := 0
 
+PUB clusterBytes() : n
+'' Bytes per cluster of the mounted SD volume (test / introspection helper -- lets a test place
+'' a write exactly across a cluster boundary to exercise the FAT-chain follow path in do_write_h).
+'' Valid only after a successful SD mount; returns 0 if not mounted.
+''
+'' @returns n - Bytes per cluster (sec_per_clus * 512), or 0 when the SD volume is not mounted
+
+  if NOT sd_mounted
+    n := 0
+  else
+    n := sec_per_clus << SECTOR_BITS
+
 PUB stats(dev) : used, free_ct, file_count | dirHandle, p_entry
 '' Get device statistics.
 '' SD: used/free sectors, file count in CWD.
@@ -5100,7 +5112,42 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
 
       DEBUG[CH_FILE]("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
 
-PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster, fat_addr
+PRI writeAdvanceCluster(handle) : ok | cluster, fat_addr, next_cluster, new_cluster
+' Advance a WRITE handle across a cluster boundary CORRECTLY.
+' The file's data lives in a FAT chain.  On an in-place OVERWRITE that spans a boundary the
+' current cluster ALREADY links to a next cluster -- we MUST FOLLOW that link, NOT allocate.
+' The old code called allocateCluster() unconditionally here; because allocateCluster()
+' re-links the passed cluster's FAT entry to a fresh cluster, that TRUNCATED the chain and
+' orphaned the file's tail -> file data written over the FAT/VBR (the recurring DB(SD)=FAILED,
+' root-caused 2026-07-21 from a field report).  Mirrors the chain-follow do_read_h already
+' does; allocateCluster() runs only when the current cluster is truly end-of-chain (growth).
+'
+' @param handle - Valid write handle sitting on a just-crossed cluster boundary
+' @returns ok - TRUE on success (h_cluster/h_sector advanced), FALSE on I/O or alloc failure
+' @local cluster - Current (soon-to-be-previous) cluster
+' @local fat_addr - Address of the current cluster's FAT entry
+' @local next_cluster - Existing forward link (raw FAT cell), if any
+' @local new_cluster - Newly allocated cluster (growth path)
+
+  cluster := h_cluster[handle]
+  if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
+    DEBUG[CH_FILE]("  [writeAdvanceCluster] FAT read FAILED for cluster ", udec_(cluster))
+    return FALSE
+  fat_addr := @fat_buf + ((cluster << FAT_ENTRY_SHIFT) & SECTOR_MASK)
+  next_cluster := LONG[fat_addr]
+  if next_cluster +>= $0FFF_FFF8                                                ' current cluster is end-of-chain
+    new_cluster := allocateCluster(cluster)                                     '   -> genuine growth: allocate + link
+    if new_cluster < 0
+      DEBUG[CH_FILE]("  [writeAdvanceCluster] Failed to allocate cluster")
+      return FALSE
+    h_cluster[handle] := new_cluster
+    h_sector[handle]  := clus2sec(new_cluster)
+  else                                                                          ' already linked -> FOLLOW existing chain
+    h_cluster[handle] := next_cluster
+    h_sector[handle]  := clus2sec(next_cluster)
+  return TRUE
+
+PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster
 ' Handle-based write (V3) - writes data from user buffer to file handle.
 ' Uses per-handle buffer with dirty tracking. File grows as needed.
 ' Clusters allocated when extending past current allocation.
@@ -5112,8 +5159,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 ' @local p_hbuf - Pointer to handle's buffer
 ' @local offset - Offset within current sector
 ' @local to_write - Bytes to write to current sector
-' @local new_cluster - Newly allocated cluster
-' @local fat_addr - Address of FAT entry
+' @local new_cluster - Newly allocated cluster (DEFRAG pre-alloc growth path)
 
 ' Validate handle
 
@@ -5159,16 +5205,20 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
             h_sector[handle] := clus2sec(new_cluster)
         else
 #endif
-          new_cluster := allocateCluster(h_cluster[handle])
-          if new_cluster < 0
-            DEBUG[CH_FILE]("  [do_write_h] Failed to allocate cluster at boundary advance")
+          ' FOLLOW the existing chain on in-place overwrite; allocate only at true EOC.
+          ' (Unconditional allocateCluster here truncated the chain -> FS corruption; 2026-07-21.)
+          if NOT writeAdvanceCluster(handle)
             bytes_written := 0
-          else
-            h_cluster[handle] := new_cluster
-            h_sector[handle] := clus2sec(new_cluster)
 
     bytes_written := 0
     repeat while count > 0
+      ' CORRECT BY CONSTRUCTION: file data lives only in the data region (cluster >= 2 ->
+      ' sector >= root_sec).  A write target below root_sec means a corrupted cluster/seek would
+      ' put user data onto the VBR/FAT/root -- the whole-volume corruption root-caused 2026-07-21.
+      ' Refuse it loudly rather than destroy the filesystem.
+      if h_sector[handle] < root_sec
+        DEBUG[CH_FILE]("  [do_write_h] REFUSING metadata-region write: sector ", udec_(h_sector[handle]), " < data start ", udec_(root_sec), " (cluster ", udec_(h_cluster[handle]), ") -- aborting to protect the FS")
+        quit
       ' Ensure current sector is in handle's buffer
       if h_buf_sector[handle] <> h_sector[handle]
         ' Flush dirty buffer first if needed
@@ -5178,8 +5228,11 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
           writeSector(h_buf_sector[handle], BUF_DATA)
           h_flags[handle] &= !HF_DIRTY
 
-        ' Load sector (or zero-fill if writing past end)
-        if h_position[handle] < h_size[handle]
+        ' Load sector (or zero-fill if writing past end).  Decide by the SECTOR's first byte, not
+        ' the write position: a mid-sector write (append at position==size, or an overwrite) whose
+        ' sector still holds real file bytes must LOAD that sector so those bytes survive.  Keying
+        ' off position alone zero-filled and destroyed the leading bytes (field report 2026-07-12).
+        if (h_position[handle] & !SECTOR_MASK) < h_size[handle]
           ' Within existing file - load sector
           if readSector(h_sector[handle], BUF_DATA) < 0
             DEBUG[CH_FILE]("  [do_write_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
@@ -5231,14 +5284,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
               h_sector[handle] := clus2sec(new_cluster)
           else
 #endif
-            ' Need to allocate new cluster or follow chain
-            new_cluster := allocateCluster(h_cluster[handle])
-            if new_cluster < 0
-              DEBUG[CH_FILE]("  [do_write_h] Failed to allocate cluster")
+            ' FOLLOW the existing chain on in-place overwrite; allocate only at true EOC.
+            ' (Unconditional allocateCluster here truncated the chain -> FS corruption; 2026-07-21.)
+            if NOT writeAdvanceCluster(handle)
               quit                                      ' Return what we've written so far
-            DEBUG[CH_FILE]("  [do_write_h] Allocated new cluster ", udec_(new_cluster))
-            h_cluster[handle] := new_cluster
-            h_sector[handle] := clus2sec(new_cluster)
 
     DEBUG[CH_FILE]("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
 

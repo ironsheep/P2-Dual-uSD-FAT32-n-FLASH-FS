@@ -111,6 +111,7 @@ SUITES+=(
     "DFS_SD_RT_multihandle_tests.spin2:60"
     "DFS_SD_RT_file_ops_tests.spin2:60"
     "DFS_SD_RT_read_write_tests.spin2:90"
+    "DFS_SD_RT_fatchain_tests.spin2:90"
     "DFS_FL_RT_rw_tests.spin2:120"
     "DFS_FL_RT_rw_modify_tests.spin2:90"
 )

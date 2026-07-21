@@ -1,0 +1,355 @@
+'' =================================================================================================
+''
+''   File....... DFS_SD_RT_fatchain_tests.spin2
+''   Purpose.... Regression gate for the write-path FAT-chain / sector-load corruption bugs
+''               root-caused from a 2026-07 field report (refaQtor).  Two independent defects:
+''                 (A) do_write_h allocated a fresh cluster UNCONDITIONALLY when an in-place
+''                     overwrite crossed a cluster boundary -- truncating the FAT chain and
+''                     orphaning the file's tail -> whole-FAT/VBR corruption.
+''                 (B) do_write_h chose read-vs-zero-fill by FILE POSITION, so a mid-sector
+''                     write (append at position==size, or a partial overwrite) zero-filled the
+''                     tail sector and wiped the existing bytes BEFORE the write point.
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JUL 2026
+''   Updated.... 21 JUL 2026
+''
+'' =================================================================================================
+''
+'' HOW THESE TESTS PROVE THE BUG (definitive A/B on the same card):
+''
+''   Bug A -- FAT-chain follow on cross-boundary overwrite:
+''     A same-session FULL overwrite does NOT expose the bug (the reader follows the same
+''     rewritten-but-consistent chain).  The defect is only observable when an UNTOUCHED TAIL
+''     exists: we build a 3-cluster file, then overwrite ONLY the first two clusters in place.
+''       - Buggy driver: crossing the C1->C2 boundary re-links C1 to a fresh cluster, orphaning
+''         the original C2->C3 tail.  Readback follows the truncated chain, hits EOC early, and
+''         SHORT-READS -- the 3rd cluster (the untouched tail) is gone.  => FAIL.
+''       - Fixed driver: the boundary crossing FOLLOWS the existing link, the chain stays intact,
+''         readback returns the whole file and the tail still holds its original pattern. => PASS.
+''
+''   Bug B -- mid-sector write preserves leading bytes:
+''     Create a 100-byte file (mid-sector), then append 50 bytes.  The append starts at
+''     position==size, mid-sector.
+''       - Buggy driver: zero-fills the tail sector -> the first 100 bytes read back as 0. => FAIL.
+''       - Fixed driver: loads the sector first -> the first 100 bytes survive. => PASS.
+''
+'' Cluster size is read at run time via dfs.clusterBytes(), so the tests are geometry-agnostic
+'' (they place writes exactly on cluster boundaries regardless of sectors-per-cluster).
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+     DEBUG_BAUD      = 2_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     CHUNK             = 512                 ' Sector-sized write/read unit
+
+     ' Cross-boundary overwrite (Bug A)
+     N_CLUSTERS_FILE   = 3                   ' File spans 3 clusters (C1->C2->C3)
+     N_CLUSTERS_OVER   = 2                   ' Overwrite the first 2 in place; C3 is the untouched tail
+     P1_FILL           = $C3                 ' Original whole-file pattern (tail must survive as this)
+     P2_FILL           = $5A                 ' Overwrite pattern (first two clusters become this)
+
+     ' Mid-sector append (Bug B)
+     HEAD_BYTES        = 100                 ' Original mid-sector file length
+     TAIL_BYTES        = 50                  ' Appended bytes
+     FILL_A            = $41                 ' 'A' -- original head bytes (must survive the append)
+     FILL_B            = $42                 ' 'B' -- appended bytes
+     FILL_C            = $43                 ' 'C' -- interior overwrite bytes
+
+     GUARD_SIZE        = 16
+
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
+
+OBJ
+    dfs   : "dual_sd_fat32_flash_fs"
+    utils : "DFS_RT_utilities"
+
+DAT
+
+' Test filenames (8.3)
+fnChain         BYTE    "RTFCHAIN.BIN", 0
+fnGrow          BYTE    "RTFGROW.BIN", 0
+fnAppend        BYTE    "RTFAPPND.BIN", 0
+
+' Buffers
+writeBuf        BYTE    0[CHUNK]
+readBuf         BYTE    0[CHUNK]
+readBuf_guard   BYTE    0[GUARD_SIZE]
+
+PUB go() | workerCog, opStatus, clusBytes, fileBytes, overBytes, totalChunks, overChunks
+'' Main entry point for write-path FAT-chain / sector-load regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Dual FS (SD) - Write-Path FAT-Chain Tests")
+    debug("  (field-report corruption regression gate)")
+    debug("==============================================")
+
+    workerCog := dfs.init()
+
+    opStatus := dfs.mount(dfs.DEV_SD)
+    if opStatus <> dfs.SUCCESS
+        debug("ERROR: Could not mount SD card!")
+        utils.startTestGroup(@"SD mount (setup)")
+        utils.startTest(@"mount SD volume")
+        utils.evaluateBool(FALSE, @"mount(DEV_SD)", TRUE)
+        utils.ShowTestEndCounts()
+        return
+
+    clusBytes := dfs.clusterBytes()
+    debug(" ")
+    debug("* SD Card Information:")
+    debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
+    debug("   Free Space:   ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
+    debug("   Cluster size: ", udec(clusBytes), " bytes")
+
+    ' Clean up any stragglers from a prior run
+    dfs.deleteFile(dfs.DEV_SD, @fnChain)
+    dfs.deleteFile(dfs.DEV_SD, @fnGrow)
+    dfs.deleteFile(dfs.DEV_SD, @fnAppend)
+
+    fileBytes   := clusBytes * N_CLUSTERS_FILE
+    overBytes   := clusBytes * N_CLUSTERS_OVER
+    totalChunks := fileBytes / CHUNK
+    overChunks  := overBytes / CHUNK
+
+    ' --------------------------------------------------------------------------------------
+    ' TEST GROUP A: cross-boundary in-place overwrite must FOLLOW the FAT chain (tail survives)
+    ' --------------------------------------------------------------------------------------
+    utils.startTestGroup(@"Cross-boundary overwrite follows FAT chain (tail survives)")
+
+    ' Capacity audit: need the 3-cluster file plus slack.  A buggy driver also leaks clusters,
+    ' so give generous headroom; surfaces as setup-not-met rather than a spurious write failure.
+    if utils.assertFreeSpace(dfs.DEV_SD, utils.clustersForBytes(dfs.DEV_SD, fileBytes) + 3, @"card has space for 3-cluster chain test")
+
+        ' 1) Build a 3-cluster file entirely of P1 (also exercises the growth/allocate path).
+        utils.startTest(@"create 3-cluster file (growth path)")
+        opStatus := writeWholeFile(@fnChain, fileBytes, P1_FILL, P1_FILL, totalChunks)
+        utils.evaluateSingleValue(opStatus, @"bytes written building chain", fileBytes)
+
+        ' 2) In-place overwrite the FIRST TWO clusters with P2, leaving the 3rd cluster untouched.
+        '    openFileWrite() opens append-mode (chain preserved); seek to 0 to overwrite in place.
+        utils.startTest(@"overwrite first 2 clusters in place across boundary")
+        opStatus := overwritePrefix(@fnChain, overBytes, P2_FILL, overChunks)
+        utils.evaluateSingleValue(opStatus, @"bytes overwritten in place", overBytes)
+
+        ' 3) Read the WHOLE file back.  On the buggy driver the chain was truncated: the read
+        '    short-reads at the orphaned tail and the 3rd cluster (P1) is gone.
+        utils.startTest(@"whole file still readable (chain not truncated)")
+        opStatus := readFullFileLen(@fnChain)
+        utils.evaluateSingleValue(opStatus, @"total bytes readable after overwrite", fileBytes)
+
+        ' 4) Content: first 2 clusters == P2 (overwrite landed), 3rd cluster == P1 (tail survived).
+        utils.startTest(@"content correct incl. untouched tail cluster")
+        opStatus := verifyPrefixThenTail(@fnChain, overChunks, totalChunks, P2_FILL, P1_FILL)
+        utils.evaluateBool(opStatus, @"prefix=overwrite, tail=original", TRUE)
+
+    ' --------------------------------------------------------------------------------------
+    ' TEST GROUP A2: genuine growth (fresh multi-cluster file) still allocates correctly
+    ' --------------------------------------------------------------------------------------
+    utils.startTestGroup(@"Growth path allocates a fresh multi-cluster chain")
+
+    if utils.assertFreeSpace(dfs.DEV_SD, utils.clustersForBytes(dfs.DEV_SD, overBytes) + 2, @"card has space for growth test")
+        utils.startTest(@"write fresh 2-cluster file then read back")
+        opStatus := writeWholeFile(@fnGrow, overBytes, P2_FILL, P2_FILL, overChunks)
+        utils.evaluateSubValue(opStatus, @"bytes grown", overBytes)
+        opStatus := readFullFileLen(@fnGrow)
+        utils.evaluateSubValue(opStatus, @"bytes read back", overBytes)
+        opStatus := verifyUniform(@fnGrow, overChunks, P2_FILL)
+        utils.evaluateBool(opStatus, @"all bytes match written pattern", TRUE)
+
+    ' --------------------------------------------------------------------------------------
+    ' TEST GROUP B: mid-sector append preserves the leading bytes (no zero-fill)
+    ' --------------------------------------------------------------------------------------
+    utils.startTestGroup(@"Mid-sector append preserves leading bytes")
+
+    utils.startTest(@"create 100-byte (mid-sector) file of 'A'")
+    opStatus := writeSmall(@fnAppend, HEAD_BYTES, FILL_A, dfs.SUCCESS)   ' create fresh
+    utils.evaluateSingleValue(opStatus, @"bytes written", HEAD_BYTES)
+
+    utils.startTest(@"append 50 bytes of 'B' at mid-sector EOF")
+    opStatus := appendSmall(@fnAppend, TAIL_BYTES, FILL_B)
+    utils.evaluateSingleValue(opStatus, @"total size after append", HEAD_BYTES + TAIL_BYTES)
+
+    utils.startTest(@"leading 'A' bytes survived (not zero-filled)")
+    opStatus := verifyHeadTail(@fnAppend, HEAD_BYTES, FILL_A, TAIL_BYTES, FILL_B)
+    utils.evaluateBool(opStatus, @"head='A', tail='B'", TRUE)
+
+    ' Interior overwrite (also mid-sector) must load-then-modify, not zero-fill.
+    utils.startTest(@"interior overwrite preserves surrounding bytes")
+    opStatus := overwriteInterior(@fnAppend, 50, 10, FILL_C)
+    utils.evaluateBool(opStatus, @"bytes 0-49='A', 50-59='C', 60-99='A'", TRUE)
+
+    ' --------------------------------------------------------------------------------------
+    ' Cleanup + totals
+    ' --------------------------------------------------------------------------------------
+    dfs.deleteFile(dfs.DEV_SD, @fnChain)
+    dfs.deleteFile(dfs.DEV_SD, @fnGrow)
+    dfs.deleteFile(dfs.DEV_SD, @fnAppend)
+
+    utils.ShowTestEndCounts()
+
+PRI writeWholeFile(pName, nBytes, firstFill, restFill, nChunks) : bytesWritten | handle, idx, fill
+' Create pName fresh and write nBytes as nChunks of CHUNK bytes.  firstFill fills chunk 0,
+' restFill fills the remainder (both equal for a uniform file).  Returns total bytes written.
+  bytesWritten := 0
+  handle := dfs.createFileNew(dfs.DEV_SD, pName)
+  if handle < 0
+    return handle
+  repeat idx from 0 to nChunks - 1
+    if idx == 0
+      fill := firstFill
+    else
+      fill := restFill
+    utils.fillBufferWithValue(@writeBuf, CHUNK, fill)
+    bytesWritten += dfs.writeHandle(handle, @writeBuf, CHUNK)
+  dfs.closeFileHandle(handle)
+
+PRI overwritePrefix(pName, nBytes, fill, nChunks) : bytesWritten | handle, idx
+' Open pName append-mode (chain preserved), seek to 0, overwrite the first nBytes in place.
+' This is the exact trigger for Bug A: the overwrite crosses a cluster boundary while the
+' current cluster still links forward, so the driver must FOLLOW the link, not allocate.
+  bytesWritten := 0
+  handle := dfs.openFileWrite(dfs.DEV_SD, pName)
+  if handle < 0
+    return handle
+  dfs.seekHandle(handle, 0)
+  utils.fillBufferWithValue(@writeBuf, CHUNK, fill)
+  repeat idx from 0 to nChunks - 1
+    bytesWritten += dfs.writeHandle(handle, @writeBuf, CHUNK)
+  dfs.closeFileHandle(handle)
+
+PRI readFullFileLen(pName) : bytesRead | handle, n
+' Read pName to EOF in CHUNK-sized reads; return the total bytes actually returned.
+' A truncated chain (Bug A) short-reads here.
+  bytesRead := 0
+  handle := dfs.openFileRead(dfs.DEV_SD, pName)
+  if handle < 0
+    return handle
+  repeat
+    n := dfs.readHandle(handle, @readBuf, CHUNK)
+    if n <= 0
+      quit
+    bytesRead += n
+    if n < CHUNK
+      quit
+  dfs.closeFileHandle(handle)
+
+PRI verifyPrefixThenTail(pName, nPrefixChunks, nTotalChunks, prefixFill, tailFill) : bMatch | handle, idx, n, expected
+' Verify chunks [0, nPrefixChunks) == prefixFill and [nPrefixChunks, nTotalChunks) == tailFill.
+' A short read (truncated chain) also fails here.
+  bMatch := TRUE
+  handle := dfs.openFileRead(dfs.DEV_SD, pName)
+  if handle < 0
+    return FALSE
+  repeat idx from 0 to nTotalChunks - 1
+    n := dfs.readHandle(handle, @readBuf, CHUNK)
+    if n <> CHUNK
+      bMatch := FALSE
+      quit
+    if idx < nPrefixChunks
+      expected := prefixFill
+    else
+      expected := tailFill
+    if NOT utils.verifyBufferValue(@readBuf, CHUNK, expected)
+      bMatch := FALSE
+  dfs.closeFileHandle(handle)
+
+PRI verifyUniform(pName, nChunks, fill) : bMatch | handle, idx, n
+' Verify pName is nChunks of CHUNK bytes, all equal to fill.
+  bMatch := TRUE
+  handle := dfs.openFileRead(dfs.DEV_SD, pName)
+  if handle < 0
+    return FALSE
+  repeat idx from 0 to nChunks - 1
+    n := dfs.readHandle(handle, @readBuf, CHUNK)
+    if n <> CHUNK
+      bMatch := FALSE
+      quit
+    if NOT utils.verifyBufferValue(@readBuf, CHUNK, fill)
+      bMatch := FALSE
+  dfs.closeFileHandle(handle)
+
+PRI writeSmall(pName, nBytes, fill, expectAtLeast) : bytesWritten | handle
+' Create pName fresh and write nBytes of fill in a single write.  expectAtLeast unused beyond
+' documenting intent; returns bytes written (negative handle error on open failure).
+  handle := dfs.createFileNew(dfs.DEV_SD, pName)
+  if handle < 0
+    return handle
+  utils.fillBufferWithValue(@writeBuf, CHUNK, fill)
+  bytesWritten := dfs.writeHandle(handle, @writeBuf, nBytes)
+  dfs.closeFileHandle(handle)
+
+PRI appendSmall(pName, nBytes, fill) : finalSize | handle
+' Open pName append-mode (positions at mid-sector EOF) and write nBytes of fill; return final size.
+  handle := dfs.openFileWrite(dfs.DEV_SD, pName)
+  if handle < 0
+    return handle
+  utils.fillBufferWithValue(@writeBuf, CHUNK, fill)
+  dfs.writeHandle(handle, @writeBuf, nBytes)
+  finalSize := dfs.fileSizeHandle(handle)
+  dfs.closeFileHandle(handle)
+
+PRI verifyHeadTail(pName, nHead, headFill, nTail, tailFill) : bMatch | handle, idx, n
+' Read pName and verify the first nHead bytes == headFill and the next nTail bytes == tailFill.
+  bMatch := TRUE
+  handle := dfs.openFileRead(dfs.DEV_SD, pName)
+  if handle < 0
+    return FALSE
+  n := dfs.readHandle(handle, @readBuf, nHead + nTail)
+  if n <> (nHead + nTail)
+    bMatch := FALSE
+  else
+    repeat idx from 0 to nHead - 1
+      if readBuf[idx] <> headFill
+        bMatch := FALSE
+    repeat idx from nHead to (nHead + nTail) - 1
+      if readBuf[idx] <> tailFill
+        bMatch := FALSE
+  dfs.closeFileHandle(handle)
+
+PRI overwriteInterior(pName, atPos, nBytes, fill) : bMatch | handle, idx, n
+' Seek to atPos and overwrite nBytes of fill in place, then verify the surrounding bytes are
+' untouched (a mid-sector overwrite must load-then-modify, never zero-fill).
+  bMatch := TRUE
+  handle := dfs.openFileWrite(dfs.DEV_SD, pName)
+  if handle < 0
+    return FALSE
+  dfs.seekHandle(handle, atPos)
+  utils.fillBufferWithValue(@writeBuf, CHUNK, fill)
+  dfs.writeHandle(handle, @writeBuf, nBytes)
+  dfs.closeFileHandle(handle)
+  ' Re-read the head region (bytes 0..99) and check the untouched shoulders.
+  handle := dfs.openFileRead(dfs.DEV_SD, pName)
+  if handle < 0
+    return FALSE
+  n := dfs.readHandle(handle, @readBuf, HEAD_BYTES)
+  if n <> HEAD_BYTES
+    bMatch := FALSE
+  else
+    repeat idx from 0 to HEAD_BYTES - 1
+      if idx >= atPos AND idx < (atPos + nBytes)
+        if readBuf[idx] <> fill
+          bMatch := FALSE
+      elseif readBuf[idx] <> FILL_A
+        bMatch := FALSE
+  dfs.closeFileHandle(handle)
