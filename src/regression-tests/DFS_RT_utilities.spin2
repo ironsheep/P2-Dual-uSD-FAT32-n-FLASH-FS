@@ -879,7 +879,7 @@ PUB ensureCleanBaseline(dev, pOwnedNames) : bClean | idx, pName
             bClean := false
     assertPrecondition(bClean, @"ensureCleanBaseline: owned files removed")
 
-PUB clustersForBytes(dev, sizeBytes) : clusters | bytesPerCluster
+PUB clustersForBytes(dev, sizeBytes) : clusters | bytesPerCluster, spc
 '' Convert a byte size to the number of SD clusters it occupies, using the mounted card's
 '' actual geometry (sectorsPerCluster). Inverse of the defrag Test-11 sizing math
 '' (clusters * sectorsPerCluster * 512). SD-only concept; returns 0 for non-SD devices.
@@ -890,13 +890,14 @@ PUB clustersForBytes(dev, sizeBytes) : clusters | bytesPerCluster
 
     clusters := 0
     if dev == dfs.DEV_SD
-        bytesPerCluster := dfs.sectorsPerCluster() * SECTOR_BYTES
+        spc := dfs.sectorsPerCluster()                    ' driver query into a local first (see assertFreeSpace note)
+        bytesPerCluster := spc * SECTOR_BYTES
         if bytesPerCluster > 0
             clusters := (sizeBytes + bytesPerCluster - 1) / bytesPerCluster
         if clusters < 1
             clusters := 1
 
-PUB assertFreeSpace(dev, minClusters, pMessage) : bMet | freeClusters
+PUB assertFreeSpace(dev, minClusters, pMessage) : bMet | freeClusters, spc
 '' Audit that the device has at least minClusters of FREE space (regardless of contiguity).
 '' UNGATED -- any large-write suite can audit capacity without enabling SD_INCLUDE_DEFRAG.
 '' SD: free sectors / sectorsPerCluster. Flash: freeSpace already returns free blocks.
@@ -907,15 +908,22 @@ PUB assertFreeSpace(dev, minClusters, pMessage) : bMet | freeClusters
 '' @param pMessage - Precondition description (shown when unmet)
 '' @returns bMet - TRUE if free space is sufficient
 
+    ' NOTE: compute each driver query into its own local BEFORE combining. Chaining two driver
+    ' method calls in one expression -- dfs.freeSpace(...) / dfs.sectorsPerCluster() -- yielded a
+    ' wrong result (freeSpace() issues a worker send_command; combining it with a second call in
+    ' one expression corrupted the value, so the gate spuriously reported setup-not-met and SKIPPED
+    ' the real tests). Intermediate locals are the safe idiom. Root-caused 2026-07-21.
     if dev == dfs.DEV_SD
-        freeClusters := dfs.freeSpace(dfs.DEV_SD) / dfs.sectorsPerCluster()
+        freeClusters := dfs.freeSpace(dfs.DEV_SD)
+        spc := dfs.sectorsPerCluster()
+        freeClusters := freeClusters / spc
     else
         freeClusters := dfs.freeSpace(dev)
     bMet := freeClusters >= minClusters
     assertPrecondition(bMet, pMessage)
 
 #ifdef SD_INCLUDE_DEFRAG
-PUB assertContiguousFree(dev, minClusters, pMessage) : bMet
+PUB assertContiguousFree(dev, minClusters, pMessage) : bMet | extent
 '' Audit that the device has a CONTIGUOUS free run of at least minClusters -- the precondition
 '' for contiguous-allocation / defrag tests. SD-only, gated on SD_INCLUDE_DEFRAG because it
 '' relies on largestFreeExtent(). Reports setup-not-met (not a driver failure) when the largest
@@ -926,7 +934,8 @@ PUB assertContiguousFree(dev, minClusters, pMessage) : bMet
 '' @param pMessage - Precondition description (shown when unmet)
 '' @returns bMet - TRUE if a sufficient contiguous run exists
 
-    bMet := dfs.largestFreeExtent(dev) >= minClusters
+    extent := dfs.largestFreeExtent(dev)                  ' driver query into a local first (see assertFreeSpace note)
+    bMet := extent >= minClusters
     assertPrecondition(bMet, pMessage)
 #endif
 

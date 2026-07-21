@@ -175,7 +175,8 @@ PUB go() | workerCog, opStatus, clusBytes, fileBytes, overBytes, totalChunks, ov
         opStatus := readFullFileLen(@fnGrow)
         utils.evaluateSubValue(opStatus, @"bytes read back", overBytes)
         opStatus := verifyUniform(@fnGrow, overChunks, P2_FILL)
-        utils.evaluateBool(opStatus, @"all bytes match written pattern", TRUE)
+        ' Sub-eval (not evaluateBool) so this single startTest rolls up to ONE pass/fail result.
+        utils.evaluateSubBool(opStatus, @"all bytes match written pattern", TRUE)
 
     ' --------------------------------------------------------------------------------------
     ' TEST GROUP B: mid-sector append preserves the leading bytes (no zero-fill)
@@ -206,7 +207,13 @@ PUB go() | workerCog, opStatus, clusBytes, fileBytes, overBytes, totalChunks, ov
     dfs.deleteFile(dfs.DEV_SD, @fnGrow)
     dfs.deleteFile(dfs.DEV_SD, @fnAppend)
 
+    dfs.stop()
+
     utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Write-Path FAT-Chain Tests Complete")
+    debug("END_SESSION")
 
 PRI writeWholeFile(pName, nBytes, firstFill, restFill, nChunks) : bytesWritten | handle, idx, fill
 ' Create pName fresh and write nBytes as nChunks of CHUNK bytes.  firstFill fills chunk 0,
