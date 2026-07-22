@@ -6,6 +6,18 @@ Follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-22
+
+SD sub-driver upgraded to v1.5.2: write-path data-integrity hardening.
+
+### Fixed
+- Overwriting a file across a cluster boundary now follows the file's existing cluster chain, preserving the untouched remainder of the file and the volume's FAT and boot regions
+- Mid-sector append or overwrite now preserves the leading bytes already present in the target sector
+
+### Added
+- `largestFreeExtent()`: Report the largest contiguous run of free clusters on a device
+- `DFS_SD_RT_fatchain_tests` -- regression gate for cross-boundary overwrite and mid-sector write integrity
+
 ## [1.3.1] - 2026-07-05
 
 SD sub-driver upgraded to v1.5.1: shared SD/Flash bus hardening against microSD corruption.
