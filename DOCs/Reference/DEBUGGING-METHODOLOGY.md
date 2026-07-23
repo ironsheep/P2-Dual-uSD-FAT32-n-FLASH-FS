@@ -123,6 +123,69 @@ When tracing symptoms, be aware these are common bug patterns:
 
 ---
 
+## The Recompile-Sensitive Heisenbug (P2 concurrency & layout)
+
+Some of the hardest bugs on the P2 look non-deterministic but are not. **A fixed `.bin` on a P2 is
+fully deterministic; the SD card is a deterministic state machine.** When "the same source behaves
+differently" the real property is almost always **recompile-sensitive**: the *result* changed
+because the *binary* changed (different hub addresses, different instruction counts, different
+stack-temp placement), not because anything is random. Adding a `debug()` line is a recompile.
+
+**This is the trap that reads as "unsolvable":** you instrument to observe the bug, the
+instrumentation shifts layout/timing, the bug moves or vanishes, and you conclude "I can't see the
+cause, so it can't be found." The instrumentation didn't fail to reveal the bug — **it moved it.**
+
+On this architecture a recompile can only change a *result* (not just speed) through a short list:
+
+1. **Cross-cog phase.** Each cog is deterministic alone, but two concurrently-running cogs have a
+   *relative phase* that is a hidden input, and the compiler perturbs it every build. A latent race
+   that resolved benignly in one build gets exposed in the next.
+2. **Uninitialized / aliased hub memory** whose value depends on placement (read-before-write, or two
+   things sharing a slot). Classic "worked until I added a line."
+3. **Spin2 expression code-gen fragility** — how the compiler stacks a *method-call return value*
+   inside a compound expression. Splitting the expression into locals changes that code path.
+
+### Deterministic inter-cog comms IS achievable — timing vs. result
+A *correct* synchronization protocol makes the **logical result independent of relative timing**,
+even though the latency still jitters. The primitives:
+
+- **Hub locks** (`LOCKTRY`/`LOCKREL`) — hardware-atomic mutual exclusion. No timing leak.
+- **A completion flag in hub RAM, polled by the reader.** Worker writes the DATA first, then clears
+  the FLAG. Reader checks the FLAG, then reads the DATA. Order-of-writes + poll-the-flag = correct,
+  timing-independent handoff.
+- **ATN is a DOORBELL, not a mailbox.** `COGATN` is edge-triggered, has **no queue** (two strobes
+  before a check merge into one), auto-clears on `WAITATN`/`POLLATN`, and has no delivery guarantee
+  if the target wasn't waiting. **Never trust the doorbell to tell you what's in the box** — use it
+  only to sleep instead of busy-spin, then *re-verify the hub flag*. Correctness lives in the
+  lock + flag; ATN is pure latency reduction.
+
+The one defect pattern: **treating a bare `WAITATN()` as if it were the synchronization.** A stale or
+coalesced ATN then makes it return early and the caller reads the PREVIOUS operation's mailbox
+result. The correct idiom (already used in this driver's `send_command`):
+
+```spin2
+repeat
+  if pb_cmd == CMD_NONE          ' the hub flag is the truth
+    quit
+  WAITATN()                      ' the doorbell is only a sleep optimization
+```
+
+### Rules of thumb
+- **"Recompile-sensitive" ⇒ suspect cross-cog phase or memory aliasing** — go straight to those,
+  don't hunt for randomness that isn't there.
+- **Never trust a fix that is merely an expression restructure** (e.g. "compute into locals first,
+  and the symptom went away"). It is safe to keep, but it has the *shape of a Heisenbug mask* — it
+  may sidestep a real code-gen path OR merely move a race. Root-cause it before believing it.
+- **Prove same-binary determinism first.** Freeze the failing `.bin`, run it N times. Identical every
+  time confirms it's build-sensitive (not random) and reframes the whole hunt.
+- **Diff the builds, not the source.** The divergence between a passing build and a failing build is
+  in the bytecode/listing — stack-temp placement (⇒ code-gen) or instruction count around a handshake
+  (⇒ race). That diff IS the root cause.
+- **Don't instrument inside the suspect window.** `debug()` perturbs exactly the variable under test.
+  Capture state to a hub buffer and dump it *after* the window, or single-step the handshake.
+
+---
+
 ## Anti-Patterns to Avoid
 
 1. **Premature Classification** - Labeling symptoms as "primary/secondary" before investigation
