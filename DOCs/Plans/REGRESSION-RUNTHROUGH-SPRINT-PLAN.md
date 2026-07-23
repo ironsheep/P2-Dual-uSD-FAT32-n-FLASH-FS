@@ -187,6 +187,28 @@ rewires):
 - *Error:* deliberately shrink a fixture's assertion to be impossible → it emits `SETUP NOT MET` and
   (via §4) fails the run — confirming baseline-guaranteed gates are wired to fail, not skip.
 
+### Classification result (produced by «#16», 2026-07-23 — the authoritative table §6 lifts into the contract)
+
+Every precondition call site across `src/regression-tests/*.spin2`, classified:
+
+| Gate site | Precondition | Category | Disposition |
+|---|---|---|---|
+| `DFS_SD_RT_fatchain_tests.spin2:142` | free space for 3-cluster chain fixture | baseline-guaranteed | STAY `assertFreeSpace` → `SETUP NOT MET` |
+| `DFS_SD_RT_fatchain_tests.spin2:171` | free space for 2-cluster growth fixture | baseline-guaranteed | STAY `assertFreeSpace` |
+| `DFS_SD_RT_read_write_tests.spin2:171` | free space (LARGE_BUFFER_SIZE = 2 KB) | baseline-guaranteed | STAY `assertFreeSpace` (return-ignored bug → §5b) |
+| `DFS_SD_RT_speed_tests.spin2:111` | free space (BUFFER_SIZE = 512 B) | baseline-guaranteed | STAY `assertFreeSpace` (return-ignored bug → §5b) |
+| `DFS_SD_RT_defrag_tests.spin2:198/324/359` | contiguous free run for bounded fixture (after fresh format) | baseline-guaranteed | STAY `assertContiguousFree` |
+| `ensureCleanBaseline` (16 sites) | owned files removed after cleanup | baseline-guaranteed | STAY (`assertPrecondition` inside helper) |
+| `DFS_SD_RT_raw_sector_tests.spin2:119` | card reaches abs. sector 100 000 (~51 MB) | **hardware limit** | **MIGRATED → `assertHardwareLimit`** |
+| `DFS_SD_RT_multiblock_tests.spin2:106` | card reaches abs. sector 200 000 (~102 MB) | **hardware limit** | **MIGRATED → `assertHardwareLimit`** |
+
+Notes: the raw-sector high-LBA test (`raw_sector:137`) already self-adapts (`highSector := cardSectors >
+HIGH_SECTOR_NUM ? … : cardSectors-1`, tolerates `E_TIMEOUT`) and needs no gate. On every supported card
+(≥1 GB the smallest in the card catalog) **both** categories are zero — everything runs; the two
+hardware-limit gates only skip on an unsupported sub-100 MB card, where the skip is allowed and surfaced,
+never a failure. The two return-ignored `assertFreeSpace` sites stay baseline-guaranteed here; making them
+actually gate is §5b's fix, not a reclassification.
+
 ## §3 — Runner-enforced baseline (audit → format as suite #0)
 
 **Why.** Removes cross-run state carryover. Today the runner assumes the card is already good; the

@@ -103,7 +103,11 @@ PUB go() | workerCog, mountStatus, cardSectors
         cardSectors := dfs.cardSizeSectors()
         debug(" ")
         debug("* Card size: ", udec_(cardSectors), " sectors")
-        if utils.assertPrecondition(cardSectors > TEST_SECTOR_BASE + TEST_REGION_SECTORS, @"card holds multi-block test region")
+        ' DOCUMENTED HARDWARE LIMIT (§2, regression-runthrough): the destructive write region is at
+        ' absolute sector 200_000 (~102 MB); a card too small to reach it genuinely cannot run the test
+        ' -- a device-capacity limit, NOT a driver defect. All supported cards (>=1 GB) pass; an
+        ' undersized card skips (allowed), never fails the run.
+        if utils.assertHardwareLimit(cardSectors > TEST_SECTOR_BASE + TEST_REGION_SECTORS, @"card holds multi-block test region")
 
             ' ========================================
             ' TEST 1: Round-trip multi-block
