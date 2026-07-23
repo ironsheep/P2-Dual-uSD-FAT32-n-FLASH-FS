@@ -7,16 +7,25 @@
 # Runs all regression suites in dependency order (foundational-first),
 # with stop-on-first-failure, per-file progress, and a final summary table.
 #
+# Skip contract (see DFS_RT_utilities.spin2): a suite FAILS on any
+# '# SETUP NOT MET:' precondition (the runner baselines the card, so an unmet
+# precondition is a real defect) or any 'BAD TEST COUNTS' line (coverage went
+# missing). '# HARDWARE LIMIT:' skips are allowed and reported as notes only.
+#
 # Options:
+#   --card-is-scratch  REQUIRED for any hardware run. Confirms the microSD card
+#                      is an erasable scratch card. Enables suite #0, the enforced
+#                      clean baseline (audit -> format) that runs before all suites.
 #   --from <name>      Resume from a specific suite (substring match on basename).
 #                      Compiles only that suite and remaining, then runs from there.
+#                      Skips suite #0 (resume relies on a prior baseline).
 #   --include-8cog     Include 8-cog stress test (long runtime)
 #   --include-format   Include format test (WARNING: erases SD card!)
-#   --compile-only     Only compile all tests, do not run on hardware
+#   --compile-only     Only compile all tests, do not run on hardware (card untouched)
 #
 # Exit codes:
 #   0 - All tests passed
-#   1 - One or more tests failed
+#   1 - One or more tests failed (or the card baseline could not be established)
 #
 
 set -e
@@ -46,6 +55,7 @@ LOG_DIR="$SCRIPT_DIR/logs"
 INCLUDE_8COG=false
 INCLUDE_FORMAT=false
 COMPILE_ONLY=false
+CARD_IS_SCRATCH=false
 FROM_SUITE=""
 
 while [[ $# -gt 0 ]]; do
@@ -61,25 +71,53 @@ while [[ $# -gt 0 ]]; do
         --include-8cog)    INCLUDE_8COG=true; shift ;;
         --include-format)  INCLUDE_FORMAT=true; shift ;;
         --compile-only)    COMPILE_ONLY=true; shift ;;
+        --card-is-scratch) CARD_IS_SCRATCH=true; shift ;;
         -h|--help)
-            echo "Usage: $0 [--from <name>] [--include-8cog] [--include-format] [--compile-only]"
+            echo "Usage: $0 [--card-is-scratch] [--from <name>] [--include-8cog] [--include-format] [--compile-only]"
             echo ""
             echo "Options:"
-            echo "  --from <name>      Resume from suite matching <name> (substring match)"
+            echo "  --card-is-scratch  REQUIRED for hardware runs. Confirms the SD card is an"
+            echo "                     erasable scratch card; enables suite #0 (audit -> format)"
+            echo "  --from <name>      Resume from suite matching <name> (substring match);"
+            echo "                     skips suite #0"
             echo "  --include-8cog     Include 8-cog stress test (long runtime)"
             echo "  --include-format   Include format test (WARNING: erases SD card!)"
-            echo "  --compile-only     Only compile, do not run on hardware"
+            echo "  --compile-only     Only compile, do not run on hardware (card untouched)"
             echo ""
             echo "Examples:"
-            echo "  $0                              # Full regression"
-            echo "  $0 --from cwd                   # Resume from DFS_FL_RT_cwd_tests"
-            echo "  $0 --from dual_device           # Resume from DFS_RT_dual_device_tests"
+            echo "  $0 --card-is-scratch            # Full regression (baseline + all suites)"
+            echo "  $0 --card-is-scratch --from cwd # Resume from DFS_FL_RT_cwd_tests"
             echo "  $0 --compile-only               # Compile check only"
             exit 0
             ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; exit 1 ;;
     esac
 done
+
+# --- Scratch-card gate ---
+# Every hardware run rewrites the card (suite #0 formats it; the suites then
+# write freely across it). The flag makes the standing "confirm the card is a
+# formattable scratch card" policy mechanical instead of remembered.
+if [[ "$COMPILE_ONLY" == false && "$CARD_IS_SCRATCH" == false ]]; then
+    echo -e "${RED}Error: refusing to run on hardware without --card-is-scratch${NC}"
+    echo ""
+    echo "  This runner ERASES the microSD card. Suite #0 audits the card and then"
+    echo "  formats it, establishing the clean baseline every suite depends on."
+    echo ""
+    echo "  Confirm ALL of the following before passing the flag:"
+    echo "    1. The card in the P2 Edge slot is a scratch/bench card."
+    echo "    2. It holds nothing you need -- all data on it will be destroyed."
+    echo "    3. It is formattable as FAT32 (not write-locked, not a card you"
+    echo "       need to keep prepared for some other purpose)."
+    echo ""
+    echo "  Then re-run:"
+    echo -e "    ${CYAN}$0 --card-is-scratch${NC}"
+    echo ""
+    echo "  To compile every suite without touching the card:"
+    echo -e "    ${CYAN}$0 --compile-only${NC}"
+    echo ""
+    exit 1
+fi
 
 # --- Define test suites in dependency order ---
 # Format: "filename:timeout_secs"
@@ -205,6 +243,13 @@ if [[ -n "$FROM_SUITE" ]]; then
     echo "  Total suites: ${TOTAL_SUITES} (running ${RUN_COUNT} from #$((START_INDEX + 1)))"
 else
     echo "  Test suites: ${TOTAL_SUITES}"
+fi
+if [[ "$COMPILE_ONLY" == true ]]; then
+    echo "  Card baseline: not run (compile only -- card untouched)"
+elif [[ -n "$FROM_SUITE" ]]; then
+    echo "  Card baseline: SKIPPED (--from resume; relies on a prior baseline)"
+else
+    echo "  Card baseline: suite #0 (audit -> format; ERASES the card)"
 fi
 echo "  8-cog test: $([[ "$INCLUDE_8COG" == true ]] && echo "INCLUDED" || echo "excluded")"
 echo "  Format test: $([[ "$INCLUDE_FORMAT" == true ]] && echo "INCLUDED (destructive!)" || echo "excluded")"
@@ -337,18 +382,199 @@ if [[ "$COMPILE_ONLY" == true ]]; then
     exit 0
 fi
 
+# --- Log cleaning ---
+# pnut-term-ts timestamps can split summary lines mid-word. Strip timestamps,
+# CRs, and NULs, join everything, then re-split on "Cog" boundaries to
+# reconstruct logical lines.
+_clean_log() {
+    sed -E 's/^\[[-0-9T:.]+\] //' "$1" | tr -d '\r\0' | tr -d '\n' | sed $'s/Cog/\\\nCog/g'
+    echo    # terminate the final reconstructed line
+}
+
+# Name the gates a failing suite tripped -- the skipped precondition messages and
+# any bad-count line, quoted verbatim so the failure says which gate, not just that
+# one exists.
+_show_gate_detail() {
+    if [[ -n "$SKIP_DETAIL" ]]; then
+        echo -e "         ${RED}Gates tripped:${NC}"
+        echo "$SKIP_DETAIL" | sed -E 's/^Cog[0-9]+ +//; s/^ *//; s/^/           /'
+    fi
+}
+
+# Pick a suite's summary line: the multi-cog "ALL COGS" form wins when present,
+# so per-cog lines are never double-counted.
+_summary_line() {
+    local clean="$1" what="$2" line
+    line=$(echo "$clean" | grep -a "ALL COGS.*$what" 2>/dev/null | tail -1)
+    if [[ -z "$line" ]]; then
+        line=$(echo "$clean" | grep -a "$what" 2>/dev/null | tail -1)
+    fi
+    echo "$line"
+}
+
+# Read a skip count from the suite's summary ("...NOT failures): N"). The suite
+# only prints the line when the count is nonzero, so a missing line means zero --
+# unless the run was truncated, hence the per-test marker fallback.
+_skip_count() {
+    local clean="$1" summary_text="$2" marker="$3" line
+    line=$(_summary_line "$clean" "$summary_text")
+    if [[ -n "$line" ]]; then
+        echo "$line" | sed -E 's/.*failures\): *([0-9]+).*/\1/'
+    else
+        echo "$clean" | grep -ac "$marker" || true
+    fi
+}
+
+# --- Suite #0: enforced clean baseline (audit -> format) ---
+# Removes cross-run state carryover: every run starts from an identical card.
+# Both utilities are non-interactive and emit END_SESSION, so they ride the same
+# run_test.sh compile/download/log-capture path as every suite.
+BASELINE_AUDIT_NAME="DFS_SD_FAT32_audit"
+BASELINE_AUDIT_SRC="../src/UTILS/${BASELINE_AUDIT_NAME}.spin2"
+BASELINE_AUDIT_TIMEOUT=180
+BASELINE_FORMAT_NAME="DFS_SD_format_card"
+BASELINE_FORMAT_SRC="../src/UTILS/${BASELINE_FORMAT_NAME}.spin2"
+BASELINE_FORMAT_TIMEOUT=300
+
+BASELINE_LABEL="BASELINE: audit + format"
+BASELINE_TIME=0
+BASELINE_STATUS=""
+BASELINE_START=0
+
+# Run one baseline utility. Sets STEP_LOG / STEP_EXIT / STEP_REASON. Returns
+# nonzero if the utility did not complete (compile failure, download failure,
+# timeout, or no captured log to judge it by).
+_run_baseline_step() {
+    local src="$1" name="$2" timeout="$3"
+
+    set +e
+    ./run_test.sh "$src" -t "$timeout" > /dev/null 2>&1
+    STEP_EXIT=$?
+    set -e
+
+    STEP_LOG=$(ls -t "$LOG_DIR/${name}_"*.log 2>/dev/null | head -1)
+
+    if [[ $STEP_EXIT -ne 0 ]]; then
+        STEP_REASON="run_test.sh exit $STEP_EXIT -- compile, download, or timeout failure"
+        return 1
+    fi
+    if [[ -z "$STEP_LOG" ]]; then
+        STEP_REASON="no log captured -- cannot confirm what the utility did"
+        return 1
+    fi
+    STEP_REASON=""
+    return 0
+}
+
+# Print the tail of a baseline utility's log so a failure carries its evidence.
+_show_baseline_log() {
+    local log="$1"
+    if [[ -n "$log" && -f "$log" ]]; then
+        echo -e "  ${CYAN}Log: $log${NC}"
+        echo "  ----------------------------------------"
+        _clean_log "$log" | tail -25 | sed 's/^/  /'
+        echo "  ----------------------------------------"
+    else
+        echo -e "  ${YELLOW}No log captured.${NC}"
+    fi
+}
+
+# Abort the baseline: report why, show the evidence, stamp status and elapsed.
+_baseline_abort() {
+    local status="$1" message="$2" log="$3"
+    echo -e "  ${RED}ABORT${NC}: $message"
+    _show_baseline_log "$log"
+    BASELINE_TIME=$(( $(date +%s) - BASELINE_START ))
+    BASELINE_STATUS="$status"
+    return 1
+}
+
+_run_baseline() {
+    local audit_log format_log clean
+
+    echo -e "${CYAN}--- Suite #0: Card baseline (audit -> format) ---${NC}"
+    echo ""
+
+    BASELINE_START=$(date +%s)
+
+    # (1) Pre-wipe audit -- read-only evidence of the card's state on arrival.
+    if ! _run_baseline_step "$BASELINE_AUDIT_SRC" "$BASELINE_AUDIT_NAME" "$BASELINE_AUDIT_TIMEOUT"; then
+        _baseline_abort "AUDIT FAILED" "pre-wipe audit did not complete ($STEP_REASON)" "$STEP_LOG"
+        return 1
+    fi
+    audit_log="$STEP_LOG"
+    clean=$(_clean_log "$audit_log")
+
+    if echo "$clean" | grep -aq "FILESYSTEM INTEGRITY: OK"; then
+        echo -e "  ${GREEN}audit${NC}:  card arrived clean (FILESYSTEM INTEGRITY: OK)"
+        echo -e "  ${CYAN}Log: $audit_log${NC}"
+    else
+        # Corruption on arrival is evidence worth keeping, not a reason to stop:
+        # the format that follows is exactly the reset it calls for.
+        echo -e "  ${YELLOW}audit${NC}:  ${RED}CARD ARRIVED WITH PROBLEMS -- pre-wipe evidence below${NC}"
+        echo -e "  ${CYAN}Log (retained): $audit_log${NC}"
+        echo "  ----------------------------------------"
+        echo "$clean" | grep -aE "FILESYSTEM INTEGRITY|^Cog.*ERROR:|Fail: |  - " | sed 's/^/  /' || true
+        echo "  ----------------------------------------"
+        echo -e "  ${YELLOW}Continuing to format (this is the reset that fixes it).${NC}"
+    fi
+
+    # (2) Format -- establish the clean FAT32 baseline.
+    if ! _run_baseline_step "$BASELINE_FORMAT_SRC" "$BASELINE_FORMAT_NAME" "$BASELINE_FORMAT_TIMEOUT"; then
+        _baseline_abort "FORMAT FAILED" "format did not complete ($STEP_REASON)" "$STEP_LOG"
+        return 1
+    fi
+    format_log="$STEP_LOG"
+
+    if ! _clean_log "$format_log" | grep -aq "FORMAT SUCCESSFUL!"; then
+        _baseline_abort "FORMAT FAILED" "format did not report success" "$format_log"
+        return 1
+    fi
+
+    BASELINE_TIME=$(( $(date +%s) - BASELINE_START ))
+    BASELINE_STATUS="ok"
+    echo -e "  ${GREEN}format${NC}: clean FAT32 baseline established (label P2-BENCH)"
+    echo -e "  ${CYAN}Log: $format_log${NC}"
+    return 0
+}
+
 # --- Phase 2: Run tests on hardware (from START_INDEX onward) ---
 echo -e "${CYAN}--- Phase 2: Running tests on hardware ---${NC}"
 echo ""
+
+if [[ -n "$FROM_SUITE" ]]; then
+    printf "  ${YELLOW}[ 0/%d] %-38s %s${NC}\n" "$TOTAL_SUITES" "$BASELINE_LABEL" "SKIPPED (--from)"
+    echo -e "  ${YELLOW}         Resume relies on a card already baselined by an earlier run.${NC}"
+    echo -e "  ${YELLOW}         If the card has been touched since, re-run without --from.${NC}"
+    echo ""
+    BASELINE_STATUS="skipped"
+else
+    if ! _run_baseline; then
+        echo ""
+        printf "  ${RED}[ 0/%d] %-38s %s [%3ds]${NC}\n" \
+            "$TOTAL_SUITES" "$BASELINE_LABEL" "$BASELINE_STATUS" "$BASELINE_TIME"
+        echo ""
+        echo -e "  ${RED}STOPPED: could not establish the card baseline -- no suites were run.${NC}"
+        echo ""
+        exit 1
+    fi
+    echo ""
+    printf "  ${GREEN}[ 0/%d]${NC} %-38s %s [%3ds]\n" \
+        "$TOTAL_SUITES" "$BASELINE_LABEL" "baseline established" "$BASELINE_TIME"
+    echo ""
+fi
 
 # Arrays to store per-suite results for summary table
 declare -a RESULT_NAMES=()
 declare -a RESULT_PASS=()
 declare -a RESULT_FAIL=()
+declare -a RESULT_SKIP=()
 declare -a RESULT_TIME=()
 TOTAL_PASS=0
 TOTAL_FAIL=0
-TOTAL_TIME=0
+TOTAL_SKIP=0
+TOTAL_HWLIMIT=0
+TOTAL_TIME=$BASELINE_TIME    # suite #0 counts toward the run's wall clock
 SUITES_RUN=0
 FAILED_SUITE=""
 
@@ -375,56 +601,84 @@ for i in "${!SUITES[@]}"; do
     END_TIME=$(date +%s)
     ELAPSED=$((END_TIME - START_TIME))
 
-    # Parse log for pass/fail counts
+    # Parse log for pass/fail counts and the skip-contract markers
     SUITE_PASS=0
     SUITE_FAIL=0
+    SUITE_SKIP=0        # SETUP NOT MET -- must be zero on a baselined card
+    SUITE_HWLIMIT=0     # HARDWARE LIMIT -- allowed, informational only
+    SUITE_BADCOUNT=0
+    SKIP_DETAIL=""
 
     LATEST_LOG=$(ls -t "$LOG_DIR/${BASENAME}_"*.log 2>/dev/null | head -1)
 
     if [[ -n "$LATEST_LOG" ]]; then
-        # pnut-term-ts timestamps can split summary lines mid-word.
-        # Strip timestamps, CRs, and NULs, join everything, then re-split on "Cog"
-        # boundaries to reconstruct logical lines.
-        CLEAN_LOG=$(sed -E 's/^\[[-0-9T:.]+\] //' "$LATEST_LOG" | tr -d '\r\0' | tr -d '\n' | sed $'s/Cog/\\\nCog/g')
+        CLEAN_LOG=$(_clean_log "$LATEST_LOG")
 
         # Try ALL COGS line first (multi-cog tests), then regular summary
-        SUMMARY_LINE=$(echo "$CLEAN_LOG" | grep -a "ALL COGS.*Tests - Pass:" 2>/dev/null | tail -1)
-        if [[ -z "$SUMMARY_LINE" ]]; then
-            SUMMARY_LINE=$(echo "$CLEAN_LOG" | grep -a "Tests - Pass:" 2>/dev/null | tail -1)
-        fi
+        SUMMARY_LINE=$(_summary_line "$CLEAN_LOG" "Tests - Pass:")
 
         if [[ -n "$SUMMARY_LINE" ]]; then
             SUITE_PASS=$(echo "$SUMMARY_LINE" | sed -E 's/.*Pass: *([0-9]+).*/\1/')
             SUITE_FAIL=$(echo "$SUMMARY_LINE" | sed -E 's/.*Fail: *([0-9]+).*/\1/')
         fi
+
+        # Skip counts come from the suite's own summary; if the suite died before
+        # printing one, fall back to counting the per-test markers so a truncated
+        # run still surfaces its skips instead of reporting a clean zero.
+        SUITE_SKIP=$(_skip_count "$CLEAN_LOG" "Setup-not-met (skipped" "# SETUP NOT MET:")
+        SUITE_HWLIMIT=$(_skip_count "$CLEAN_LOG" "Hardware-limit (skipped" "# HARDWARE LIMIT:")
+        SUITE_BADCOUNT=$(echo "$CLEAN_LOG" | grep -ac "BAD TEST COUNTS" || true)
+
+        # The gate messages themselves -- what a failure report has to name.
+        SKIP_DETAIL=$(echo "$CLEAN_LOG" | grep -a "# SETUP NOT MET:\|BAD TEST COUNTS" || true)
     fi
 
-    # Determine if this suite failed
+    # Determine if this suite failed.
+    # Per the §1 skip contract: SETUP NOT MET is a hard failure on a baselined
+    # card (the precondition was the runner's job to guarantee), BAD TEST COUNTS
+    # means coverage went missing, and HARDWARE LIMIT is never a failure.
     SUITE_FAILED=false
+    FAIL_REASON=""
     if [[ $RUN_EXIT -ne 0 ]]; then
         SUITE_FAILED=true
+        FAIL_REASON="run_test.sh exit $RUN_EXIT (compile, download, or timeout failure)"
     elif [[ $SUITE_FAIL -gt 0 ]]; then
         SUITE_FAILED=true
+        FAIL_REASON="$SUITE_FAIL test(s) failed"
+    elif [[ $SUITE_SKIP -gt 0 ]]; then
+        SUITE_FAILED=true
+        FAIL_REASON="$SUITE_SKIP precondition(s) NOT MET -- must be zero on a baselined card"
+    elif [[ $SUITE_BADCOUNT -gt 0 ]]; then
+        SUITE_FAILED=true
+        FAIL_REASON="BAD TEST COUNTS -- declared test count does not match pass+fail"
     fi
 
     # Store results
     RESULT_NAMES+=("$BASENAME")
     RESULT_PASS+=("$SUITE_PASS")
     RESULT_FAIL+=("$SUITE_FAIL")
+    RESULT_SKIP+=("$SUITE_SKIP")
     RESULT_TIME+=("$ELAPSED")
     TOTAL_PASS=$((TOTAL_PASS + SUITE_PASS))
     TOTAL_FAIL=$((TOTAL_FAIL + SUITE_FAIL))
+    TOTAL_SKIP=$((TOTAL_SKIP + SUITE_SKIP))
+    TOTAL_HWLIMIT=$((TOTAL_HWLIMIT + SUITE_HWLIMIT))
     TOTAL_TIME=$((TOTAL_TIME + ELAPSED))
 
     # Print progress line
     if [[ "$SUITE_FAILED" == true ]]; then
-        printf "  ${RED}[%2d/%d] %-38s %4d pass, %3d fail  [%3ds]${NC}\n" \
-            "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$ELAPSED"
+        printf "  ${RED}[%2d/%d] %-38s %4d pass, %3d fail, %3d skip  [%3ds]${NC}\n" \
+            "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$SUITE_SKIP" "$ELAPSED"
+        echo -e "         ${RED}-> $FAIL_REASON${NC}"
+        _show_gate_detail
         FAILED_SUITE="$BASENAME"
         break
     else
-        printf "  ${GREEN}[%2d/%d]${NC} %-38s %4d pass, %3d fail  [%3ds]\n" \
-            "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$ELAPSED"
+        printf "  ${GREEN}[%2d/%d]${NC} %-38s %4d pass, %3d fail, %3d skip  [%3ds]\n" \
+            "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$SUITE_SKIP" "$ELAPSED"
+        if [[ $SUITE_HWLIMIT -gt 0 ]]; then
+            echo -e "         ${CYAN}note: $SUITE_HWLIMIT hardware-limit skip(s) -- allowed, not failures${NC}"
+        fi
     fi
 done
 
@@ -433,26 +687,43 @@ echo ""
 echo -e "${BOLD}============================================================${NC}"
 echo -e "${BOLD}  Regression Results${NC}"
 echo -e "${BOLD}============================================================${NC}"
-printf "  %-4s %-38s %5s %5s %5s\n" "#" "Suite" "Pass" "Fail" "Time"
-printf "  %-4s %-38s %5s %5s %5s\n" "--" "--------------------------------------" "----" "----" "----"
+printf "  %-4s %-38s %5s %5s %5s %5s\n" "#" "Suite" "Pass" "Fail" "Skip" "Time"
+printf "  %-4s %-38s %5s %5s %5s %5s\n" "--" "--------------------------------------" "----" "----" "----" "----"
+
+# Suite #0 gets its own line like any other suite (it has no pass/fail counts).
+if [[ "$BASELINE_STATUS" == "skipped" ]]; then
+    printf "  ${YELLOW}%2d  %-38s %5s %5s %5s %5s${NC}\n" \
+        0 "$BASELINE_LABEL" "-" "-" "-" "skip"
+elif [[ -n "$BASELINE_STATUS" ]]; then
+    printf "  %2d  %-38s %5s %5s %5s %4ds\n" \
+        0 "$BASELINE_LABEL" "-" "-" "-" "$BASELINE_TIME"
+fi
 
 for j in "${!RESULT_NAMES[@]}"; do
     IDX=$((START_INDEX + j + 1))
-    if [[ "${RESULT_FAIL[$j]}" -gt 0 ]] || { [[ -n "$FAILED_SUITE" ]] && [[ "${RESULT_NAMES[$j]}" == "$FAILED_SUITE" ]]; }; then
-        printf "  ${RED}%2d  %-38s %5d %5d %4ds${NC}\n" \
-            "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_PASS[$j]}" "${RESULT_FAIL[$j]}" "${RESULT_TIME[$j]}"
+    if [[ "${RESULT_FAIL[$j]}" -gt 0 ]] || [[ "${RESULT_SKIP[$j]}" -gt 0 ]] || { [[ -n "$FAILED_SUITE" ]] && [[ "${RESULT_NAMES[$j]}" == "$FAILED_SUITE" ]]; }; then
+        printf "  ${RED}%2d  %-38s %5d %5d %5d %4ds${NC}\n" \
+            "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_PASS[$j]}" "${RESULT_FAIL[$j]}" "${RESULT_SKIP[$j]}" "${RESULT_TIME[$j]}"
     else
-        printf "  %2d  %-38s %5d %5d %4ds\n" \
-            "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_PASS[$j]}" "${RESULT_FAIL[$j]}" "${RESULT_TIME[$j]}"
+        printf "  %2d  %-38s %5d %5d %5d %4ds\n" \
+            "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_PASS[$j]}" "${RESULT_FAIL[$j]}" "${RESULT_SKIP[$j]}" "${RESULT_TIME[$j]}"
     fi
 done
 
-printf "  %-4s %-38s %5s %5s %5s\n" "--" "--------------------------------------" "----" "----" "----"
-printf "  %-4s %-38s %5d %5d %4ds\n" "" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_TIME"
+printf "  %-4s %-38s %5s %5s %5s %5s\n" "--" "--------------------------------------" "----" "----" "----" "----"
+if [[ $TOTAL_SKIP -gt 0 ]]; then
+    printf "  %-4s %-38s %5d %5d ${RED}%5d${NC} %4ds\n" "" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP" "$TOTAL_TIME"
+else
+    printf "  %-4s %-38s %5d %5d %5d %4ds\n" "" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP" "$TOTAL_TIME"
+fi
+if [[ $TOTAL_HWLIMIT -gt 0 ]]; then
+    echo -e "  ${CYAN}  (plus $TOTAL_HWLIMIT hardware-limit skip(s) -- allowed by the skip contract, not failures)${NC}"
+fi
 echo ""
 
 if [[ -n "$FAILED_SUITE" ]]; then
     echo -e "  ${RED}STOPPED: $FAILED_SUITE failed (suite $SUITE_NUM of $TOTAL_SUITES)${NC}"
+    echo -e "  ${RED}         $FAIL_REASON${NC}"
     if [[ -n "$LATEST_LOG" ]]; then
         echo -e "  ${CYAN}Log: $LATEST_LOG${NC}"
     fi

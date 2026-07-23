@@ -66,22 +66,25 @@ cd tools/
 ./run_test.sh ../src/regression-tests/DFS_SD_RT_multicog_tests.spin2 -t 120
 
 # Full unified regression (stop on first fail)
-./run_regression.sh
+# --card-is-scratch is REQUIRED for any hardware run: it confirms the card is an
+# erasable scratch card and enables suite #0 (audit -> format), the clean baseline.
+./run_regression.sh --card-is-scratch
 
-# Resume from a specific suite (substring match)
-./run_regression.sh --from cwd_tests
+# Resume from a specific suite (substring match) -- skips suite #0
+./run_regression.sh --card-is-scratch --from cwd_tests
 
-# Compile check only (no hardware)
+# Compile check only (no hardware, card untouched, no flag needed)
 ./run_regression.sh --compile-only
 
 # Include 8-cog stress test
-./run_regression.sh --include-8cog
+./run_regression.sh --card-is-scratch --include-8cog
 
 # Include format test (WARNING: erases SD card!)
-./run_regression.sh --include-format
+./run_regression.sh --card-is-scratch --include-format
 ```
 
-Logs are saved to `tools/logs/`.
+Logs are saved to `tools/logs/`. Suite #0's pre-wipe audit log is retained there as
+evidence of the card's state on arrival.
 
 Test framework: `DFS_RT_utilities.spin2` (unified, used by all test suites) — provides `startTestGroup()`, `startTest()`, `evaluateBool()`, `evaluateSingleValue()`, sub-test variants, Flash helpers, and `ShowTestEndCounts()`.
 
