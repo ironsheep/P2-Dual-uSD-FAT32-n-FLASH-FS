@@ -70,6 +70,7 @@ VAR { test stats vars }
   LONG    passCountSub[dfs.MAX_P2_COGS]
   LONG    failCountSub[dfs.MAX_P2_COGS]
   LONG    setupNotMetCount[dfs.MAX_P2_COGS]     ' unmet-precondition count -- reported distinctly, NEVER folded into pass/fail
+  LONG    hwLimitSkipCount[dfs.MAX_P2_COGS]     ' documented-hardware-limit skips -- allowed, reported distinctly, NEVER a failure
 
   LONG    varSignature[dfs.MAX_P2_COGS]
 
@@ -89,6 +90,7 @@ PRI initIfNotAlready()
         passCountSub[cogid()] := 0
         failCountSub[cogid()] := 0
         setupNotMetCount[cogid()] := 0
+        hwLimitSkipCount[cogid()] := 0
         varSignature[cogid()] := TEST_SIGNATURE
         debug[CH_EVAL]("* init VAR")
 
@@ -151,12 +153,14 @@ PUB ShowTestEndCounts() | pMsg
     debug("* ", udec_(numberTests[cogid()]), " Tests - Pass: ", udec_(passCount[cogid()]), ", Fail: ", udec_(failCount[cogid()]))
     if setupNotMetCount[cogid()] <> 0
       debug("*  Setup-not-met (skipped, NOT failures): ", udec_(setupNotMetCount[cogid()]))
+    if hwLimitSkipCount[cogid()] <> 0
+      debug("*  Hardware-limit (skipped, allowed, NOT failures): ", udec_(hwLimitSkipCount[cogid()]))
     if numberTests[cogid()] <> passCount[cogid()] + failCount[cogid()]
       pMsg := (numberTests[cogid()] > passCount[cogid()] + failCount[cogid()]) ? @"missing" : @"extra"
       debug("*  BAD TEST COUNTS: ", udec_(numberTests[cogid()]), " <> ", udec_(passCount[cogid()] + failCount[cogid()]), " (", zstr_(pMsg), " ", udec_(abs(numberTests[cogid()] - (passCount[cogid()] + failCount[cogid()]))), " tests)")
     debug(" ============================================================")
 
-PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail, totalSetupNotMet
+PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail, totalSetupNotMet, totalHwLimit
 '' Display combined multi-cog test summary (sums across all cogs)
 
     showSubTestResults()
@@ -165,17 +169,21 @@ PUB ShowMultiCogTestEndCounts() | cogIdx, totalTests, totalPass, totalFail, tota
     totalPass := 0
     totalFail := 0
     totalSetupNotMet := 0
+    totalHwLimit := 0
     repeat cogIdx from 0 to dfs.MAX_P2_COGS - 1
         totalTests += numberTests[cogIdx]
         totalPass += passCount[cogIdx]
         totalFail += failCount[cogIdx]
         totalSetupNotMet += setupNotMetCount[cogIdx]
+        totalHwLimit += hwLimitSkipCount[cogIdx]
 
     debug(" ")
     debug(" ============================================================")
     debug("* ALL COGS: ", udec_(totalTests), " Tests - Pass: ", udec_(totalPass), ", Fail: ", udec_(totalFail))
     if totalSetupNotMet <> 0
       debug("* ALL COGS: Setup-not-met (skipped, NOT failures): ", udec_(totalSetupNotMet))
+    if totalHwLimit <> 0
+      debug("* ALL COGS: Hardware-limit (skipped, allowed, NOT failures): ", udec_(totalHwLimit))
     debug(" ============================================================")
 
 PUB setCheckCountPerTest(countTests)
@@ -830,10 +838,14 @@ dirEnd          LONG    0              ' ptr = NULL, no more entries
 ' ===============================================================================
 ' SD SETUP / TEARDOWN / PRECONDITION-ASSERT HELPERS  (fixture-discipline contract)
 ' ===============================================================================
-' An unmet precondition is a SETUP problem, not a driver defect: these report via
-' assertPrecondition(), which increments setupNotMetCount -- reported distinctly and
-' NEVER folded into the driver pass/fail totals. A test whose precondition is unmet
-' should skip its body and report setup-not-met, so a fragmented/full card can never
+' An unmet precondition is a SETUP problem, not a driver defect. Two categories, reported
+' distinctly and NEVER folded into the driver pass/fail totals:
+'   assertPrecondition()  -- a precondition a properly-baselined card MUST satisfy. Unmet emits
+'                            '# SETUP NOT MET:' (setupNotMetCount). On a baselined run this must be
+'                            ZERO; the runner treats any occurrence as a hard failure.
+'   assertHardwareLimit() -- a DOCUMENTED device limit (allowed). Unmet emits '# HARDWARE LIMIT:'
+'                            (hwLimitSkipCount) and is surfaced but never failed.
+' A test whose precondition is unmet skips its body, so a fragmented/full card can never
 ' masquerade as a driver failure. (See DOCs/Decisions/REGRESSION-TESTING-BEST-PRACTICES.md)
 
 PUB assertPrecondition(bHeld, pMessage) : bResult
@@ -848,6 +860,24 @@ PUB assertPrecondition(bHeld, pMessage) : bResult
     ifnot bHeld
         debug("  # SETUP NOT MET: ", zstr_(pMessage), "  (skipped; NOT a driver failure)")
         setupNotMetCount[cogid()]++
+
+PUB assertHardwareLimit(bHeld, pMessage) : bResult
+'' Report a DOCUMENTED HARDWARE-LIMIT precondition (e.g. the FSCK cluster-chain validation ceiling on
+'' a large card, or a fixture that genuinely cannot fit the smallest supported geometry). Unlike
+'' assertPrecondition, an unmet hardware limit is an ALLOWED, expected skip -- it emits a DISTINCT
+'' '# HARDWARE LIMIT:' marker counted in hwLimitSkipCount (never folded into pass/fail, never a run
+'' failure). Reserve this ONLY for genuine device limits; a precondition a baselined card must
+'' satisfy uses assertPrecondition (which the runner treats as a hard failure). Returns FALSE when
+'' unmet so the caller can skip its body.
+''
+'' @param bHeld - TRUE if the hardware supports this test
+'' @param pMessage - description of the hardware limit (shown when the test is skipped)
+'' @returns bResult - the precondition state (same as bHeld)
+
+    bResult := bHeld
+    ifnot bHeld
+        debug("  # HARDWARE LIMIT: ", zstr_(pMessage), "  (skipped; documented device limit, NOT a failure)")
+        hwLimitSkipCount[cogid()]++
 
 PUB ensureCleanBaseline(dev, pOwnedNames) : bClean | idx, pName
 '' Establish/restore this suite's baseline: delete every file the suite OWNS (idempotent --
