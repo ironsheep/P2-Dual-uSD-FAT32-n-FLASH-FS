@@ -91,6 +91,27 @@ are engineered out (§5) so a single straight-through pass is trustworthy.
 None. All four scope decisions resolved with Stephen 2026-07-23 (skip=hard-fail; baseline=runner
 suite #0; coverage=skip-message audit; scope=dual driver only).
 
+## Sprint-start record (2026-07-23)
+
+- **Outgoing build number:** provisional target **DFS 1.3.3 / SD 1.5.3 (patch)**, finalized at
+  build-wrapup — bump only if driver behavior actually changed; if the sprint ships pure
+  test/runner/doc changes the driver stays at 1.3.2 (mirrors the fixture-discipline "no bump at
+  entry; patch at wrap-up iff behavior changed").
+- **Working-tree audit:** clean for the sprint blast radius (`tools/`, `src/regression-tests/`,
+  `src/UTILS/` — no uncommitted or untracked files). Session doc/plan work committed
+  (`e0c9163`, `746688a`, `c6856d2`); skill onboarding done (`.claude/` is gitignored — conventions +
+  overlays are local-only). Only untracked item is the intentional `DOCs/CARDs-NO-COMMIT/`.
+- **Tracking-readiness (entry):** READY. Archived 11 completed fixture-discipline tasks; context
+  (1 key) and memory (~13 lines) well under thresholds.
+- **Baseline-health (entry):** in-container compile sweep **33 pass / 0 fail** (matches the
+  predecessor 33/33). Per the baseline-health overlay, the hardware pass/fail baseline is host-native
+  and is established/re-checked in the native session (§7); a container run cannot assert it.
+- **Leftover-task decisions:** `#13` (Fixture-Discipline §10 native-HW cert) **folded into §7** —
+  the run-through §7 cert is a strict superset and becomes the single native pass that closes both
+  sprints. `#14` (root-cause 462fd28 Heisenbug) **kept separate and deferred** — it does not affect
+  this plan's implementation (the zero-skip gate + local-first idiom stand on their own); revisit
+  after, likely as a container-side bytecode diff.
+
 ---
 
 ## §1 — Skip-signal contract: make skips loud and two-category
