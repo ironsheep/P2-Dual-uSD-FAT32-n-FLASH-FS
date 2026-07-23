@@ -48,6 +48,10 @@ The `-I` flag is critical — most source files reference the driver via relativ
 flexspin.mac -2 -q -I . -I UTILS <filename>.spin2
 ```
 
+## Version Control
+
+**Single-developer project — commit directly to `main`; do not create feature branches** (standing decision). This overrides the default "branch first when on the default branch": here `main` *is* the working branch. Commit/push only when the user asks. End commit messages with the `Co-Authored-By: Claude Opus 4.8 (1M context)` trailer.
+
 ## Running Tests
 
 Tests execute on **real P2 hardware** with a physical SD card and onboard Flash chip (no simulator). Runner scripts are in `tools/`:
