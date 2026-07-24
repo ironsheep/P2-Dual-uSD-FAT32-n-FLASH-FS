@@ -178,6 +178,14 @@ mcp__todo-mcp__todo_archive       # Clean completed tasks
 mcp__todo-mcp__context_stats      # Context health check
 ```
 
+**Skill-currency check (notify-only):** compare `CURRENT:` in
+`~/.claude/skills-docs/SKILLS-VERSION.md` against `reconciled-against:` in
+`.claude/skills-reconciled.md`. If central is **ahead** (or the marker is
+missing/malformed), surface ONE quiet line — *"central advanced vX→vY since
+you reconciled — run `/overlay-reconcile` when ready"* — and continue. Equal →
+silent. Never auto-run reconciliation mid-resume; it is a separate, deliberate
+act.
+
 ### Core Parameter Patterns
 ```bash
 # PREFER task_id (permanent) over position_id (ephemeral)
