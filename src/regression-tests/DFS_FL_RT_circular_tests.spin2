@@ -66,6 +66,7 @@ testfileD1      BYTE    "rw9KB-D1-blocks.bin", 0
 testfileD2      BYTE    "rw9KB-D2-blocks.bin", 0
 testfileE1      BYTE    "rw8KB-E1-blocks.bin", 0
 testfileE2      BYTE    "rw8KB-E2-blocks.bin", 0
+testfileB3a     BYTE    "rw3KB-B3a-blocks.bin", 0   ' copy target for the compatibility pass
 
 record
 recordMARK      LONG    $beadfeed              ' visual start of record marker
@@ -242,6 +243,40 @@ PUB go() | workerCog, status, bValue
     'testVerifySecRecords(@testfileE1, 12) ' this verifies all of file
     testAppendSecRecords(@testfileE2, 22, 14, 39) ' this appends to file (11_424 = 3 blocks) (updates 2nd block, adds 3rd, truncates to 2 blocks with all data in 2nd block)
     testVerifySecRecords(@testfileE2, 34) ' this verifies last active 3_400 bytes of file
+
+    utils.showFiles()
+
+    ' ==========================================================================
+    ' COMPATIBILITY PASS -- folded in from the former DFS_FL_RT_circular_compat
+    ' suite, which read the files THIS suite left behind (the one cross-suite
+    ' dependency in the regression). Everything it verified is verified here, on
+    ' records this suite produced, so the property is proven in a single
+    ' self-contained pass: circular records written before a mount cycle are
+    ' still readable after it.
+    ' ==========================================================================
+    utils.startTest(@"Unmount Flash (session boundary)")
+    status := dfs.unmount(dfs.DEV_FLASH)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.startTest(@"Re-mount Flash (new session)")
+    status := dfs.mount(dfs.DEV_FLASH)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.startTestGroup(@"COMPAT Re-verify records written before the re-mount")
+    testVerifyRecords(@testfileA1, 6)
+    testVerifyRecords(@testfileA2, 8)
+    testVerifyRecords(@testfileA3, 12)
+    testVerifyRecords(@testfileB1, 8)
+    testVerifyRecords(@testfileB2, 11)
+    testVerifyRecords(@testfileB3, 14)
+    testVerifyRecords(@testfileB4, 17)
+    testVerifyRecords(@testfileC1, 12)
+    testVerifyRecords(@testfileC2, 14)
+    testVerifyRecords(@testfileD2, 20)
+
+    utils.startTestGroup(@"COMPAT Seek within a copy of a circular file")
+    testCopyFile(@testfileB3, @testfileB3a)
+    testVerifySeekRecords(@testfileB3a, 14)
 
     utils.showFiles()
 
@@ -461,6 +496,91 @@ PRI setMsgRcdNbr(rcdNumber) | units, tens
     BYTE[@idNbr][1] := units
     BYTE[@crcNbr][0] := tens
     BYTE[@crcNbr][1] := units
+
+PUB testCopyFile(pOldFilename, pNewFilename) | rdHandle, wrHandle, rdStatus, wrStatus, wrLength, totalWritten, totalRead, status, rdLength
+'' copy existing file to new name
+''
+'' @param pOldFilename - address of zstring with existing file name
+'' @param pNewFilename - address of zstring with new file name
+
+' Local Variables:
+' @local rdHandle -
+' @local wrHandle -
+' @local rdStatus -
+' @local wrStatus -
+' @local wrLength -
+
+    utils.startTestGroup(@"Copy file")
+
+    utils.startTest(@"Ensure old exists")
+    status := dfs.exists(dfs.DEV_FLASH, pOldFilename)
+    utils.evaluateBool(status, @"exists()", TRUE)
+
+    ' remove existing file if it exists
+    if dfs.exists(dfs.DEV_FLASH, pNewFilename)
+      utils.startTest(@"Delete our existing write file")
+      status := dfs.deleteFile(dfs.DEV_FLASH, pNewFilename)
+      utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.startTest(@"Ensure new doesn't exist")
+    status := dfs.exists(dfs.DEV_FLASH, pNewFilename)
+    utils.evaluateBool(status, @"exists()", FALSE)
+
+    utils.startTest(@"Open File for read")
+    rdHandle := dfs.open(dfs.DEV_FLASH, pOldFilename, dfs.FILEMODE_READ)
+    utils.evaluateResultNegError(rdHandle, 0)
+
+    utils.startTest(@"Open File for write")
+    wrHandle := dfs.open_circular(dfs.DEV_FLASH, pNewFilename, dfs.FILEMODE_APPEND, CIRCULAR_LEN_IN_BYTES)
+    utils.evaluateResultNegError(wrHandle, 1)
+
+    utils.startTest(@"copy contents")
+    utils.setCheckCountPerTest(4)
+    repeat
+      rdLength := dfs.readHandle(rdHandle, @record, RECORD_LEN)
+      totalRead += rdLength
+      rdStatus := dfs.error()
+      if(rdStatus == dfs.E_END_OF_FILE)
+        ' allow short record on EOF
+        utils.evaluateSubValue(rdLength, @"read()", rdLength)
+        ' EOF is legal status
+        utils.evaluateSubStatus(rdStatus, @"read()", dfs.E_END_OF_FILE)
+      else
+        ' full record if NOT EOF
+        utils.evaluateSubValue(rdLength, @"read()", RECORD_LEN)
+        ' need success if NOT EOF
+        utils.evaluateSubStatus(rdStatus, @"read()", dfs.SUCCESS)
+      if rdStatus <> dfs.SUCCESS and rdStatus <> dfs.E_END_OF_FILE
+        quit
+
+      wrLength := dfs.writeHandle(wrHandle, @record, rdLength)
+      totalWritten += wrLength
+      utils.evaluateSubValue(wrLength, @"write()", rdLength)
+      wrStatus := dfs.error()
+      utils.evaluateSubStatus(wrStatus, @"write()", dfs.SUCCESS)
+      if wrStatus <> dfs.SUCCESS
+        quit
+
+      if rdStatus == dfs.E_END_OF_FILE
+        quit
+    while wrStatus == dfs.SUCCESS
+
+    debug("* copy result ", udec(totalRead, totalWritten))
+
+    utils.startTest(@"ensure no errors on reads")
+    utils.evaluateResultNegError(rdStatus, dfs.E_END_OF_FILE)
+
+    utils.startTest(@"ensure no errors on writes")
+    utils.evaluateResultNegError(wrStatus, dfs.SUCCESS)
+
+    utils.startTest(@"Close read file")
+    status := dfs.close(rdHandle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
+    utils.startTest(@"Close write file")
+    status := dfs.close(wrHandle)
+    utils.evaluateResultNegError(status, dfs.SUCCESS)
+
 
 PRI testVerifyRecords(pFilename, totalRecordsWritten) | recordCount, lenBytes, startRcdNbr, recordInCircular, status, handle, recordNbr, rdLength, calcCRC
 

@@ -7,6 +7,8 @@ This directory records key architectural and implementation decisions for the P2
 | # | Decision | Date | Status |
 |---|----------|------|--------|
 | 1 | [Worker Cog Stack Sizing](DECISION-001-STACK-SIZING.md) | 2026-03-03 | Implemented |
+| 2 | [Debug Record Budget Management](DECISION-002-DEBUG-RECORD-BUDGET.md) | 2026-03-28 | Proposed |
+| 3 | [Test-Card Validation Self-Establishes Its Fixtures](DECISION-003-TESTCARD-SELF-ESTABLISH.md) | 2026-07-23 | Implemented |
 
 ## Procedures
 

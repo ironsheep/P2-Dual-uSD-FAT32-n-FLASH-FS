@@ -101,12 +101,9 @@ PUB go() | workerCog, opStatus, status, handle, dirHndl, count, pEntry, bValidHn
         debug("* SD Card Information:")
         debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
 
-        ' Clear root directory for clean slate
-        debug("  CLEARING ROOT DIRECTORY...")
-        opStatus := dfs.debugClearRootDir()
-        debug("  Clear result: ", sdec_(opStatus))
-
-        ' Establish clean baseline (idempotent -- also audits cleanliness)
+        ' Establish clean baseline (idempotent -- also audits cleanliness).
+        ' Scoped to this suite's OWN names: a whole-root wipe would mask a dirty or
+        ' corrupt baseline instead of reporting it.
         utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' ======================================================================

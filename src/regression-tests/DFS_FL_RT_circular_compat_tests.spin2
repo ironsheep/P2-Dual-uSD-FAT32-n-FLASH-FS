@@ -9,8 +9,14 @@
 ''   Updated.... 27 FEB 2026
 ''
 ''   Migrated from RT_read_circular_compat_tests.spin2 (flash_fs) to dual_sd_fat32_flash_fs
-''   NOTE: This test depends on data written by DFS_FL_RT_circular_tests.spin2
-''         Do NOT format before running -- mount only!
+''
+''   SUPERSEDED (2026-07-23) -- NOT part of the regression run.
+''         This suite read files written by DFS_FL_RT_circular_tests.spin2: the regression's
+''         only cross-suite dependency, which made it unrunnable standalone, in shuffled
+''         order, or on a freshly formatted chip. Its coverage -- re-verifying circular
+''         records across a mount cycle, plus the copy-and-seek checks -- now lives inside
+''         DFS_FL_RT_circular_tests.spin2, which produces the records it verifies.
+''         Retained for reference only; slated for deletion.
 ''
 '' =================================================================================================
 

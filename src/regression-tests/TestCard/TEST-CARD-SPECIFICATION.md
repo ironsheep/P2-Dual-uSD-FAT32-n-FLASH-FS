@@ -1,15 +1,26 @@
 # SD Card Test Specification
 
-**Purpose**: Read-only validation of the unified dual-FS driver's SD FAT32 subsystem
-**Card Type**: 32GB SDHC (block addressing, FAT32)
+**Purpose**: Definition of the fixture tree used to validate the unified dual-FS driver's SD FAT32 subsystem
+**Card Type**: any supported FAT32 card (originally captured on a 32GB SDHC)
 **Date Created**: 2026-01-14
-**Test Program**: `DFS_SD_RT_testcard_validation.spin2` (39 tests)
+**Updated**: 2026-07-23
+**Test Program**: `DFS_SD_RT_testcard_validation.spin2`
+
+> **The suite now builds this tree itself.** As of 2026-07-23 the validation suite is
+> self-establishing: it authors every fixture below byte-for-byte at startup and removes
+> them at teardown, so **no card preparation is required** and it runs on any freshly
+> baselined scratch card. See
+> [DECISION-003](../../../DOCs/Decisions/DECISION-003-TESTCARD-SELF-ESTABLISH.md).
+>
+> This document remains the **authoritative definition** of the fixture contract — sizes,
+> patterns, contents, and MD5s. `TESTROOT/` remains the byte-exact reference copy. Change
+> a fixture here and the suite's generator must change with it.
 
 ---
 
 ## Directory Structure
 
-Copy the contents of `TESTROOT/` to the **root** of the SD card.
+The tree the suite builds (and `TESTROOT/`'s byte-exact reference copy).
 
 ```
 SD Card Root/
@@ -228,12 +239,19 @@ repeat i from 0 to 1023
 
 ## Running the Validation Test
 
+It runs as part of the standard regression (`./run_regression.sh --card-is-scratch`), or
+standalone on any baselined card:
+
 ```bash
 cd tools/
-./run_test.sh ../src/regression-tests/DFS_SD_RT_testcard_validation.spin2
+./run_test.sh ../src/regression-tests/DFS_SD_RT_testcard_validation.spin2 -t 180
 ```
 
-The test is read-only and produces 39 assertions across 13 test groups: mount validation, root directory enumeration, file reads at various sizes and boundaries, seek operations, checksum integrity, path resolution (1 and 2 levels deep), directory navigation, and a sequential read benchmark.
+The suite establishes the tree, then asserts across 13 test groups: mount validation, root
+directory enumeration (every owned entry), file reads at various sizes and boundaries, seek
+operations, checksum integrity, path resolution (1 and 2 levels deep), directory navigation,
+and a sequential read benchmark. It then removes the tree and audits that nothing owned
+survived.
 
 ---
 

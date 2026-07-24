@@ -171,14 +171,18 @@ SUITES+=(
 SUITES+=(
     "DFS_SD_RT_directory_tests.spin2:60"
     "DFS_SD_RT_dirhandle_tests.spin2:60"
+    "DFS_SD_RT_testcard_validation.spin2:180"
     "DFS_FL_RT_cwd_tests.spin2:90"
     "DFS_FL_RT_dirhandle_tests.spin2:90"
 )
 
-# Layer 7: Complex features (order matters: circular_compat depends on circular data)
+# Layer 7: Complex features
+# (circular_tests is self-contained: it produces its records, cycles the mount, and
+#  re-verifies them. The former circular_compat suite read what circular left behind --
+#  the regression's only cross-suite dependency -- and its coverage now lives inside
+#  circular_tests, so it is no longer run.)
 SUITES+=(
-    "DFS_FL_RT_circular_tests.spin2:120"
-    "DFS_FL_RT_circular_compat_tests.spin2:120"
+    "DFS_FL_RT_circular_tests.spin2:150"
 )
 
 # Layer 8: Cross-device

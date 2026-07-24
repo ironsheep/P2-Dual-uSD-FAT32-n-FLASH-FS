@@ -106,6 +106,9 @@ testContent1    BYTE    "Hello, SD Card!", 0
 testdir1        BYTE    "RTDIR1", 0
 nonexistent     BYTE    "NOEXIST.TXT", 0
 
+' Owned-file baseline list (0-terminated) for ensureCleanBaseline -- every name this suite creates
+ownedNames      LONG    @testfile1, @testfile2, @testfile3, @renamedFile, @testdir1, 0
+
 readBuffer      BYTE    0[READ_BUF_SIZE]
 readBuffer_guard BYTE   0[GUARD_SIZE]
 sectorBuffer    BYTE    0[BYTES_PER_SECTOR]        ' For reading raw sectors during diagnostics
@@ -141,10 +144,10 @@ PUB go() | workerCog, opStatus, status, handle, hndl1, hndl2, hndl3, fileSize, b
         debug("   Sec/FAT: ", udec_(dfs.debugGetSecPerFat()))
         debug("   Root sec: ", udec_(dfs.debugGetRootSec()))
 
-        ' WORKAROUND: Clear corrupted root directory if detected
-        debug("  CLEARING ROOT DIRECTORY...")
-        opStatus := dfs.debugClearRootDir()
-        debug("  Clear result: ", sdec_(opStatus))
+        ' Establish clean baseline (idempotent -- also audits cleanliness).
+        ' Scoped to this suite's OWN names: a whole-root wipe would mask a dirty or
+        ' corrupt baseline instead of reporting it.
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)
 
         ' EARLY DIAGNOSTIC: Test multiple sectors to find pattern
         debug("  EARLY-DIAG: Testing sector reads...")
@@ -184,11 +187,7 @@ PUB go() | workerCog, opStatus, status, handle, hndl1, hndl2, hndl3, fileSize, b
         ' ----------------------------------
         utils.startTestGroup(@"File Creation (V3 Handle API)")
 
-        ' Clean up any existing test files first
-        dfs.deleteFile(dfs.DEV_SD, @testfile1)
-        dfs.deleteFile(dfs.DEV_SD, @testfile2)
-        dfs.deleteFile(dfs.DEV_SD, @testfile3)
-        dfs.deleteFile(dfs.DEV_SD, @renamedFile)
+        ' (Owned names were already cleared and audited by ensureCleanBaseline at entry.)
 
         utils.startTest(@"createFileNew() returns valid handle")
         debug("  DEBUG: Creating file [", zstr_(@testfile1), "]")
@@ -485,10 +484,7 @@ PUB go() | workerCog, opStatus, status, handle, hndl1, hndl2, hndl3, fileSize, b
         ' ----------------------------------
         debug(" ")
         debug("* Cleaning up test files...")
-        dfs.deleteFile(dfs.DEV_SD, @testfile1)
-        dfs.deleteFile(dfs.DEV_SD, @testfile2)
-        dfs.deleteFile(dfs.DEV_SD, @testfile3)
-        dfs.deleteFile(dfs.DEV_SD, @renamedFile)
+        utils.ensureCleanBaseline(dfs.DEV_SD, @ownedNames)   ' leave the card as we found it, and audit it
 
         ' Unmount
         dfs.unmount(dfs.DEV_SD)

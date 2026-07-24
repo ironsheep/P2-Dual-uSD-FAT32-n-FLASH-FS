@@ -1,16 +1,19 @@
 '' =================================================================================================
 ''
 ''   File....... DFS_SD_RT_testcard_validation.spin2
-''   Purpose.... Validate unified driver can read pre-formatted test card (read-only test)
+''   Purpose.... Validate driver reads a known fixture tree it builds for itself
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... JAN 2026
-''   Updated.... 16 JAN 2026
+''   Updated.... 23 JUL 2026
 ''
-''   NOTE: This test requires the pre-formatted test card!
-''         See TestCard/TEST-CARD-SPECIFICATION.md for card preparation.
-''         Copy TestCard/TESTROOT/* to the SD card root before running.
+''   NOTE: This suite is SELF-ESTABLISHING -- it authors the entire fixture tree
+''         (byte-for-byte per TestCard/TEST-CARD-SPECIFICATION.md) at startup and
+''         removes it at teardown. No card preparation is required; it runs on any
+''         freshly-baselined scratch card.
+''         See DOCs/Decisions/DECISION-003-TESTCARD-SELF-ESTABLISH.md.
+''         TestCard/TESTROOT/ remains the byte-exact reference for these fixtures.
 ''
 '' =================================================================================================
 
@@ -52,6 +55,18 @@ CON
      BENCHMARK_SIZE      = 65536   ' 64KB sequential read
      BENCHMARK_SECTORS   = 128     ' 65536 / 512
 
+     ' --- Fixture establishment (this suite builds everything it reads) ---
+     MULTI_FILE_SIZE     = 18      ' "Multi-file test N" + LF
+     TWOSEC_LINES        = 50      ' 50 lines of 5x "LINE####--" + LF (51 bytes) = 2550 bytes
+     OWNED_ROOT_COUNT    = 9       ' 7 files + LEVEL1 + MULTI, all created here
+     FIXTURE_COUNT       = 14      ' 7 root files + 2 nested files + 5 MULTI files
+     FIXTURE_TOTAL_BYTES = 78_000  ' ~76KB of fixture data, rounded up for the capacity gate
+
+     ' Pattern selectors for generated binary fixtures
+     PAT_FILL_X          = 0       ' every byte 0x58
+     PAT_SEQ_BYTE        = 1       ' byte[i] = i & 0xFF
+     PAT_XOR_BLOCK       = 2       ' byte[i] = (block << 1) XOR (i & 0xFF)
+
 OBJ
     dfs   : "dual_sd_fat32_flash_fs"
     utils : "DFS_RT_utilities"
@@ -75,12 +90,41 @@ tinyContent     BYTE    "TINY TEST FILE", 0    ' First 14 chars of TINY.TXT
 level1Content   BYTE    "This file is in LEVEL1", 0  ' First 22 chars
 deepContent     BYTE    "Deepest level", 0     ' First 13 chars
 
+' --- Fixture establishment: names and byte-exact content ---
+' Directory names (created in the current directory, per newDirectory()'s contract)
+dirLevel1       BYTE    "LEVEL1", 0
+dirLevel2       BYTE    "LEVEL2", 0
+rootPath        BYTE    "/", 0
+parentPath      BYTE    "..", 0
+
+' Bare names used while the cwd is the owning directory
+nameInLevel1    BYTE    "INLEVEL1.TXT", 0
+nameDeep        BYTE    "DEEP.TXT", 0
+multiFile1      BYTE    "FILE1.TXT", 0
+multiFile2      BYTE    "FILE2.TXT", 0
+multiFile3      BYTE    "FILE3.TXT", 0
+multiFile4      BYTE    "FILE4.TXT", 0
+multiFile5      BYTE    "FILE5.TXT", 0
+multiNames      LONG    @multiFile1, @multiFile2, @multiFile3, @multiFile4, @multiFile5
+
+' Full file bodies (sizes must match the *_FILE_SIZE constants above)
+tinyFull        BYTE    "TINY TEST FILE - 32 BYTES OK!", 0                                  ' 29, no newline
+level1Full      BYTE    "This file is in LEVEL1 subdirectory for path testing.", 10, 0      ' 54
+deepFull        BYTE    "Deepest level - LEVEL2 directory test file for nested path resolution.", 10, 0   ' 71
+multiPrefix     BYTE    "Multi-file test ", 0                                               ' + digit + LF = 18
+lineTag         BYTE    "LINE", 0
+seekTag         BYTE    "BLK", 0
+
+' Root-level entries this suite owns -- 0-terminated, for ensureCleanBaseline and the
+' enumeration check. Order matches the enumeration test's expectations.
+ownedRootNames  LONG    @fileTiny, @fileExact512, @fileTwoSec, @fileFourK, @fileSixtyK, @fileSeekTest, @fileChecksum, @dirLevel1, @dirMulti, 0
+
 ' Buffers
 smallBuf        BYTE    0[SMALL_BUF]
 mediumBuf       BYTE    0[MEDIUM_BUF]
 
 PUB go() | workerCog, result
-'' Validate SD test card configuration and basic operations.
+'' Validate SD fixture-tree operations against a tree this suite builds itself.
 ''
 ' @local workerCog - Driver worker cog ID
 ' @local result - Test result value
@@ -88,12 +132,8 @@ PUB go() | workerCog, result
     debug(" ")
     debug("==============================================")
     debug("  Dual FS (SD) - Test Card Validation")
-    debug("  (READ-ONLY Test for Directory Debug)")
+    debug("  (Self-establishing fixture tree)")
     debug("==============================================")
-    debug(" ")
-    debug("NOTE: This test requires the pre-formatted test card!")
-    debug("      See TestCard/TEST-CARD-SPECIFICATION.md")
-    debug("      This test does NOT write to the card.")
     debug(" ")
 
     ' Initialize worker cog
@@ -111,20 +151,26 @@ PUB go() | workerCog, result
         debug("   Volume Label: ", zstr_(dfs.volumeLabel(dfs.DEV_SD)))
         debug("   Free Space: ", udec(dfs.freeSpace(dfs.DEV_SD)), " sectors")
 
-        ' Run all validation tests
-        test_mount_validation()
-        test_root_directory_enum()
-        test_tiny_file()
-        test_exact_sector()
-        test_four_k_pattern()
-        test_multi_sector_text()
-        test_large_file_cluster_chain()
-        test_seek_operations()
-        test_checksum_integrity()
-        test_path_resolution()
-        test_deep_path()
-        test_directory_navigation()
-        test_benchmark_sequential()
+        ' Build the fixture tree this suite reads. On a baselined card a failure here
+        ' is a real defect, so it is reported as a hard precondition, never a silent skip.
+        if establishFixtures()
+            ' Run all validation tests
+            test_mount_validation()
+            test_root_directory_enum()
+            test_tiny_file()
+            test_exact_sector()
+            test_four_k_pattern()
+            test_multi_sector_text()
+            test_large_file_cluster_chain()
+            test_seek_operations()
+            test_checksum_integrity()
+            test_path_resolution()
+            test_deep_path()
+            test_directory_navigation()
+            test_benchmark_sequential()
+
+        ' Leave the card as we found it (idempotent, and audits its own work)
+        teardownFixtures()
 
         ' Unmount
         dfs.unmount(dfs.DEV_SD)
@@ -150,7 +196,7 @@ PRI test_mount_validation() | pLabel
     utils.evaluateRange(dfs.freeSpace(dfs.DEV_SD), @"freeSpace()", 1, $7FFF_FFFF)
 
 
-PRI test_root_directory_enum() | count, idx, pEntry
+PRI test_root_directory_enum() | count, idx, pEntry, oIdx, pName
     utils.startTestGroup(@"Test 2: Root Directory Enumeration")
 
     utils.startTest(@"Enumerate root directory entries")
@@ -164,8 +210,36 @@ PRI test_root_directory_enum() | count, idx, pEntry
         count++
         idx++
 
-    ' Expected: At least 7 items (files + LEVEL1 + MULTI directories)
-    utils.evaluateRange(count, @"directory entry count", 7, 50)
+    ' The root holds at least what this suite created. An exact total would couple the
+    ' result to whatever any other suite left behind; every OWNED entry being present is
+    ' the property self-establishment actually guarantees -- checked one by one below.
+    utils.evaluateBool(count >= OWNED_ROOT_COUNT, @"root holds all owned entries", TRUE)
+
+    utils.startTest(@"Each owned root entry is enumerated")
+    utils.setCheckCountPerTest(OWNED_ROOT_COUNT)
+    repeat oIdx from 0 to OWNED_ROOT_COUNT - 1
+        pName := LONG[@ownedRootNames][oIdx]
+        utils.evaluateSubBool(rootEntryPresent(pName), @"owned entry enumerated", TRUE)
+
+
+PRI rootEntryPresent(pName) : bFound | idx, pEntry
+' Scan the root enumeration for one owned entry by name.
+'
+' @param pName - pointer to the 8.3 name to look for
+' @returns bFound - TRUE if the enumeration reports it
+' @local idx - enumeration index
+' @local pEntry - directory entry pointer
+
+    bFound := false
+    idx := 0
+    repeat
+        pEntry := dfs.readDirectory(idx)
+        if pEntry == 0
+            quit
+        if strcomp(dfs.fileName(), pName)
+            bFound := true
+            quit
+        idx++
 
 
 PRI test_tiny_file() | fileSize, bytesRead, handle
@@ -438,6 +512,225 @@ PRI test_benchmark_sequential() | start, elapsed, i, bytesPerSec, handle
     debug("  64KB read time: ", udec_(elapsed / (clkfreq / 1000000)), " microseconds")
     debug("  Throughput: ~", udec_(bytesPerSec / 1024), " KB/sec")
     utils.evaluateBool(elapsed > 0, @"benchmark complete", true)
+
+
+' ===============================================================================
+' FIXTURE ESTABLISHMENT -- this suite authors every byte it later reads
+' Content is byte-for-byte per TestCard/TEST-CARD-SPECIFICATION.md; see
+' DOCs/Decisions/DECISION-003-TESTCARD-SELF-ESTABLISH.md for why it self-establishes.
+' ===============================================================================
+
+PRI establishFixtures() : bReady | builtCount
+' Build the whole fixture tree from a baselined card.
+'
+' @returns bReady - TRUE if every fixture exists and the tests may run
+' @local builtCount - number of fixtures successfully created
+
+    bReady := utils.assertFreeSpace(dfs.DEV_SD, utils.clustersForBytes(dfs.DEV_SD, FIXTURE_TOTAL_BYTES), @"test-card fixture tree (~76KB)")
+    ifnot bReady
+        return
+
+    teardownFixtures()                                   ' idempotent: start from a known-empty tree
+
+    debug("* Establishing fixture tree...")
+    builtCount := 0
+    if makeLiteralFile(@fileTiny, @tinyFull, TINY_FILE_SIZE)
+        builtCount++
+    if makePatternFile(@fileExact512, EXACT512_FILE_SIZE, PAT_FILL_X)
+        builtCount++
+    if makeTwoSecFile()
+        builtCount++
+    if makePatternFile(@fileFourK, FOURK_FILE_SIZE, PAT_SEQ_BYTE)
+        builtCount++
+    if makePatternFile(@fileSixtyK, SIXTYK_FILE_SIZE, PAT_XOR_BLOCK)
+        builtCount++
+    if makeSeekFile()
+        builtCount++
+    if makePatternFile(@fileChecksum, CHECKSUM_FILE_SIZE, PAT_SEQ_BYTE)
+        builtCount++
+    builtCount += makeNestedTree()                       ' LEVEL1/, LEVEL1/LEVEL2/ (2 files)
+    builtCount += makeMultiDir()                         ' MULTI/ (5 files)
+
+    ' One hard precondition covers the whole tree: on a card the runner just baselined,
+    ' a fixture that will not build is a driver defect, not a setup excuse.
+    bReady := utils.assertPrecondition(builtCount == FIXTURE_COUNT, @"test-card fixture tree established")
+
+
+PRI teardownFixtures() | idx
+' Remove the fixture tree, innermost first, then audit the owned root entries.
+'
+' @local idx - loop index over the MULTI file names
+
+    if dfs.changeDirectory(dfs.DEV_SD, @dirMulti) == dfs.SUCCESS
+        repeat idx from 0 to MULTI_DIR_FILES - 1
+            dfs.deleteFile(dfs.DEV_SD, LONG[@multiNames][idx])
+        dfs.changeDirectory(dfs.DEV_SD, @rootPath)
+
+    if dfs.changeDirectory(dfs.DEV_SD, @dirLevel1) == dfs.SUCCESS
+        if dfs.changeDirectory(dfs.DEV_SD, @dirLevel2) == dfs.SUCCESS
+            dfs.deleteFile(dfs.DEV_SD, @nameDeep)
+            dfs.changeDirectory(dfs.DEV_SD, @parentPath)
+        dfs.deleteFile(dfs.DEV_SD, @nameInLevel1)
+        dfs.deleteFile(dfs.DEV_SD, @dirLevel2)
+        dfs.changeDirectory(dfs.DEV_SD, @rootPath)
+
+    ' Deletes the owned root entries (files + the now-empty LEVEL1 and MULTI) and audits
+    ' that none survived -- a stuck leftover reports as setup-not-met, never as a test failure.
+    utils.ensureCleanBaseline(dfs.DEV_SD, @ownedRootNames)
+
+
+PRI makeLiteralFile(pName, pContent, sizeBytes) : bOk | handle
+' Create a file whose content is a literal string of known length.
+'
+' @param pName - filename (bare name; created in the current directory)
+' @param pContent - pointer to the content bytes
+' @param sizeBytes - exact byte count to write
+' @returns bOk - TRUE if created and fully written
+' @local handle - file handle
+
+    handle := dfs.createFileNew(dfs.DEV_SD, pName)
+    bOk := (handle >= 0)
+    if bOk
+        bOk := (dfs.writeHandle(handle, pContent, sizeBytes) == sizeBytes)
+        dfs.closeFileHandle(handle)
+    ifnot bOk
+        debug("  # fixture FAILED: ", zstr_(pName))
+
+
+PRI makePatternFile(pName, sizeBytes, pattern) : bOk | handle, chunk, chunks
+' Create a binary fixture whose content is generated 512 bytes at a time.
+'
+' @param pName - filename
+' @param sizeBytes - total size (an exact multiple of MEDIUM_BUF)
+' @param pattern - PAT_FILL_X, PAT_SEQ_BYTE, or PAT_XOR_BLOCK
+' @returns bOk - TRUE if created and fully written
+' @local handle - file handle
+' @local chunk - current 512-byte block index
+' @local chunks - total block count
+
+    handle := dfs.createFileNew(dfs.DEV_SD, pName)
+    bOk := (handle >= 0)
+    if bOk
+        chunks := sizeBytes / MEDIUM_BUF
+        repeat chunk from 0 to chunks - 1
+            fillPatternChunk(pattern, chunk)
+            if dfs.writeHandle(handle, @mediumBuf, MEDIUM_BUF) <> MEDIUM_BUF
+                bOk := false
+                quit
+        dfs.closeFileHandle(handle)
+    ifnot bOk
+        debug("  # fixture FAILED: ", zstr_(pName))
+
+
+PRI fillPatternChunk(pattern, chunk) | idx
+' Fill mediumBuf with one 512-byte block of the requested pattern.
+'
+' @param pattern - PAT_FILL_X, PAT_SEQ_BYTE, or PAT_XOR_BLOCK
+' @param chunk - block index (only PAT_XOR_BLOCK varies by block)
+' @local idx - byte offset within the block
+
+    if pattern == PAT_FILL_X
+        bytefill(@mediumBuf, $58, MEDIUM_BUF)
+    elseif pattern == PAT_SEQ_BYTE
+        repeat idx from 0 to MEDIUM_BUF - 1
+            mediumBuf[idx] := idx & $FF
+    else
+        repeat idx from 0 to MEDIUM_BUF - 1
+            mediumBuf[idx] := ((chunk << 1) ^ (idx & $FF)) & $FF
+
+
+PRI makeTwoSecFile() : bOk | handle, lineNo, segIdx, pos
+' Create TWOSEC.TXT: 50 lines of 5x "LINE####--" plus a newline (51 bytes each).
+'
+' @returns bOk - TRUE if created and fully written
+' @local handle - file handle
+' @local lineNo - 1-based line number
+' @local segIdx - repetition within the line
+' @local pos - write offset in smallBuf
+
+    handle := dfs.createFileNew(dfs.DEV_SD, @fileTwoSec)
+    bOk := (handle >= 0)
+    if bOk
+        repeat lineNo from 1 to TWOSEC_LINES
+            pos := 0
+            repeat segIdx from 0 to 4
+                bytemove(@smallBuf + pos, @lineTag, 4)
+                smallBuf[pos + 4] := "0" + (lineNo / 1000)
+                smallBuf[pos + 5] := "0" + ((lineNo / 100) // 10)
+                smallBuf[pos + 6] := "0" + ((lineNo / 10) // 10)
+                smallBuf[pos + 7] := "0" + (lineNo // 10)
+                smallBuf[pos + 8] := "-"
+                smallBuf[pos + 9] := "-"
+                pos += 10
+            smallBuf[pos++] := 10
+            if dfs.writeHandle(handle, @smallBuf, pos) <> pos
+                bOk := false
+                quit
+        dfs.closeFileHandle(handle)
+    ifnot bOk
+        debug("  # fixture FAILED: ", zstr_(@fileTwoSec))
+
+
+PRI makeSeekFile() : bOk | handle, blk
+' Create SEEKTEST.BIN: 32 blocks of "BLK##---" followed by 55 bytes of 0x55.
+'
+' @returns bOk - TRUE if created and fully written
+' @local handle - file handle
+' @local blk - block index 0..31
+
+    handle := dfs.createFileNew(dfs.DEV_SD, @fileSeekTest)
+    bOk := (handle >= 0)
+    if bOk
+        repeat blk from 0 to SEEK_NUM_BLOCKS - 1
+            bytemove(@smallBuf, @seekTag, 3)
+            smallBuf[3] := "0" + (blk / 10)
+            smallBuf[4] := "0" + (blk // 10)
+            smallBuf[5] := "-"
+            smallBuf[6] := "-"
+            smallBuf[7] := "-"
+            bytefill(@smallBuf + 8, $55, SEEK_BLOCK_SIZE - 8)
+            if dfs.writeHandle(handle, @smallBuf, SEEK_BLOCK_SIZE) <> SEEK_BLOCK_SIZE
+                bOk := false
+                quit
+        dfs.closeFileHandle(handle)
+    ifnot bOk
+        debug("  # fixture FAILED: ", zstr_(@fileSeekTest))
+
+
+PRI makeNestedTree() : builtCount
+' Create LEVEL1/INLEVEL1.TXT and LEVEL1/LEVEL2/DEEP.TXT, returning to root either way.
+'
+' @returns builtCount - number of files successfully created (0..2)
+
+    builtCount := 0
+    if dfs.newDirectory(dfs.DEV_SD, @dirLevel1) == dfs.SUCCESS
+        if dfs.changeDirectory(dfs.DEV_SD, @dirLevel1) == dfs.SUCCESS
+            if makeLiteralFile(@nameInLevel1, @level1Full, LEVEL1_FILE_SIZE)
+                builtCount++
+            if dfs.newDirectory(dfs.DEV_SD, @dirLevel2) == dfs.SUCCESS
+                if dfs.changeDirectory(dfs.DEV_SD, @dirLevel2) == dfs.SUCCESS
+                    if makeLiteralFile(@nameDeep, @deepFull, DEEP_FILE_SIZE)
+                        builtCount++
+                    dfs.changeDirectory(dfs.DEV_SD, @parentPath)
+    dfs.changeDirectory(dfs.DEV_SD, @rootPath)
+
+
+PRI makeMultiDir() : builtCount | idx
+' Create MULTI/ and its five 18-byte files, returning to root either way.
+'
+' @returns builtCount - number of files successfully created (0..5)
+' @local idx - 0-based file index
+
+    builtCount := 0
+    if dfs.newDirectory(dfs.DEV_SD, @dirMulti) == dfs.SUCCESS
+        if dfs.changeDirectory(dfs.DEV_SD, @dirMulti) == dfs.SUCCESS
+            repeat idx from 0 to MULTI_DIR_FILES - 1
+                bytemove(@smallBuf, @multiPrefix, 16)
+                smallBuf[16] := "1" + idx
+                smallBuf[17] := 10
+                if makeLiteralFile(LONG[@multiNames][idx], @smallBuf, MULTI_FILE_SIZE)
+                    builtCount++
+    dfs.changeDirectory(dfs.DEV_SD, @rootPath)
 
 
 con { license }
